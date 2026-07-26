@@ -1,7 +1,9 @@
 {
   "database": "dolt",
   "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "archie",
+  "dolt_mode": "server",
+  "dolt_server_host": "euclid",
+  "dolt_server_port": 13962,
+  "dolt_database": "beads_archie",
   "project_id": "20f0dfc9-02d8-46bf-b4da-e44120a9cf34"
 }
