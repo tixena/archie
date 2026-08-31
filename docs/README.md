@@ -102,7 +102,9 @@ The exemplar page is [archie link](src/reference/cli/link.md).
 3. No page under `src/` begins with a frontmatter fence.
 4. Every page under `src/` has exactly one line starting with `# `, counting only
    lines outside fenced code blocks.
-5. Every page under `src/` has a line starting with `**Status:**`.
+5. No page under `src/` carries a banned token: person names, internal project
+   names, design-document references, dates, or review apparatus. The book
+   documents the tool.
 6. Every relative link to a markdown file, from any page under `src/`, resolves
    to a file that exists; the anchor part of a link is ignored.
 
