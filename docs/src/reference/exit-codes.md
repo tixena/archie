@@ -1,10 +1,6 @@
 # Exit codes
 
-**Status:** Proposed — see markers.
-
-**Proposed.** The root design document gives archie six exit codes. They appear in
-its section on error handling and nowhere else in the design corpus; no statement
-of Eduardo Burgos's confirms or changes them.
+archie returns one of six exit codes.
 
 | Code | Meaning |
 |---|---|
@@ -15,41 +11,33 @@ of Eduardo Burgos's confirms or changes them.
 | 4 | File system error |
 | 5 | Language-model provider error |
 
-**Proposed.** The reason the codes exist is stated as a design principle: archie
-is friendly to continuous integration, and exit codes together with JSON output
-are what makes it so. See [Run archie in continuous integration](../guides/run-in-ci.md).
+Exit codes together with [JSON output](output-formats.md) are what make archie
+friendly to [continuous integration](../guides/run-in-ci.md).
 
 ## What decides between 0, 1, and 2
 
-**Proposed.** The validation command takes an option that sets the level at which
-a run fails, chosen from error, warning, or any, with error as the default. Code 1
-is what a run returns when it found errors and the level says errors are fatal.
-Code 2 is what a run returns when it found no errors, found warnings, and the level
-says warnings are fatal.
+The validation command takes the level at which a run fails — error, warning, or
+any, with error as the default. Code 1 is what a run returns when it found errors
+and errors are fatal. Code 2 is what it returns when it found no errors, found
+warnings, and warnings are fatal.
 
-The corpus does not say what a run returns when the level is set to any and the
-run found only information-level findings, nor whether findings that exist but do
-not reach the configured level change the code at all. The table's entry for code 2
-names only the warning setting.
+*What a run returns when the level is set to any and only information-level
+findings were made, and whether findings below the configured level change the
+code at all, are not yet specified.*
 
 ## The other three codes
 
-**Proposed.** Code 3 covers a configuration error, code 4 a file system error, and
-code 5 an error from the provider of the language model. Nothing in the corpus
-enumerates what counts as each — whether a missing configuration file is a
-configuration error or a file system error, for instance.
+Code 3 covers an error in the [configuration](config.md), code 4 a file system
+error, and code 5 an error from the language-model provider. Code 5 belongs to
+the classification of inbox captures; see [archie inbox](cli/inbox.md).
 
-Code 5 belongs to the feature that classifies inbox captures with a language model.
-That feature's fate is one of the program's open questions: the vision blueprint
-asks whether archie's application features live inside archie, inside a separate
-application built on the engine, or are dropped. If it leaves, the code has nothing
-to report. See [archie inbox](cli/inbox.md).
+*What counts as each — whether a missing configuration file is a configuration
+error or a file system error, for instance — is not yet specified.*
 
 ## What an error message says
 
-**Proposed.** The root design pairs the code table with three requirements for an
-error message — that it is clear about what is wrong, specific about where, and
-actionable — and one illustration of a message that meets them:
+An error message is clear about what is wrong, specific about where, and
+actionable.
 
 ```console
 $ archie check
@@ -62,54 +50,25 @@ ERROR: Invalid type 'meeting'
   Hint: Use 'type: note' with 'tags: [meeting]' instead.
 ```
 
-Two things separate it from the same rule's message in the catalog, which names
-only the file, the offending value, and the valid types. It carries a line number,
-and it carries a suggested correction — a nearest known type, and a way to keep
-the rejected word as a tag instead. Neither is written into any rule's own
-message. The list of valid types it prints is the fixed list Eduardo superseded on
-2026-08-30 when he moved resource types to remargin. See
-[Validation rules](validation-rules.md).
+Two things separate this from the same rule's message in the catalog, which names
+only the file, the offending value, and the valid types: a line number, and a
+suggested correction — a nearest known type, and a way to keep the rejected word
+as a tag instead. See [Validation rules](validation-rules.md).
 
-**Not in the corpus.** Whether the suggestion behavior is required of every rule
-or belongs to this one message, and how a nearest known value is chosen.
+*Whether every rule offers a suggestion, and how a nearest known value is chosen,
+are not yet specified.*
 
-## What the corpus does not specify
+## Not yet specified
 
-- **Codes for the commands Eduardo named.** The table was written for the
-  validation command and its neighbours in the root design. The list of commands
-  Eduardo wrote on 2026-08-30 — listing, retrieving, linting, linking,
-  initializing, searching, writing, removing, querying — has no exit codes attached
-  anywhere. See the [Command-line interface](cli/index.md) reference.
-- **What a query that matched nothing returns.** Nothing says whether an empty
-  result is success or a distinct code.
-- **What a refused transaction returns.** The structural operations captured in
-  the corpus move nothing at all if any entry is refused; what the process then
-  returns is not written down. See
+- Codes for the commands that read, write, and search rather than validate. The
+  table is written in the language of a validation run. See the
+  [Command-line interface](cli/index.md).
+- Whether a query that matched nothing returns success or a code of its own.
+- What a refused transaction returns. A structural operation moves nothing at all
+  if any entry is refused; see
   [Structural operations](cli/structural-operations.md).
-- **Whether a repair run has codes of its own.** The repair command is documented
-  with a dry run, a rule filter, and an interactive mode, and with no exit codes.
+- Whether a repair run has codes of its own, and whether a
+  [link](cli/link.md) dry run with pending edits exits non-zero.
 
-One neighbouring behavior is recorded in the corpus, for a program that is not
-archie: the `link` subcommand of Eduardo's `aa_tool` project exits non-zero from a
-dry run when edits are pending, so that a check in an automated pipeline fails
-while nothing is written. archie's `link` generalizes that implementation, and the
-corpus does not say whether it inherits that convention. See
-[archie link](cli/link.md).
-
-> **Suggestion (documentation author):** the six codes above cover a corpus
-> validator and nothing else, while the commands Eduardo actually listed are a
-> read, write, and search surface. Two decisions would settle the rest, and both
-> are his. First, whether every command shares one table — so that 3 is always a
-> configuration error and 4 is always a file system error, whichever verb ran —
-> or whether each verb defines its own. Second, whether "found nothing" is a
-> distinct code, the way `grep` returns 1 for no match, or plain success; the
-> answer decides whether `archie query` can be used as a test in a shell script
-> without inspecting its output. Nothing here has standing until he decides it.
-
-## Where this leads
-
-- [Output formats](output-formats.md) — what a run prints alongside its code.
-- [Validation rules](validation-rules.md) — what produces the errors and warnings
-  the codes report.
-- [Configuration](config.md) — where the default output format and the enabled
-  rules come from.
+See [Design status](../design-status.md) for the open questions around exit
+codes.

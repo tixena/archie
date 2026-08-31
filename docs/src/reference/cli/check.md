@@ -1,83 +1,42 @@
 # archie check
 
-**Status:** Mixed — see markers.
-
 `archie check` is the validation run: it reads a corpus, applies rules to it, and
-reports what it finds. It is the most fully specified command in the root design
-document and, at the same time, the command whose rule set that same document
-defers wholesale to a schema language that has not been designed.
-
-## Two spellings
-
-The root design document calls this command `check`. Eduardo Burgos's command
-list of 2026-08-30 has `archie lint folder/` in the same position and never says
-`check`. No document reconciles the two names. This page keeps `archie check` as
-its title because that is the spelling the specified behavior is written under,
-and records `lint` as Eduardo's own spelling for the same job.
-
-The naming question is not idle. The root design document argues in its naming
-section that "lint" undersells a tool that also repairs, classifies, imports, and
-creates structure — but that argument was made about naming the program, which
-was then called `vault-lint` and became `archie`, not about naming this command.
-Under the direction Eduardo set on 2026-08-25, archie's own territory is the
-linter and the schema engine, and the repairing and classifying features are the
-ones whose fate is open.
-
-## Status of the command
-
-**Root-design-only, fate open.** `archie check` appears in the root design
-document and not in Eduardo's list; `archie lint` appears in his list and not in
-the root design. What archie's features for maintaining a personal corpus become
-is one of the vision blueprint's open questions. The linter itself is not in
-doubt — Eduardo placed "a linter with user-specified shapes" inside archie on
-2026-08-25, and it is the first entry in his feature ledger — but its command-line
-spelling and its option set are.
+reports what it finds. It never modifies a file; repairing is
+[`archie fix`](fix.md).
 
 ## Synopsis
 
 ```console
 $ archie check [PATH]
-$ archie lint folder/
 ```
 
-The first line is the root design document's, the second is Eduardo's.
-
-## Arguments
-
-| Argument | What the corpus says |
-|---|---|
-| `[PATH]` | The path to validate. Optional; the default comes from the configuration file. |
+`[PATH]` is the path to validate; it is optional, and its default comes from the
+configuration file.
 
 ## Options
 
-Every option below is from the root design document's command section. No option
-is stated for the `lint` spelling.
-
-| Option | What the corpus says |
+| Option | Effect |
 |---|---|
 | `--format <FORMAT>` | Output format: `text`, `json`, or `markdown`. Default: `text`. |
 | `--fail-on <LEVEL>` | Exit with a non-zero status on `error`, `warning`, or `any`. Default: `error`. |
-| `--rule <RULE>` | Run only the named rule or rules. The example passes it more than once. |
+| `--rule <RULE>` | Run only the named rule or rules. May be given more than once. |
 | `--ignore <PATTERN>` | Additional patterns to ignore, beyond the ignore list in the configuration file. |
 
-The corpus does not say whether `--rule` takes a rule name, a rule category, or
-either: its own example passes `--rule frontmatter --rule type`, which are
-category names in the rule catalog rather than rule names.
+## Behavior
+
+A run walks the configured corpus root, or the given path, skips what the ignore
+list excludes, applies the enabled rules, and reports every finding at one of
+three levels: error, warning, or information. Every rule can be turned on or off
+in the configuration file and narrowed further by `--rule`; `--fail-on` decides
+whether the exit status is non-zero.
+
+The rules come from schemas rather than a fixed catalog. A shape may be declared
+for a whole markdown document or a sub-part of one; a schema has a strict mode
+that rejects content outside it and a loose mode that lets it through, and no
+stripping mode. Resource types are declared by remargin, per corpus, and a type
+may extend another; archie holds only the means to enforce them.
 
 ## The rules
-
-**Deferred.** Before reading the catalog, read the deferral Eduardo recorded on
-2026-08-16 at the top of the root design document's validation section. The rules
-below, the rule and resource-type blocks in the configuration file, and the list
-of what `archie fix` can repair all still encode an earlier, hard-coded model: a
-global rule that frontmatter is required with the inbox as the lone exception, a
-`type` property and a `created` property as fixed requirements, and a fixed list
-of resource types. Under the schema-driven direction — schemas rule both
-frontmatter and structure, resource types belong to remargin and are defined per
-corpus, and shapes can be declared for any document or sub-part in a strict or a
-loose mode — each of these rules becomes a consequence of what the schemas say.
-The rework waits for the schema language to be designed. The catalog is recorded
-so that it is not lost, not because it is settled.
 
 | Rule | Category | What it reports |
 |---|---|---|
@@ -90,60 +49,20 @@ so that it is not lost, not because it is settled.
 | `index-required` | Structure | A folder with no `index.md`, other than an ignored one. An error; repairable by creating the file with the inherited properties. |
 | `allowed-types` | Structure | A file whose `type` is not in the `allows.types` list declared by its folder's index file. An error naming the allowed types and the index file that declares them. |
 | `archive-placement` | Archive | A file carrying `archived: true` that is not inside an archive folder. An error; repairable by moving it. |
-| `orphaned-assets` | Assets | An asset — an image, a document in Portable Document Format, and so on — that no markdown file references. A warning. The configuration notes it can be slow on a large corpus. |
-| `embedded-tasks` | Tasks | A note holding several independent checkbox items, which the design suggests splitting into task files. A warning, with a configurable threshold. |
+| `orphaned-assets` | Assets | An asset — an image, a document in Portable Document Format, and so on — that no markdown file references. A warning. It can be slow on a large corpus. |
+| `embedded-tasks` | Tasks | A note holding several independent checkbox items, better split into task files. A warning, with a configurable threshold. |
 | `inbox-raw` | Inbox | An inbox file with no frontmatter, which needs processing. Reported at the information level only. |
-
-Each rule is described in full, with the message text the root design gives it, on
-the [Validation rules](../validation-rules.md) page.
-
-## Behavior
-
-**Root design.** A run walks the configured corpus root, or the given path, skips
-what the ignore list excludes, applies the enabled rules, and reports every
-finding at one of three levels: error, warning, or information. Which rules run
-is controlled by the configuration file, where every rule can be turned on or
-off, and narrowed further by `--rule` on the command line. Whether the run's exit
-status is non-zero is controlled by `--fail-on`.
-
-**Root design.** The run never modifies a file. Non-destructiveness is one of the
-root design's stated principles, in its words "never modify files without
-explicit `--fix` flag" — written as a flag there, and spelled as a separate
-command, [`archie fix`](fix.md), in the command section of the same document. The
-two spellings are not reconciled anywhere; what both say is that reporting and
-repairing are separate acts.
-
-**Proposed (stated by Eduardo on 2026-08-25).** Eventually the rules come from
-schemas rather than from a fixed catalog. In his words that day: archie holds a
-linter for which he can specify the shape of any markdown document, or of a
-sub-part of one, and schemas have a strict mode that rejects content outside the
-declared shape and a loose mode that lets it through. He explicitly does not
-want a stripping mode, in his words because he "wouldn't want to accept content
-and trim it." The shape language is not designed; see
-[Shape language](../shape-language.md) .
-
-**Decided.** Resource types are not archie's. Eduardo, 2026-08-30: they are
-business logic and belong to remargin, so archie holds only the means to enforce
-them. What remargin needs from those means, stated in the same place: types
-defined per corpus, because the type list in the workspace analysis was extracted
-from Eduardo's own files and another corpus defines its own, and a type that can
-extend another to add to it. This is recorded as a non-goal in the requirements
-document, which makes the fixed type list behind `type-valid` an artifact of the
-older model.
 
 ## Examples
 
-Every example below is from the root design document.
-
 ```console
 $ archie check
-$ archie check src/tixena/
+$ archie check src/work/
 $ archie check --format json > report.json
 $ archie check --rule frontmatter --rule type
 ```
 
-The text output the root design specifies, with its opening banner line omitted
-because this book carries no release framing:
+The text output:
 
 ```console
 $ archie check
@@ -154,17 +73,17 @@ ERRORS (3):
   ✗ src/notes/random.md
     Missing frontmatter
 
-  ✗ src/tixena/new/
+  ✗ src/work/new/
     Missing index.md
 
-  ✗ src/tixena/projects/old.md
+  ✗ src/work/projects/old.md
     archived=true but not in archive/
 
 WARNINGS (2):
-  ⚠ src/prodoctivity/notes/planning.md
+  ⚠ src/product/notes/planning.md
     Contains 5 embedded task items
 
-  ⚠ src/tixena/assets/screenshot.png
+  ⚠ src/work/assets/screenshot.png
     Not referenced by any file
 
 INFO (4):
@@ -178,12 +97,7 @@ Summary: 3 errors, 2 warnings, 4 info
          122 files OK
 ```
 
-The JavaScript Object Notation (JSON) and markdown forms of the same run are on
-the [Output formats](../output-formats.md) page.
-
 ## Exit codes
-
-The root design document's exit-code table is written for this command:
 
 | Code | Meaning |
 |---|---|
@@ -194,16 +108,26 @@ The root design document's exit-code table is written for this command:
 | 4 | File system error. |
 | 5 | Language-model provider error. |
 
-Code 5 cannot arise from a validation run, which uses no language model. See
-[Exit codes](../exit-codes.md).
+Code 5 cannot arise from a validation run, which uses no language model.
 
-## Related pages
+## Not yet specified
 
-- [Validation rules](../validation-rules.md) — every rule with its message.
-- [Shape language](../shape-language.md) — the schemas that are to replace the
-  fixed catalog.
+- The command's name: `archie check` and `archie lint folder/` both stand for
+  this run.
+- Whether `--rule` takes a rule name, a rule category, or either. The example
+  above passes `frontmatter` and `type`, which are categories.
+- How each rule follows from a schema once the
+  [shape language](../shape-language.md) is defined. The catalog above is written
+  against fixed requirements that schemas replace.
+
+See [Design status](../../design-status.md) for the open questions here.
+
+## Related
+
+- [Validation rules](../validation-rules.md) — every rule with its message text.
+- [Shape language](../shape-language.md) — the schemas the rules follow from.
 - [archie fix](fix.md) — the repair run.
-- [Output formats](../output-formats.md) — the three formats in full.
-- [Lint a vault](../../guides/lint-a-vault.md) — the task-shaped guide.
-- [Command-line interface](index.md) — global options, configuration, and the
-  command table.
+- [Output formats](../output-formats.md) — the same run as JSON and as markdown.
+- [Exit codes](../exit-codes.md) — the code table.
+- [Lint a vault](../../guides/lint-a-vault.md) — the how-to.
+- [Command-line interface](index.md) — global options and the command table.
