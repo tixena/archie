@@ -69,7 +69,6 @@ while IFS= read -r page; do
     fi
 
     headings=0
-    has_status=0
     in_fence=0
     fence_marker=""
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -84,7 +83,6 @@ while IFS= read -r page; do
         esac
 
         [[ "$line" == "# "* ]] && headings=$((headings + 1))
-        [[ "$line" == '**Status:**'* ]] && has_status=1
 
         while IFS= read -r target; do
             case "$target" in
