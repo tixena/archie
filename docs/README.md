@@ -62,8 +62,8 @@ reports the exact total, and a preview step for operations that mutate.
 
 Every normative statement in the book carries one of three markers.
 
-- **Decided** — recorded as settled in the corpus. Name the document, and the
-  thread or section, in the prose.
+- **Decided** — recorded as settled in the corpus. Name the source in the
+  section's compact source line, never woven through the prose.
 - **Proposed** — in the corpus, but marked as a strawman, a candidate, or an
   idea.
 - **Suggestion** — the documentation author's own addition, absent from the
@@ -105,6 +105,30 @@ would place it. Follow the documents: a statement made late on 2026-08-30 local
 time carries a stored timestamp of 2026-08-31 and is dated **2026-08-30**
 throughout this book. The one statement this decides today is the move of
 resource types from archie to remargin.
+
+## Voice
+
+This is reference documentation, not a design chronicle. The subject of every
+sentence is archie — what it does, takes, returns, and refuses — never the
+history of deciding it.
+
+- **Behavior first.** The line after a heading states the contract in the
+  imperative present: "`archie link` turns mentions of a resource into links to
+  that resource." History never leads.
+- **Provenance is a tag, not a story.** Attribution lives in the page's status
+  line and in at most one compact source line per section — written like
+  *Source: planning document, 2026-08-30* — never as narrative. Sentences of the
+  form "Eduardo said/stated/answered … on …" do not appear; the one exception is
+  a quotation whose wording is itself the specification.
+- **Quote only when the wording is the spec** (the Zod analogy, "ALMOST the same
+  behavior"), once per page, never re-quoted across sections.
+- **Silence is one line.** "The corpus does not define X." — then stop. No
+  paragraphs about absence.
+- **Markers are tags.** **Decided** and **Proposed** open a source line or a
+  status line; they are not the subject of sentences.
+- **Suggestion blocks keep their blockquote form**, at most three lines each.
+- **Brevity is part of correctness.** If a sentence can go, it goes. The
+  exemplar for all of this is [archie link](src/reference/cli/link.md).
 
 ## Writing rules
 
