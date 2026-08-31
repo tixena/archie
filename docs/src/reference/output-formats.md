@@ -1,36 +1,18 @@
 # Output formats
 
-**Status:** Proposed — see markers.
-
-**Proposed.** A validation run can print its result in three formats: text, which
-is the default and is meant for a person at a terminal; JSON, meant for another
-program; and markdown, meant to be committed or pasted as a report. The format is
-chosen with the `--format` option on the validation command, and its default comes
-from the `[output]` table of the configuration file. See
-[Configuration](config.md).
-
-The samples below are the ones the root design document specifies, reproduced as
-it writes them. They are the fullest of the six places in the design corpus where
-output is written out; the other five are the inheritance chain on
-[archie trace](cli/trace.md), the interactive proposal on
-[archie inbox](cli/inbox.md), the export document on
-[archie export](cli/export.md), the message of every rule on
-[Validation rules](validation-rules.md), and the illustration of a well-formed
-error message on [Exit codes](exit-codes.md). Each is rendered on its own page.
-Everywhere else, this book shows the command line alone, because there is nothing
-to quote.
-
-Two notes before the samples. The root design's principle for the JSON format is
-that archie is friendly to continuous integration: exit codes and JSON output for
-automation. And the literal version strings in the samples — `archie v0.1.0` in
-the text sample and `"version": "0.1.0"` in the JSON sample — are example banner
-text; the corpus records, on 2026-08-31, that they can become neutral placeholders
-on Eduardo Burgos's word, and he has not given it.
+A validation run prints its result in one of three formats: text, the default,
+for a person at a terminal; JavaScript Object Notation (JSON), for another
+program; and markdown, to be committed or pasted as a report. `--format` chooses
+one, and its default comes from the `[output]` table of the
+[configuration](config.md). JSON output and [exit codes](exit-codes.md) together
+are what make archie friendly to
+[continuous integration](../guides/run-in-ci.md).
 
 ## Text
 
-The default. It groups findings by level, prints the path and the message for
-each, and closes with a count per level and a count of the files that passed.
+Findings grouped by level, each with its path and message, closing with a count
+per level and a count of the files that passed. Color is on by default; the
+`color` key and the `NO_COLOR` environment variable each turn it off.
 
 ```
 archie v0.1.0
@@ -42,17 +24,17 @@ ERRORS (3):
   ✗ src/notes/random.md
     Missing frontmatter
 
-  ✗ src/tixena/new/
+  ✗ src/team/new/
     Missing index.md
 
-  ✗ src/tixena/projects/old.md
+  ✗ src/team/projects/old.md
     archived=true but not in archive/
 
 WARNINGS (2):
-  ⚠ src/prodoctivity/notes/planning.md
+  ⚠ src/team/notes/planning.md
     Contains 5 embedded task items
 
-  ⚠ src/tixena/assets/screenshot.png
+  ⚠ src/team/assets/screenshot.png
     Not referenced by any file
 
 INFO (4):
@@ -66,15 +48,12 @@ Summary: 3 errors, 2 warnings, 4 info
          122 files OK
 ```
 
-Color is on by default and can be turned off, either by the `color` key in the
-configuration or by the `NO_COLOR` environment variable.
-
 ## JSON
 
-One object per run. It carries the tool version, the time of the run, the corpus
-root, the counts of what was scanned, the findings grouped into errors, warnings,
-and information, and a summary. Each finding names the rule that produced it, the
-path it concerns, its message, and whether it can be repaired.
+One object per run: the tool version, the time of the run, a corpus root, the
+counts of what was scanned, the findings grouped into errors, warnings, and
+information, and a summary. Each finding names the [rule](validation-rules.md)
+that produced it, its path, its message, and whether it can be repaired.
 
 ```json
 {
@@ -104,15 +83,10 @@ path it concerns, its message, and whether it can be repaired.
 }
 ```
 
-The `fixable` field on the sample finding disagrees with the list of what the
-repair command can fix, which does not include creating frontmatter. The
-disagreement is recorded on [Validation rules](validation-rules.md); the corpus
-does not resolve it.
-
 ## Markdown
 
 A report document: a summary table of counts, then a section per level in which
-findings are grouped by their message.
+findings are grouped by message.
 
 ```markdown
 # Archie Report
@@ -134,51 +108,28 @@ Generated: 2025-12-23 10:30:00
 - `src/notes/random.md`
 
 ### Missing index.md
-- `src/tixena/new/`
+- `src/team/new/`
 
 ...
 ```
 
-The root design ends the sample with an ellipsis, so the shape of the warning and
-information sections is not written down.
+## Other output
 
-## What the corpus does not specify
+The three formats belong to the validation run. Three commands write output of
+their own, in one form each: the inheritance chain of
+[archie trace](cli/trace.md), the proposal screen of
+[archie inbox](cli/inbox.md), and the export document of
+[archie export](cli/export.md). The
+[Model Context Protocol server](mcp/index.md) returns the report as data.
 
-- **A format choice for anything but a validation run.** These three formats
-  belong to the command that validates a corpus. The trace, inbox, and export
-  outputs are each written down in one form only, and nothing says whether
-  `--format` reaches them. What `archie ls`, `archie get`, `archie link`,
-  `archie rm`, or `archie init` print is written nowhere at all.
-- **Output for a query.** The grammar document's strawman proposes one JSON value
-  per line as the default, with markdown available for fragments, and lists what a
-  projection produces as one of its open questions: markdown fragments,
-  frontmatter values as YAML or as JSON, file paths, or a mix chosen per clause.
-  Nothing is settled. See [Query grammar](query-grammar.md).
-- **Whether the export shape is the whole shape.** The root design's export
-  command has a JSON form of its own — each file's frontmatter, its observations,
-  its relations, and a graph of nodes and edges, shown in full on
-  [archie export](cli/export.md) — but its two options change what the document
-  carries and neither variant is written out. That command is also one of the
-  features whose fate is an open question in the program's vision blueprint.
-- **Whether the text format is stable.** Nothing says whether the text output is
-  a contract another program may parse, or a rendering that may change.
+## Not yet specified
 
-## The Model Context Protocol server
+- What `archie ls`, `archie get`, `archie link`, `archie rm`, and `archie init`
+  print.
+- What a query prints, and what a projection produces. See
+  [Query grammar](query-grammar.md).
+- What the export document carries under each of its two options, and the
+  warning and information sections of the markdown report.
+- Whether the text format is a contract another program may parse.
 
-**Decided, stated outside the design corpus.** archie exposes a Model Context
-Protocol server, just like remargin. Eduardo said so in chat on 2026-08-31; no
-document in the design corpus records it, and the gap is listed on the
-[Design status](../design-status.md) page.
-
-Nothing states what such a server returns, so nothing about its payloads appears
-on this page. remargin's own conventions — a compact payload whose repeated rows
-are positional and named once by a list of column names, and a total count that is
-always exact — are what archie's server is expected to mirror. See
-[Model Context Protocol server](mcp/index.md).
-
-## Where this leads
-
-- [Exit codes](exit-codes.md) — what a run returns to the shell.
-- [Validation rules](validation-rules.md) — what produces the findings shown here.
-- [Run archie in continuous integration](../guides/run-in-ci.md) — the JSON format
-  in use.
+See [Design status](../design-status.md) for the open questions around output.
