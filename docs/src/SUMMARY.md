@@ -22,9 +22,12 @@
 # Reference
 
 - [Command-line interface](reference/cli/index.md)
+  - [archie ls](reference/cli/ls.md)
+  - [archie get](reference/cli/get.md)
   - [archie query](reference/cli/query.md)
   - [archie search](reference/cli/search.md)
   - [archie write](reference/cli/write.md)
+  - [archie rm](reference/cli/rm.md)
   - [archie link](reference/cli/link.md)
   - [archie check](reference/cli/check.md)
   - [archie init](reference/cli/init.md)
