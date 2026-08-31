@@ -16,16 +16,21 @@ absence at greater length.
 
 ## Before you start
 
-**Decided.** archie has a linter, and the shapes it checks against are specified
-by the user. Eduardo Burgos stated it on 2026-08-25, and the archie feature
+**Proposed (stated by Eduardo Burgos on 2026-08-25).** archie has a linter, and
+the shapes it checks against are specified by the user. The archie feature
 ledger records it in his words: "archie must have a linter. I can specify the
 *shape* of any markdown (or sub-markdown part)."
 
-**Decided.** The linter is archie's; the ideas it enforces are remargin's. The
-program's vision blueprint records the boundary Eduardo drew on 2026-08-25:
-archie holds the linter and the schema engine, while remargin holds the resource
-types and the actions declared on them. If what you actually want to declare is
-what a `person` or a `project` document must carry, start with
+**Proposed (stated by Eduardo on 2026-08-25).** The linter is archie's. The
+program's vision blueprint records the boundary Eduardo drew that day — archie
+holds the linter and the schema engine, while remargin holds the resource types
+and the actions declared on them — and records it as stated intent rather than
+as a design.
+
+**Decided.** The ideas the linter enforces are remargin's. He moved resource
+types there on 2026-08-30, and the requirements document carries owning them as
+a stated non-goal for archie. If what you actually want to declare is what a
+`person` or a `project` document must carry, start with
 [Enforce resource types](enforce-resource-types.md) instead — that job begins on
 remargin's side of the boundary.
 
@@ -34,9 +39,9 @@ remargin's side of the boundary.
 A shape governs either a whole markdown document or a sub-part of one — a
 section, a fragment.
 
-**Decided.** Both are in scope. The sub-part half is in Eduardo's own sentence
-above, in the parenthesis "or sub-markdown part", and the vision blueprint
-carries it into the boundary it records.
+**Proposed (stated by Eduardo on 2026-08-25).** Both are in scope. The sub-part
+half is in Eduardo's own sentence above, in the parenthesis "or sub-markdown
+part", and the vision blueprint carries it into the boundary it records.
 
 **Not in the corpus.** A shape for a sub-part has to name the sub-part it
 governs, and no vocabulary for naming part of a document exists. That vocabulary
@@ -54,21 +59,23 @@ that waits on step 3.
 A shape declares what a document must contain. The mode decides what happens to
 everything the shape did not mention.
 
-**Decided.** There are two modes. Eduardo, 2026-08-25: "Some remargin schemas can
-have a *strict* or *loose* mode — think of it as Zod's `.strict()`, `.loose()` or
-`.strip()`." Zod is a schema-declaration library from the TypeScript ecosystem,
-and the three method names name three ways of treating undeclared content: reject
-it, allow it, or accept it and silently discard it.
+**Proposed (stated by Eduardo on 2026-08-25).** There are two modes. In his
+words: "Some remargin schemas can have a *strict* or *loose* mode — think of it
+as Zod's `.strict()`, `.loose()` or `.strip()`." Zod is a schema-declaration
+library from the TypeScript ecosystem, and the three method names name three
+ways of treating undeclared content: reject it, allow it, or accept it and
+silently discard it.
 
-**Decided.** Strict rejects content that falls outside the declared shape. Loose
-lets that content through. Choose strict when a document has to carry nothing but
-what the shape names; choose loose when the shape is a floor rather than a
-boundary.
+**Proposed (stated by Eduardo on 2026-08-25).** Strict rejects content that
+falls outside the declared shape. Loose lets that content through. Choose strict
+when a document has to carry nothing but what the shape names; choose loose when
+the shape is a floor rather than a boundary.
 
-**Decided.** There is no third mode. In his words, from the same statement: "I
-don't think we will be using `.strip()` here because I wouldn't want to accept
-content and trim it." A document is either accepted as it stands or reported as
-failing. archie does not make a document validate by removing part of it.
+**Proposed (stated by Eduardo on 2026-08-25).** There is no third mode. In his
+words, from the same statement: "I don't think we will be using `.strip()` here
+because I wouldn't want to accept content and trim it." A document is either
+accepted as it stands or reported as failing. archie does not make a document
+validate by removing part of it.
 
 **Not in the corpus.** Which mode applies when a shape declares none, and whether
 the mode is a property of the shape, of the document, or of the command that runs
@@ -148,3 +155,5 @@ needs to enforce document structure now is outside what this book can help with.
 - [Enforce resource types](enforce-resource-types.md) — the same machinery seen
   from remargin's side.
 - [Lint a vault](lint-a-vault.md) — running the check and reading its report.
+- [A first session with archie](../tutorial/first-session.md) — the same steps in
+  one pass, front to back.

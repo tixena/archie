@@ -84,10 +84,11 @@ command is exactly what the corpus does not provide.
 
 ## Step 4: read what comes back
 
-**Not in the corpus.** No output is specified for either verb. The design
-specifies output for the validation run and for nothing else, so this book prints
-no query result. What a match is reported as — a path, a line, a line number, a
-fragment, or a whole document — is unstated for search as well.
+**Not in the corpus.** No output is specified for either verb. The design writes
+output down for the validation run, the inheritance trace, the inbox proposal, and
+the export document, and for nothing else, so this book prints no query result.
+What a match is reported as — a path, a line, a line number, a fragment, or a
+whole document — is unstated for search as well.
 
 **Proposed.** The strawman's default is one JSON value per line, with a markdown
 form available when what comes out is a document fragment. What a projection
@@ -137,3 +138,5 @@ marked Proposed is a candidate for being replaced by something Eduardo prefers.
   one document.
 - [Documents and schemas](../concepts/documents-and-schemas.md) — the parser the
   language runs on, and why it is archie's own.
+- [A first session with archie](../tutorial/first-session.md) — the same steps in
+  one pass, front to back.

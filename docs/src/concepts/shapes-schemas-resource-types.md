@@ -15,11 +15,11 @@ vocabulary is not settled.
 
 ## Shape
 
-**Proposed.** In Eduardo's words, on 2026-08-25: "archie must have a linter. I can
-specify the *shape* of any markdown (or sub-markdown part)." Two things are in
-that sentence. Shapes are declared by the user rather than built into archie. And
-a shape applies either to a whole markdown document or to a sub-part of one — a
-section, a fragment — not only to a document as a unit.
+**Proposed (stated by Eduardo on 2026-08-25).** In his words: "archie must have
+a linter. I can specify the *shape* of any markdown (or sub-markdown part)." Two
+things are in that sentence. Shapes are declared by the user rather than built
+into archie. And a shape applies either to a whole markdown document or to a
+sub-part of one — a section, a fragment — not only to a document as a unit.
 
 The archie feature ledger records it with the status `idea`, and the requirements
 document lists it among the candidate goals awaiting acceptance, which is why this
@@ -40,24 +40,27 @@ absence.
 
 ## Schema
 
-**Proposed.** A schema has a mode. In Eduardo's words, on 2026-08-25: "Some
-remargin schemas can have a *strict* or *loose* mode — think of it as Zod's
-`.strict()`, `.loose()` or `.strip()`." Zod is a schema-declaration library from
-the TypeScript ecosystem, and the three method names he borrowed name three ways
-of treating content that a schema did not declare: reject it, allow it through, or
-accept it and silently discard it.
+**Proposed (stated by Eduardo on 2026-08-25).** A schema has a mode. In his
+words: "Some remargin schemas can have a *strict* or *loose* mode — think of it
+as Zod's `.strict()`, `.loose()` or `.strip()`." Zod is a schema-declaration
+library from the TypeScript ecosystem, and the three method names he borrowed
+name three ways of treating content that a schema did not declare: reject it,
+allow it through, or accept it and silently discard it.
 
-**Proposed.** archie takes the first two and rejects the third. Strict rejects
-content outside the declared shape; loose lets it through. Stripping is explicitly
-unwanted, in his words: "I don't think we will be using `.strip()` here because I
-wouldn't want to accept content and trim it." No page in this book describes a
-mode that removes content in order to make a document validate.
+**Proposed (stated by Eduardo on 2026-08-25).** archie takes the first two and
+rejects the third. Strict rejects content outside the declared shape; loose lets
+it through. Stripping is explicitly unwanted, in his words: "I don't think we
+will be using `.strip()` here because I wouldn't want to accept content and trim
+it." No page in this book describes a mode that removes content in order to make
+a document validate.
 
-**Decided.** The schema engine is archie's, while Eduardo calls the schemas
-themselves "remargin schemas". The vision blueprint keeps that distinction visible
-deliberately: he speaks of remargin's schemas and remargin's resource types while
-placing the linter and the schema engine in archie, so the user-facing concepts
-are remargin's and the engine underneath them is archie's.
+**Proposed (stated by Eduardo on 2026-08-25).** The schema engine is archie's,
+while Eduardo calls the schemas themselves "remargin schemas". The vision
+blueprint keeps that distinction visible deliberately: he speaks of remargin's
+schemas and remargin's resource types while placing the linter and the schema
+engine in archie, so the user-facing concepts are remargin's and the engine
+underneath them is archie's. The blueprint records that whole placement as
+stated intent and not yet a design, which is why it is Proposed here.
 
 **Decided.** Schemas cover both frontmatter and document structure, and what a
 document is required to carry follows from the governing schema rather than from a
@@ -83,13 +86,14 @@ and belong to remargin, and archie holds only "ways to help remargin achieve
 this". The requirements document records owning resource types as a stated
 non-goal for archie.
 
-**Decided.** Resource types carry actions, and those are remargin's too. Eduardo,
-2026-08-25: "I want remargin resource types to have *actions* associated to it" —
-his example being a `task` type whose actions are `defer`, `close`, and `assign`,
-performed through actions configured on the type. He marked the wider ambition as
-an idea he would like to explore rather than a commitment: knowing the shape of
-actions would let a user interface render any resource together with its actions,
-and would let agents execute them.
+**Proposed (stated by Eduardo on 2026-08-25).** Resource types carry actions,
+and those are remargin's too. In his words: "I want remargin resource types to
+have *actions* associated to it" — his example being a `task` type whose actions
+are `defer`, `close`, and `assign`, performed through actions configured on the
+type. He marked the wider ambition as an idea he would like to explore rather
+than a commitment: knowing the shape of actions would let a user interface
+render any resource together with its actions, and would let agents execute
+them.
 
 ## How the three relate
 

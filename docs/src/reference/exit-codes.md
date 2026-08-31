@@ -45,6 +45,34 @@ asks whether archie's application features live inside archie, inside a separate
 application built on the engine, or are dropped. If it leaves, the code has nothing
 to report. See [archie inbox](cli/inbox.md).
 
+## What an error message says
+
+**Proposed.** The root design pairs the code table with three requirements for an
+error message — that it is clear about what is wrong, specific about where, and
+actionable — and one illustration of a message that meets them:
+
+```console
+$ archie check
+ERROR: Invalid type 'meeting'
+  → src/notes/standup.md:2
+
+  The type 'meeting' is not recognized. Did you mean 'note'?
+  Valid types: index, person, organization, project, task, ...
+
+  Hint: Use 'type: note' with 'tags: [meeting]' instead.
+```
+
+Two things separate it from the same rule's message in the catalog, which names
+only the file, the offending value, and the valid types. It carries a line number,
+and it carries a suggested correction — a nearest known type, and a way to keep
+the rejected word as a tag instead. Neither is written into any rule's own
+message. The list of valid types it prints is the fixed list Eduardo superseded on
+2026-08-30 when he moved resource types to remargin. See
+[Validation rules](validation-rules.md).
+
+**Not in the corpus.** Whether the suggestion behavior is required of every rule
+or belongs to this one message, and how a nearest known value is chosen.
+
 ## What the corpus does not specify
 
 - **Codes for the commands Eduardo named.** The table was written for the

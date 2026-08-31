@@ -96,8 +96,12 @@ which is the default, JavaScript Object Notation (JSON), and markdown. The
 file carries a default under its `[output]` heading. Each format is shown in full
 on the [Output formats](../output-formats.md) page.
 
-The corpus specifies output only for the validation run. No other command in this
-section has a specified output shape.
+**Root design.** Three other commands have output written down, each in one form
+and with no format choice attached: the inheritance chain on
+[archie trace](trace.md), the interactive proposal on [archie inbox](inbox.md),
+and the export document on [archie export](export.md). Each is shown in full on
+its own page. The remaining commands in this section have no specified output at
+all, so their pages show the command line alone.
 
 ## Exit codes
 

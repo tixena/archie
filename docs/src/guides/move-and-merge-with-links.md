@@ -112,13 +112,13 @@ knowing what those regions are. See [Link resources](link-resources.md).
 
 ## How this fits the rest of archie
 
-**Decided.** The transactional change model generalizes these two operations to
-every change. Eduardo stated on 2026-08-25 that any change through remargin
-produces an object representing a change to a resource, modeled the way git
-operates, so that a base plus a chain of changes replays to a byte-identical
-latest version and unapplies in reverse to the original — and his feature ledger
-records that model as the generalization of the move and merge captured here. See
-[Change objects](../reference/change-objects.md).
+**Proposed (stated by Eduardo on 2026-08-25).** The transactional change model
+generalizes these two operations to every change. He stated that any change
+through remargin produces an object representing a change to a resource, modeled
+the way git operates, so that a base plus a chain of changes replays to a
+byte-identical latest version and unapplies in reverse to the original — and his
+feature ledger records that model as the generalization of the move and merge
+captured here. See [Change objects](../reference/change-objects.md) .
 
 ## Related pages
 

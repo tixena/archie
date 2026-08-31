@@ -18,12 +18,13 @@ resource types is too much of business logic I think that archie shouldn't have
 that. It should only have 'ways to help remargin achieve this'." The requirements
 document records owning resource types as a stated non-goal for archie.
 
-**Decided.** Enforcement is archie's. The remargin feature ledger holds the type
-idea in Eduardo's words from 2026-08-25 — "remargin must have a resource type
-(just like we've been thinking)" and "the linter must make those items (or
-resources, or markdown, whatever you want to call it) respect the linter" — and
-names the enforcement engine: archie's linter with user-specified shapes, with
-strictness following archie's strict and loose schema modes.
+**Proposed (stated by Eduardo on 2026-08-25).** Enforcement is archie's. The
+remargin feature ledger holds the type idea in his words from that day —
+"remargin must have a resource type (just like we've been thinking)" and "the
+linter must make those items (or resources, or markdown, whatever you want to
+call it) respect the linter" — and names the enforcement engine: archie's linter
+with user-specified shapes, with strictness following archie's strict and loose
+schema modes.
 
 **Decided.** Two things archie's means have to allow, from Eduardo's earlier
 statement of 2026-08-16 that survived the change of owner. Types are defined per
@@ -54,10 +55,11 @@ file, no named interface between the two. The shape notation itself does not
 exist either — see [Define a shape](define-a-shape.md) and the
 [Shape language](../reference/shape-language.md) reference.
 
-What is settled is the mode. A schema is strict, rejecting content the shape does
-not declare, or loose, letting it through; there is no mode that accepts a
-document by trimming it. So a type can be enforced as a floor or as a boundary,
-once there is a way to write it down.
+What Eduardo has stated is the mode, on 2026-08-25 and marked Proposed
+accordingly. A schema is strict, rejecting content the shape does not declare,
+or loose, letting it through; there is no mode that accepts a document by
+trimming it. So a type could be enforced as a floor or as a boundary, once there
+is a way to write it down.
 
 > **Suggestion (documentation author):** the gap in this step is not the shape
 > notation but the handover. Even with a notation, nothing in the design says how

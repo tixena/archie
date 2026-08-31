@@ -105,11 +105,11 @@ things the corpus does not state.
 
 ## Step 4: changing a corpus
 
-**Decided.** Every write is a transaction that produces a change object, which can
-be replayed to a byte-identical result and unapplied in reverse. An agent's write
-is not an exception: Eduardo's statement of 2026-08-25 covers "ANY CHANGE". See
-[Change objects](../reference/change-objects.md) and
-[Write through paths](write-through-paths.md).
+**Proposed (stated by Eduardo on 2026-08-25).** Every write is a transaction
+that produces a change object, which can be replayed to a byte-identical result
+and unapplied in reverse. An agent's write is not an exception: his statement
+covers "ANY CHANGE". See [Change objects](../reference/change-objects.md) and
+[Write through paths](write-through-paths.md) .
 
 **Decided.** What an agent may see and change is meant to be bounded. Eduardo
 stated on 2026-08-31 that remargin is to have a permission system in which people

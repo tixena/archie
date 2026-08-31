@@ -11,27 +11,30 @@ where it came from, and what it does not yet say.
 
 ## Every change is an object
 
-**Proposed.** In Eduardo's words, on 2026-08-25: "I want changes to be
-transactional." Every write through remargin — "ANY CHANGE", in his emphasis —
-produces an object that represents a change to a resource. He named the model
-directly: it works the way git works. Given a base resource and a chain of changes
-applied one after another, you obtain a byte-identical latest version. Given the
-latest version and the same changes unapplied in reverse order, you eventually
-arrive back at the original.
+**Proposed (stated by Eduardo on 2026-08-25).** In his words: "I want changes to
+be transactional." Every write through remargin — "ANY CHANGE", in his emphasis
+— produces an object that represents a change to a resource. He named the model
+directly: it works the way git works. Given a base resource and a chain of
+changes applied one after another, you obtain a byte-identical latest version.
+Given the latest version and the same changes unapplied in reverse order, you
+eventually arrive back at the original.
 
-**Proposed.** He also gave the reason the guarantee is reachable at all: the
-content is linted markdown with a known shape. A change to arbitrary text can only
-be described as a text difference; a change to a document whose structure is known
-can be described in terms of that structure.
+**Proposed (stated by Eduardo on 2026-08-25).** He also gave the reason the
+guarantee is reachable at all: the content is linted markdown with a known
+shape. A change to arbitrary text can only be described as a text difference; a
+change to a document whose structure is known can be described in terms of that
+structure.
 
 The archie feature ledger holds this with the status `idea` and the requirements
 document holds it among the candidate goals awaiting acceptance, which is why it
 is marked Proposed. Where it belongs is settled: the vision blueprint's record of
 the 2026-08-25 boundary places the transactional change model in archie.
 
-**Decided.** The write path it applies to is remargin's, and nothing bypasses it.
-The remargin feature ledger records the division: the change model itself is an
-archie engine capability, and remargin's entire write path is where it applies.
+**Proposed (stated by Eduardo on 2026-08-25).** The write path it applies to is
+remargin's, and nothing bypasses it. The remargin feature ledger records the
+division: the change model itself is an archie engine capability, and remargin's
+entire write path is where it applies. That ledger holds the entry with the
+status `idea` too.
 
 ## Two claims, and what each one requires
 
@@ -125,14 +128,15 @@ documents the capabilities rather than a verb.
 
 ## A worked instance: additive, reversible linking
 
-**Decided.** One operation in this family already exists in working code, in
-Eduardo's `aa_tool` project, and the archie feature ledger records the reading it
-supports. That tool's `link` command wraps every collision-free mention of a
-person's name or alias in a relative-path link to that person's profile. It states
-two invariants that are exactly the two promises of the change model, applied to
-one kind of edit: it is additive, so stripping every link it injected reproduces
-the file byte for byte; and its `unlink` command is an exact inverse, stripping
-only a link that `link` itself would have produced.
+**Proposed.** One operation in this family already exists in working code, in
+Eduardo's `aa_tool` project, and the archie feature ledger — holding that entry
+with the status `idea` — records the reading it supports. That tool's `link`
+command wraps every collision-free mention of a person's name or alias in a
+relative-path link to that person's profile. It states two invariants that are
+exactly the two promises of the change model, applied to one kind of edit: it is
+additive, so stripping every link it injected reproduces the file byte for byte;
+and its `unlink` command is an exact inverse, stripping only a link that `link`
+itself would have produced.
 
 The same source shows what a parser has to know for such an edit to be safe. It
 never rewrites frontmatter, fenced code blocks — remargin comment blocks

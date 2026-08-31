@@ -11,13 +11,13 @@ corpus says one paragraph's worth.
 
 ## The one statement in the corpus
 
-**Proposed.** In Eduardo's words, on 2026-08-25: "I also need to be able to track
-versions in a so abstracted way that no one should even worry about whether the
-backend is a filesystem, git, AWS S3, Minio, MongoDB or any other." The archie
-feature ledger records it with the status `idea`, the requirements document holds
-it among the candidate goals awaiting acceptance, and the vision blueprint's
-record of the 2026-08-25 boundary places backend-agnostic version tracking in
-archie rather than in remargin.
+**Proposed (stated by Eduardo on 2026-08-25).** In his words: "I also need to be
+able to track versions in a so abstracted way that no one should even worry
+about whether the backend is a filesystem, git, AWS S3, Minio, MongoDB or any
+other." The archie feature ledger records it with the status `idea`, the
+requirements document holds it among the candidate goals awaiting acceptance,
+and the vision blueprint's record of the 2026-08-25 boundary places
+backend-agnostic version tracking in archie rather than in remargin.
 
 Five backends are named as examples, and the sentence ends with "or any other", so
 the five are not a list of what is supported. A filesystem is a plain directory
@@ -25,13 +25,13 @@ tree; git is a version-control system that already keeps its own history; Amazon
 Web Services' S3 and Minio are object stores, and Minio offers the same interface
 as S3 on hardware one runs oneself; MongoDB is a document database.
 
-**Proposed.** Uneven support is accepted in advance, and that exemption is what
-the word "capabilities" in this page's title refers to. In his words: "doing this
-will be easier for some backends than for others, so we can maybe have 'not
-implemented' some features for some backends, and that could be ok." So the
-abstraction is not required to reduce every backend to the same set of operations.
-A backend may decline to implement part of the interface and remain a legitimate
-backend.
+**Proposed (stated by Eduardo on 2026-08-25).** Uneven support is accepted in
+advance, and that exemption is what the word "capabilities" in this page's title
+refers to. In his words: "doing this will be easier for some backends than for
+others, so we can maybe have 'not implemented' some features for some backends,
+and that could be ok." So the abstraction is not required to reduce every
+backend to the same set of operations. A backend may decline to implement part
+of the interface and remain a legitimate backend.
 
 ## Why the abstraction has to come after the document abstraction
 

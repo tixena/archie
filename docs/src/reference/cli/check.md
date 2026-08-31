@@ -113,13 +113,14 @@ command, [`archie fix`](fix.md), in the command section of the same document. Th
 two spellings are not reconciled anywhere; what both say is that reporting and
 repairing are separate acts.
 
-**Decided.** Eventually the rules come from schemas rather than from a fixed
-catalog. Eduardo, 2026-08-25: archie holds a linter for which he can specify the
-shape of any markdown document, or of a sub-part of one, and schemas have a
-strict mode that rejects content outside the declared shape and a loose mode that
-lets it through. He explicitly does not want a stripping mode, in his words
-because he "wouldn't want to accept content and trim it." The shape language is
-not designed; see [Shape language](../shape-language.md).
+**Proposed (stated by Eduardo on 2026-08-25).** Eventually the rules come from
+schemas rather than from a fixed catalog. In his words that day: archie holds a
+linter for which he can specify the shape of any markdown document, or of a
+sub-part of one, and schemas have a strict mode that rejects content outside the
+declared shape and a loose mode that lets it through. He explicitly does not
+want a stripping mode, in his words because he "wouldn't want to accept content
+and trim it." The shape language is not designed; see
+[Shape language](../shape-language.md) .
 
 **Decided.** Resource types are not archie's. Eduardo, 2026-08-30: they are
 business logic and belong to remargin, so archie holds only the means to enforce

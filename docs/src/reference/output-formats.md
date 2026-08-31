@@ -10,9 +10,15 @@ from the `[output]` table of the configuration file. See
 [Configuration](config.md).
 
 The samples below are the ones the root design document specifies, reproduced as
-it writes them. They are the only place in the design corpus where the output of a
-command is written out, which is why this is the only page in this book that shows
-one.
+it writes them. They are the fullest of the six places in the design corpus where
+output is written out; the other five are the inheritance chain on
+[archie trace](cli/trace.md), the interactive proposal on
+[archie inbox](cli/inbox.md), the export document on
+[archie export](cli/export.md), the message of every rule on
+[Validation rules](validation-rules.md), and the illustration of a well-formed
+error message on [Exit codes](exit-codes.md). Each is rendered on its own page.
+Everywhere else, this book shows the command line alone, because there is nothing
+to quote.
 
 Two notes before the samples. The root design's principle for the JSON format is
 that archie is friendly to continuous integration: exit codes and JSON output for
@@ -138,20 +144,22 @@ information sections is not written down.
 
 ## What the corpus does not specify
 
-- **Output for anything but a validation run.** These three formats belong to the
-  command that validates a corpus. What `archie ls`, `archie get`, `archie link`,
-  `archie rm`, or `archie init` print is written nowhere. Neither is whether
-  `--format` applies to them at all.
+- **A format choice for anything but a validation run.** These three formats
+  belong to the command that validates a corpus. The trace, inbox, and export
+  outputs are each written down in one form only, and nothing says whether
+  `--format` reaches them. What `archie ls`, `archie get`, `archie link`,
+  `archie rm`, or `archie init` print is written nowhere at all.
 - **Output for a query.** The grammar document's strawman proposes one JSON value
   per line as the default, with markdown available for fragments, and lists what a
   projection produces as one of its open questions: markdown fragments,
   frontmatter values as YAML or as JSON, file paths, or a mix chosen per clause.
   Nothing is settled. See [Query grammar](query-grammar.md).
-- **Output for an export.** The root design's export command has a JSON shape of
-  its own — each file's frontmatter, its observations, its relations, and a graph
-  of nodes and edges — and that command is one of the features whose fate is an
-  open question in the program's vision blueprint. See
-  [archie export](cli/export.md).
+- **Whether the export shape is the whole shape.** The root design's export
+  command has a JSON form of its own — each file's frontmatter, its observations,
+  its relations, and a graph of nodes and edges, shown in full on
+  [archie export](cli/export.md) — but its two options change what the document
+  carries and neither variant is written out. That command is also one of the
+  features whose fate is an open question in the program's vision blueprint.
 - **Whether the text format is stable.** Nothing says whether the text output is
   a contract another program may parse, or a rendering that may change.
 

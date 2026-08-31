@@ -59,18 +59,24 @@ joined at a defined seam.
 
 ## What is decided
 
-**Decided.** Addressing a sub-part of a document is the direction, not an
-accident of one example. Eduardo placed the shapes-based linter in archie on
-2026-08-25 with shapes declared for a whole markdown document or for a sub-part
-of one, and modification driven by a query means the language reaches into a
-document. The path expression is the same requirement seen from the command line.
+**Decided.** Modification driven by a query means the language reaches into a
+document rather than stopping at the document boundary, which is what makes a
+way of addressing part of a document necessary. That direction is recorded as
+settled on the grammar document. The path expression is the same requirement
+seen from the command line.
 
-**Decided.** Every write through remargin is a transaction. Eduardo stated the
-change model on 2026-08-25: any change produces an object representing a change
-to a resource, modeled the way git operates, so that a base document plus a chain
-of changes applied in order gives a byte-identical latest version, and unapplying
-the chain in reverse returns the original. It is possible, in his words, because
-the content is linted markdown with a known shape.
+**Proposed (stated by Eduardo on 2026-08-25).** The same requirement arrives
+from the other side too. Eduardo placed the shapes-based linter in archie that
+day, with shapes declared for a whole markdown document or for a sub-part of
+one, so whatever a path can address is what a shape could govern.
+
+**Proposed (stated by Eduardo on 2026-08-25).** Every write through remargin is
+a transaction. He stated the change model that day: any change produces an
+object representing a change to a resource, modeled the way git operates, so
+that a base document plus a chain of changes applied in order gives a
+byte-identical latest version, and unapplying the chain in reverse returns the
+original. It is possible, in his words, because the content is linted markdown
+with a known shape.
 
 **Decided.** Parts of a document are units of access. Eduardo stated on
 2026-08-31, recorded in the grammar document's section on why the grammar

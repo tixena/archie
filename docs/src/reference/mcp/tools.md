@@ -187,7 +187,7 @@ is the command line's own spelling. The corpus names neither.
 
 **Returns.** Not specified. Nothing states what a write reports.
 
-**Decided, about the command.** Every write is a transaction: a change produces
+**Proposed, about the command.** Every write is a transaction: a change produces
 an object representing a change to a resource, modeled the way git operates, so
 that a base document plus a chain of changes applied in order gives a
 byte-identical latest version and unapplying the chain in reverse returns the
@@ -345,9 +345,10 @@ The credential is read from the environment, from `ANTHROPIC_API_KEY` or
 and does not say how an environment variable reaches a server the client
 started.
 
-**Returns.** Not specified. The root design illustrates an interactive prompt
-offering approve, edit, skip, reject, and quit for each proposal; that is a
-screen, not a result.
+**Returns.** Not specified. The root design writes out two interactive screens,
+both shown on the [`archie inbox`](../cli/inbox.md) page, each ending in a prompt
+offering approve, edit, skip, reject, and quit for one proposal. A screen that
+waits for a keystroke is not a result a tool call can return.
 
 This command is also the one the direction Eduardo set on 2026-08-25 leaves out:
 the responsibilities he placed in archie are the linter, the schema engine, the
@@ -369,11 +370,11 @@ carries them.
 
 The root design states no option for this command.
 
-**Returns.** Not specified as data. The root design illustrates the output as an
+**Returns.** Not specified as data. The root design writes the output out as an
 indented tree, one block per folder index file, ending with two lines for the
-file — what it must carry and what it does carry. A tool would return the chain
-rather than the drawing of it, and the corpus does not describe the chain in any
-other form.
+file — what it must carry and what it does carry; it is shown in full on the
+[`archie trace`](../cli/trace.md) page. A tool would return the chain rather than
+the drawing of it, and the corpus does not describe the chain in any other form.
 
 **Parked, in addition.** The mechanism this command displays is itself under
 reconsideration, so a tool that displays it cannot be more settled than the
@@ -393,15 +394,15 @@ Serializes a corpus so another program can read it.
 
 The corpus does not say what happens when both are given.
 
-**Returns.** The export document, which the root design describes in its
-knowledge-patterns section: a list of files, each with its path, its
+**Returns.** The export document, which the root design writes out in full in its
+knowledge-patterns section and which is shown on the
+[`archie export`](../cli/export.md) page: a list of files, each with its path, its
 frontmatter, its observations — each carrying a category, its content, and its
 tags — and its relations, each carrying a type and its targets; and beside that
 list a graph in which each resource is a node and each relation is an edge
-carrying its type. That is a description of a document the command writes, not
-of a tool result, and the size warning is the reason the difference matters: a
-result that a client pays for by the token is not the same thing as a file
-written to disk.
+carrying its type. That is a document the command writes, not a tool result, and
+the size warning is the reason the difference matters: a result that a client pays
+for by the token is not the same thing as a file written to disk.
 
 This is the one command whose stated purpose names a language-model agent as its
 consumer, which makes it the closest thing in the corpus to a reason for a
@@ -479,10 +480,11 @@ server answers once.
 - **Parameter names and types.** No document names one parameter of one archie
   tool. Every name on this page is either an option's name with its dashes
   replaced or the description of a positional argument.
-- **Result shapes.** One command in the corpus has a specified output, the
-  validation run, and it is specified as three formats a person or a pipeline
-  reads rather than as a result a program consumes. Every other entry above says
-  the result is not specified.
+- **Result shapes.** Four commands in the corpus have output written down — the
+  validation run, the inheritance trace, the inbox proposal, and the export
+  document — and every one of the four is written as something a person reads at a
+  terminal or as a file written to disk, not as a result a program consumes. Every
+  other entry above says the result is not specified at all.
 - **What a tool does that its command cannot.** Nothing states whether the
   server exposes anything beyond the commands — a change object handed back to
   the caller, a projection of a write before it is applied, a subscription to a
@@ -511,5 +513,7 @@ server answers once.
   `search`, and the path given to `write`.
 - [Structural operations](../cli/structural-operations.md) — the operations that
   have no spelling on either surface.
+- [Use archie from an agent](../../guides/use-from-an-agent.md) — the
+  task-shaped guide to calling these tools.
 - [Design status](../../design-status.md) — the open questions, and the gap this
   page rests on.

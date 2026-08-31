@@ -31,10 +31,12 @@ because no document said so.
 
 ## The boundary Eduardo drew
 
-**Decided.** On 2026-08-25 Eduardo described the boundary from his side, and the
-vision blueprint's design section records where he placed each responsibility.
-The blueprint is explicit that this is stated intent and not yet a design, and
-keeps the mechanics open.
+**Proposed (stated by Eduardo on 2026-08-25).** On that day Eduardo described
+the boundary from his side, and the vision blueprint's design section records
+where he placed each responsibility. The blueprint is explicit that this is
+stated intent and not yet a design, and keeps the mechanics open — which is why
+every capability in the two lists below is Proposed rather than Decided, even
+though the placement itself is not in dispute.
 
 archie holds:
 

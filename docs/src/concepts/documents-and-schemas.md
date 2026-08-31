@@ -10,14 +10,15 @@ parser that produces them, and about who is allowed to reformat what.
 
 ## The document and the schema are abstractions, not files
 
-**Proposed.** In Eduardo's words, on 2026-08-25: "Needless to say, in archie I
-must abstract away the concept of a markdown file/object, and also the schemas."
-The engine's core types are the markdown document as an object and the schema as
-an object, neither tied to a file on disk. The archie feature ledger holds this
-with the status `idea`, and the requirements document holds it among the candidate
-goals awaiting Eduardo's acceptance, which is why it is marked Proposed rather
-than Decided. What is settled is where it belongs: the vision blueprint's record
-of the 2026-08-25 boundary places the document and schema abstractions in archie.
+**Proposed (stated by Eduardo on 2026-08-25).** In his words: "Needless to say,
+in archie I must abstract away the concept of a markdown file/object, and also
+the schemas." The engine's core types are the markdown document as an object and
+the schema as an object, neither tied to a file on disk. The archie feature
+ledger holds this with the status `idea`, and the requirements document holds it
+among the candidate goals awaiting Eduardo's acceptance, which is why it is
+marked Proposed rather than Decided. What is settled is where it belongs: the
+vision blueprint's record of the 2026-08-25 boundary places the document and
+schema abstractions in archie.
 
 The ledger states why the abstraction comes first rather than last: it is the
 prerequisite for the two capabilities built on top of it. Change objects
@@ -157,7 +158,8 @@ relates to a shape and to a resource type is taken up on
 ## Documents that are not markdown
 
 **Proposed.** Two of the commands Eduardo wrote down on 2026-08-30 retrieve an
-image and a PDF file, written as `archie get folder/image.png` and
+image and a document in Portable Document Format, written as
+`archie get folder/image.png` and
 `archie get folder/doc.pdf`. That makes non-markdown files into resources archie
 can hand back, which the root design had touched only from the other side, through
 a rule

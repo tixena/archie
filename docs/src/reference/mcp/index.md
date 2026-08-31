@@ -190,17 +190,23 @@ result carrying repeated rows names its fields once and makes the rows
 positional, and a bounded page reports the exact total so it cannot be read as
 the whole answer.
 
-**Root design.** The corpus specifies the output of exactly one command. Section
-6 gives three formats for the validation run — plain text, which is the default,
+**Root design.** One command's output is specified as a data format. Section 6
+gives three formats for the validation run — plain text, which is the default,
 JavaScript Object Notation (JSON), and markdown — selected with `--format`, with
 a default in the configuration file's output block. The JSON form is one
 document holding the corpus root, the counts of files and assets scanned, the
 findings split into errors, warnings, and information, and a summary of the
 counts. It is shown in full on the [Output formats](../output-formats.md) page.
+That is the one place in the corpus a tool could return a shape by quotation.
 
-No other command in archie's corpus has a specified output shape, so no other
-tool has a specified return shape. The [tools](tools.md) page says so for each
-one rather than inventing a result.
+**Root design.** Three further commands have output written down, and none of the
+three survives the crossing to a tool as it stands. The inheritance chain of
+[archie trace](../cli/trace.md) is drawn as an indented tree; the proposal of
+[archie inbox](../cli/inbox.md) is a screen with a prompt waiting for a keystroke;
+and the document of [archie export](../cli/export.md) is JSON written for a file
+rather than for a result a client pays for by the token. Every other command has
+no specified output at all. The [tools](tools.md) page says which of the four
+applies to each tool rather than inventing a result.
 
 ## Errors and exit codes
 

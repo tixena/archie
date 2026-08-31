@@ -181,13 +181,14 @@ holds open. See [archie fix](../reference/cli/fix.md).
 
 ## What this run becomes
 
-**Decided.** The rules stop being a fixed catalog. Eduardo placed a linter with
-user-specified shapes in archie on 2026-08-25, with a strict mode that rejects
-content outside the declared shape and a loose mode that lets it through; each
-rule above then becomes a consequence of what a shape says. What the linter prints
-when a document fails a shape is not written down anywhere, so this guide's step 2
-describes the report archie's design has today and not the one it is heading for.
-See [Define a shape](define-a-shape.md).
+**Proposed (stated by Eduardo on 2026-08-25).** The rules stop being a fixed
+catalog. Eduardo placed a linter with user-specified shapes in archie that day,
+with a strict mode that rejects content outside the declared shape and a loose
+mode that lets it through; each rule above then becomes a consequence of what a
+shape says. What the linter prints when a document fails a shape is not written
+down anywhere, so this guide's step 2 describes the report archie's design has
+today and not the one it is heading for. See [Define a shape](define-a-shape.md)
+.
 
 ## Related pages
 
@@ -203,3 +204,5 @@ See [Define a shape](define-a-shape.md).
   step.
 - [Configuration](../reference/config.md) — the corpus root, the ignore list, and
   the per-rule switches.
+- [A first session with archie](../tutorial/first-session.md) — the same steps in
+  one pass, front to back.

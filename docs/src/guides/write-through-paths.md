@@ -67,18 +67,19 @@ interface to any archie command.
 
 ## Step 4: understand what the write commits
 
-**Decided.** Every write through remargin is a transaction, and the unit of that
-transaction is a change object. Eduardo stated the model on 2026-08-25: any change
-produces an object representing a change to a resource, modeled the way git
-operates, so that a base document plus a chain of changes applied in order gives a
-byte-identical latest version, and unapplying the chain in reverse returns the
-original.
+**Proposed (stated by Eduardo on 2026-08-25).** Every write through remargin is
+a transaction, and the unit of that transaction is a change object. He stated
+the model that day: any change produces an object representing a change to a
+resource, modeled the way git operates, so that a base document plus a chain of
+changes applied in order gives a byte-identical latest version, and unapplying
+the chain in reverse returns the original.
 
-**Decided.** The reason the guarantee is reachable is stated with it: the content
-is linted markdown with a known shape. A change to arbitrary text can only be
-recorded as a difference between two texts; a change to a document whose structure
-is known can be recorded in terms of that structure. So the write path depends on
-the linter and on shapes — see [Define a shape](define-a-shape.md).
+**Proposed (stated by Eduardo on 2026-08-25).** The reason the guarantee is
+reachable is stated with it: the content is linted markdown with a known shape.
+A change to arbitrary text can only be recorded as a difference between two
+texts; a change to a document whose structure is known can be recorded in terms
+of that structure. So the write path depends on the linter and on shapes — see
+[Define a shape](define-a-shape.md) .
 
 **Open in the corpus.** Where a transaction ends when one expression changes many
 documents: one change object covering every document touched, or one per document.
@@ -107,9 +108,10 @@ remargin shows a reader only the portion they may see — and, in the same threa
 "this is what it's all about". Whatever a path expression can address is what such
 a permission can be attached to.
 
-**Decided.** Shapes govern sub-parts too, so the vocabulary a path uses is the
-vocabulary a shape needs. That is why the grammar is being worked out before any
-code is written.
+**Proposed (stated by Eduardo on 2026-08-25).** Shapes govern sub-parts too, so
+the vocabulary a path uses is the vocabulary a shape needs. That is one reason
+the grammar is being worked out before any code is written; the permission
+statement above is the other, and that one is settled.
 
 ## What is not stated
 
@@ -131,3 +133,5 @@ code is written.
   behind it.
 - [Query and search](query-and-search.md) — selecting the documents a change
   applies to.
+- [A first session with archie](../tutorial/first-session.md) — the same steps in
+  one pass, front to back.

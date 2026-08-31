@@ -122,7 +122,7 @@ ERROR: Invalid type 'meeting'
 ```
 
 The list of types in that message is the fixed list from the configuration, which
-is the part of this catalog Eduardo superseded on 2026-08-31 when he moved
+is the part of this catalog Eduardo superseded on 2026-08-30 when he moved
 resource types to remargin. See [Configuration](config.md).
 
 ### `created-required`
@@ -191,7 +191,8 @@ FIX: Can move to src/tixena/archive/projects/old_project.md
 
 ### `orphaned-assets`
 
-An asset — an image, a PDF, and the other extensions the configuration lists —
+An asset — an image, a document in Portable Document Format, and the other
+extensions the configuration lists —
 should be referenced by at least one markdown file.
 
 ```

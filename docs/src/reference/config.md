@@ -160,7 +160,7 @@ document may declare.
 Eduardo replaced this twice. On 2026-08-16 he said the list is not fixed: the
 types in the workspace analysis were extracted from his own files, another vault
 defines its own, and a type must be able to extend another to add more to it. On
-2026-08-31 he moved the concept itself: "I must say that I thought about this and
+2026-08-30 he moved the concept itself: "I must say that I thought about this and
 now I want to have resource types as part of remargin, not archie. Since resource
 types is too much of business logic I think that archie shouldn't have that. It
 should only have 'ways to help remargin achieve this'." The requirements document
@@ -200,7 +200,8 @@ question in the program's vision blueprint. See [archie inbox](cli/inbox.md).
 
 **Proposed.** The file extensions a run treats as assets rather than as
 documents, read by the orphaned-assets rule. Eduardo's command list of 2026-08-30
-reaches for an image and a PDF with `archie get`, which makes non-markdown files
+reaches for an image and a document in Portable Document Format with
+`archie get`, which makes non-markdown files
 retrievable resources; the requirements document holds that as a candidate goal,
 not an accepted one, and no configuration key expresses it.
 

@@ -81,7 +81,10 @@ $ archie trace src/tixena/people/team/dylan_minaya.md
 ```
 
 **Proposed.** The root design's configuration file names which properties cascade
-at all, as a list holding `area`, `client`, and `role`.
+at all, as a list holding `area`, `client`, and `role`. See
+[Configuration](../reference/config.md) for that key and the two others the
+mechanism reads, and [Validation rules](../reference/validation-rules.md) for the
+message each of the three rules above prints.
 
 ## Why all of this is provisional twice over
 

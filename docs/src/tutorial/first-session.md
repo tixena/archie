@@ -30,9 +30,10 @@ actually run, and stated on the same document that it is not written in stone �
 the verbs and the syntax can change and are not a hard requirement. That
 statement is itself recorded as a settled point on the grammar document.
 
-**Output.** The design corpus specifies program output in exactly one place: the
-root design document's output-format section, which describes what a validation
-run prints. So step 3 shows output and no other step does.
+**Output.** The design corpus writes output down for four commands — the
+validation run, the inheritance trace, the inbox proposal, and the export
+document — and for none of the others. Of the eight steps below, only step 3 runs
+a command whose output is written down, so only step 3 shows one.
 
 > **Suggestion (documentation author):** the order of the eight steps below is
 > this book's arrangement and not the design's. No document in the corpus
@@ -82,16 +83,17 @@ design specifies no output for the command, so none is shown here. See
 This step has no command line, and it is the step that everything after it leans
 on.
 
-**Decided.** archie has a linter, and the shapes it checks against are written by
-the user. Eduardo stated it on 2026-08-25 and the archie feature ledger records
-it in his words: "archie must have a linter. I can specify the *shape* of any
-markdown (or sub-markdown part)." A shape therefore governs either a whole
-markdown document or one part of a document.
+**Proposed (stated by Eduardo on 2026-08-25).** archie has a linter, and the
+shapes it checks against are written by the user. The archie feature ledger
+records it in his words: "archie must have a linter. I can specify the *shape*
+of any markdown (or sub-markdown part)." A shape therefore governs either a
+whole markdown document or one part of a document.
 
-**Decided.** A schema has two modes and only two. Strict rejects content that
-falls outside the declared shape; loose lets that content through. There is no
-mode that accepts a document and trims it — in his words, from the same
-statement, "I wouldn't want to accept content and trim it."
+**Proposed (stated by Eduardo on 2026-08-25).** A schema has two modes and only
+two. Strict rejects content that falls outside the declared shape; loose lets
+that content through. There is no mode that accepts a document and trims it — in
+his words, from the same statement, "I wouldn't want to accept content and trim
+it."
 
 **Not in the corpus.** How a shape is written down, and how it reaches the
 documents it governs. No document in the corpus contains a shape written out,
@@ -227,9 +229,10 @@ projection. Nothing in it is settled until it is rewritten into that document's
 decisions section, so this step shows no third query. See
 [Query grammar](../reference/query-grammar.md).
 
-**Not in the corpus.** What a query prints. The design specifies output for the
-validation run and for nothing else, so no result is shown here, and nothing
-states what the command returns to the shell when nothing matched. See
+**Not in the corpus.** What a query prints. The design writes output down for the
+validation run, the inheritance trace, the inbox proposal, and the export
+document, and this command is none of those, so no result is shown here — and
+nothing states what it returns to the shell when nothing matched. See
 [archie query](../reference/cli/query.md).
 
 ## Step 5: search the text of the documents
@@ -287,12 +290,13 @@ section carrying the current date to each of the elements a query returns. The
 four other verbs in the strawman — prepending, setting, removing, and replacing —
 come from the strawman and not from him.
 
-**Decided.** Reaching into a document is the direction rather than an accident of
-one example. Shapes govern sub-parts of documents, modification driven by a query
-reaches inside a document, and Eduardo stated on 2026-08-31 that remargin's
-permission system gives people access to files "and they can even have access to
-parts of markdowns". Whatever a path expression can address is what a shape can
-govern and what such a permission can be granted on.
+**Decided.** Reaching into a document is the direction rather than an accident
+of one example. Modification driven by a query reaches inside a document, and
+Eduardo stated on 2026-08-31 that remargin's permission system gives people
+access to files "and they can even have access to parts of markdowns". Whatever
+a path expression can address is what such a permission can be granted on — and,
+on the direction he stated on 2026-08-25 and which this book marks Proposed,
+what a shape can govern.
 
 **Not in the corpus.** Whether the content may be given inline or read from
 standard input instead of from a file, what happens when the path addresses
@@ -341,28 +345,28 @@ the status `idea`. See [archie link](../reference/cli/link.md) and the guide
 The session has now written into documents twice — once through a path and once
 by linking. This step has no command line either.
 
-**Decided, with its own qualification.** Every change produces an object that
-represents a change to a resource, and the model is the one git uses. Eduardo
-stated it on 2026-08-25: given a base resource and a chain of changes applied in
-sequence you obtain a byte-identical latest version, and unapplying the same
-chain in reverse returns the original. The archie feature ledger records the
-entry with the status `idea` and the requirements document lists it among the
-candidate goals he has not yet accepted as goals, so what is settled is that he
-stated it and that it falls on archie's side of the boundary he drew on
-2026-08-25 between archie and remargin.
+**Proposed (stated by Eduardo on 2026-08-25).** Every change produces an object
+that represents a change to a resource, and the model is the one git uses: given
+a base resource and a chain of changes applied in sequence you obtain a
+byte-identical latest version, and unapplying the same chain in reverse returns
+the original. The archie feature ledger records the entry with the status `idea`
+and the requirements document lists it among the candidate goals he has not yet
+accepted as goals, and the vision blueprint that puts it on archie's side of the
+boundary records that boundary as stated intent rather than as a design.
 
-**Decided.** The reason the guarantee is reachable is stated with it: the content
-is linted markdown with a known shape. A change to arbitrary text can only be
-recorded as a difference between two texts; a change to a document whose
-structure is known can be recorded in terms of that structure. That is why step 2
-sits where it does, and why the linter is underneath everything the later steps
-did.
+**Proposed (stated by Eduardo on 2026-08-25).** The reason the guarantee is
+reachable is stated with it: the content is linted markdown with a known shape.
+A change to arbitrary text can only be recorded as a difference between two
+texts; a change to a document whose structure is known can be recorded in terms
+of that structure. That is why step 2 sits where it does, and why the linter is
+underneath everything the later steps did.
 
-**Decided, as an observation.** The link run in step 7 is that model in
+**Proposed, as an observation.** The link run in step 7 is that model in
 miniature. It is additive, so stripping every link it injected reproduces the
 file byte for byte; it is idempotent, because text already inside a link is a
 region it skips; and the reference implementation's inverse strips only a link
-that the run would have produced. The archie feature ledger records that reading.
+that the run would have produced. The archie feature ledger records that
+reading.
 
 **Not in the corpus.** What a change object contains, how it is serialized, how
 one is named, where the chain is kept, whether one query-driven change across

@@ -16,13 +16,13 @@ basis for such advice.
 
 ## What the corpus says
 
-**Proposed.** In Eduardo Burgos's words, on 2026-08-25: "I also need to be able to
-track versions in a so abstracted way that no one should even worry about whether
-the backend is a filesystem, git, AWS S3, Minio, MongoDB or any other." The archie
-feature ledger records it with the status `idea`, the requirements document holds
-it among the candidate goals he has not yet accepted as goals, and the program's
-vision blueprint places backend-agnostic version tracking on archie's side of the
-boundary he drew that day.
+**Proposed (stated by Eduardo Burgos on 2026-08-25).** In his words: "I also
+need to be able to track versions in a so abstracted way that no one should even
+worry about whether the backend is a filesystem, git, AWS S3, Minio, MongoDB or
+any other." The archie feature ledger records it with the status `idea`, the
+requirements document holds it among the candidate goals he has not yet accepted
+as goals, and the program's vision blueprint places backend-agnostic version
+tracking on archie's side of the boundary he drew that day.
 
 The sentence ends with "or any other", so the five names are examples rather than
 a supported list.
@@ -37,10 +37,10 @@ a supported list.
 
 ## The "not implemented" contract
 
-**Proposed.** Uneven support is accepted in advance, in the same breath as the
-abstraction. In his words: "doing this will be easier for some backends than for
-others, so we can maybe have 'not implemented' some features for some backends,
-and that could be ok."
+**Proposed (stated by Eduardo on 2026-08-25).** Uneven support is accepted in
+advance, in the same breath as the abstraction. In his words: "doing this will
+be easier for some backends than for others, so we can maybe have 'not
+implemented' some features for some backends, and that could be ok."
 
 Read carefully, that is a real design constraint rather than a hedge. The
 abstraction is not required to reduce every backend to the same set of operations.
@@ -62,11 +62,13 @@ byte-identical latest version, and the backend statement says versions are track
 above a pluggable store, and no document says which of the two the store is
 defined over. See [Change objects](../reference/change-objects.md).
 
-**Decided, as a dependency.** The backend abstraction comes after the document
+**Proposed, as a dependency.** The backend abstraction comes after the document
 abstraction. Version tracking over a pluggable store only means something once a
-document can exist without a file underneath it, and abstracting the document and
-the schema away from files is recorded as the prerequisite for it. See
-[Documents and schemas](../concepts/documents-and-schemas.md).
+document can exist without a file underneath it, and abstracting the document
+and the schema away from files is recorded as the prerequisite for it. Both
+halves are among the five capabilities Eduardo stated on 2026-08-25, so the
+dependency is as unsettled as the two it joins. See
+[Documents and schemas](../concepts/documents-and-schemas.md) .
 
 ## One thing not to confuse
 

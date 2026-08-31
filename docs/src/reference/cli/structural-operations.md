@@ -42,7 +42,7 @@ a symbol, as against a checker that flags dangling references afterwards.
 designed later, and lists three things that are undesigned:
 
 - **Which reference spellings get rewritten, and which are preserved.** Candidates
-  for rewriting: paths anchored at the corpus root, relative paths, wikilinks, and
+  for rewriting: paths anchored at the corpus root, relative paths, wiki-links, and
   embeds. Candidates for preserving: historical spellings, commands quoted inside
   a document, and signed comment blocks whose content must not change.
 - **How the operation reports what it rewrote.**
@@ -90,14 +90,14 @@ would be an invention rather than a quotation.
 
 ## What connects this to the rest of archie
 
-**Decided.** The transactional change model generalizes these operations to every
-change. Eduardo stated on 2026-08-25 that he wants changes to be transactional:
-any change through remargin produces an object representing a change to a
-resource, modeled the way git operates, so that a base resource plus a chain of
-changes applied in order yields a byte-identical latest version, and unapplying
-the chain in reverse returns the original. His feature ledger records that this
-generalizes the integral structural operations captured here — move and merge as
-transactions — to every kind of change.
+**Proposed (stated by Eduardo on 2026-08-25).** The transactional change model
+generalizes these operations to every change. He stated that day that he wants
+changes to be transactional: any change through remargin produces an object
+representing a change to a resource, modeled the way git operates, so that a
+base resource plus a chain of changes applied in order yields a byte-identical
+latest version, and unapplying the chain in reverse returns the original. His
+feature ledger records that this generalizes the integral structural operations
+captured here — move and merge as transactions — to every kind of change.
 
 **Decided, in outline.** Rewriting a reference without touching a signed comment
 block or a fenced code block is the same discrimination `archie link` makes when

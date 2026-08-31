@@ -59,18 +59,42 @@ analysis says the tool validates that a file's values match the inherited ones,
 which means a child declaring a different value for an inherited property fails
 validation, but no document states that as a rule of its own.
 
-The root design shows an illustration of the output as an indented tree, one
-block per folder index file, ending with two lines for the file: what it must
-have, and what it has. This page describes that shape rather than reproducing it,
-because the design specifies command output only for the validation run.
-
 ## Examples
+
+**Root design.** The design specifies this command's output, so it is shown. The
+command line and the report below are both the root design's own, an indented
+tree with one block per folder index file, ending with two lines for the file —
+what it must carry, and what it does carry:
 
 ```console
 $ archie trace src/tixena/people/team/dylan_minaya.md
+Inheritance chain for: src/tixena/people/team/dylan_minaya.md
+
+src/index.md
+  └─ (no inherits block)
+
+src/tixena/index.md
+  └─ inherits:
+       area: tixena
+
+src/tixena/people/index.md
+  └─ inherits:
+       area: tixena (from parent)
+
+src/tixena/people/team/index.md
+  └─ inherits:
+       area: tixena (from parent)
+       role: employee
+
+dylan_minaya.md
+  └─ MUST have: area=tixena, role=employee
+  └─ HAS: area=tixena, role=employee ✓
 ```
 
-The root design's own example.
+The check mark on the last line is the report saying the two agree. Nothing
+states what the line reads when they do not, and nothing states whether the
+report is offered in any other format: the three formats of the validation run
+are written for that run alone.
 
 ## Exit codes
 

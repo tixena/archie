@@ -108,13 +108,14 @@ archie, and neither is any equivalent.
 
 ## Why this command sits in archie at all
 
-**Decided, as an observation recorded in the feature ledger.** The pair of
-operations is the transactional change model applied to one kind of edit. The run
-is additive — a link only wraps text that was already there, so stripping every
-link it injected reproduces the file byte for byte — it is idempotent, because
-text already inside a link is a region it skips, and its inverse is exact. Those
-are the two promises a change object makes, in the small. See
-[Change objects](../reference/change-objects.md).
+**Proposed, as an observation recorded in the feature ledger.** The pair of
+operations is the transactional change model applied to one kind of edit, and
+the ledger holds both that model and this reading with the status `idea`. The
+run is additive — a link only wraps text that was already there, so stripping
+every link it injected reproduces the file byte for byte — it is idempotent,
+because text already inside a link is a region it skips, and its inverse is
+exact. Those are the two promises a change object makes, in the small. See
+[Change objects](../reference/change-objects.md) .
 
 ## What is not decided
 
@@ -137,3 +138,5 @@ are the two promises a change object makes, in the small. See
   operation that rewrites references.
 - [Enforce resource types](enforce-resource-types.md) — where the resources being
   linked to are declared.
+- [A first session with archie](../tutorial/first-session.md) — the same steps in
+  one pass, front to back.

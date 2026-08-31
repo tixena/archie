@@ -74,15 +74,70 @@ step can change, or what happens to a file that is rejected.
 ## Examples
 
 ```console
-$ archie inbox
 $ archie inbox src/inbox/ --dry-run
 ```
 
-Both spellings appear in the corpus — the second in the workspace analysis. The
-root design shows an illustration of the interactive prompt, offering approve,
-edit, skip, reject, and quit for each proposal; that is a screen rather than
-command output, and this page describes it rather than reproducing it, because
-the design specifies command output only for the validation run.
+That spelling comes from the workspace analysis.
+
+**Root design.** The design specifies this command's screen, so it is shown. Both
+the capture below and its wording are the root design's own; the label it prints,
+"AI Proposal", is what the language model proposed:
+
+```console
+$ archie inbox
+Processing: src/inbox/quick_note.md
+
+Content:
+  "Fix the login timeout issue in ProDoctivity
+   The session expires after 5 minutes which is too short.
+   Users are complaining."
+
+AI Proposal:
+  Type: task
+  Area: prodoctivity
+  Filename: fix_login_timeout.md
+  Priority: high
+  Tags: authentication, ux
+  Destination: src/prodoctivity/tasks/fix_login_timeout.md
+
+[A]pprove  [E]dit  [S]kip  [R]eject  [Q]uit
+>
+```
+
+The five letters at the bottom are the person's five choices, and the run stops
+at the prompt until one is given. Nothing states what the screen looks like after
+a choice is made, what the edit choice opens, or what the run prints when it
+finishes.
+
+**Root design.** A second capture, in the knowledge-patterns section of the same
+document, shows the same flow proposing the observations and the relations it
+found in the capture's text as well as its type and area:
+
+```console
+$ archie inbox
+Processing: src/inbox/meeting_notes.md
+
+AI Proposal:
+  Type: note
+  Area: tixena
+
+  Suggested Observations:
+    - [decision] Moving deployment to Kubernetes
+    - [todo] Schedule follow-up with DevOps team
+    - [fact] Current deployment takes 45 minutes
+
+  Suggested Relations:
+    - related_to [[Kubernetes Migration]]
+    - attendees [[Dylan Minaya]] [[Melanie Hernandez]]
+
+[A]pprove  [E]dit  [S]kip  [R]eject  [Q]uit
+```
+
+One detail in it is worth noting because the corpus contradicts itself elsewhere:
+the relation type `attendees` is not in the root design's list of nine known
+relation types, so the proposal shown is proposing a type the validation rule for
+relation types would report as unknown. See
+[Knowledge patterns](../../concepts/knowledge-patterns.md).
 
 ## Exit codes
 

@@ -51,14 +51,18 @@ his working document-collaboration system — the tool he uses daily, paired wit
 Obsidian. The consequence the blueprint draws from D1: archie's primary consumer
 is remargin rather than any one person's notes.
 
-**Decided.** The blueprint's section on the design records where Eduardo placed
-each responsibility when he described the boundary on 2026-08-25. archie holds
-the linter with user-specified shapes, the schema engine with its strict and
-loose modes, the markdown document and the schema as abstractions independent of
-files, a transactional model in which every change is an object, and version
-tracking abstracted over pluggable storage backends. remargin holds the resource
-types, the actions declared on each resource type, and the write path through
-which every change becomes a transaction.
+**Proposed (stated by Eduardo on 2026-08-25).** The blueprint's section on the
+design records where Eduardo placed each responsibility when he described the
+boundary that day. archie holds the linter with user-specified shapes, the
+schema engine with its strict and loose modes, the markdown document and the
+schema as abstractions independent of files, a transactional model in which
+every change is an object, and version tracking abstracted over pluggable
+storage backends. remargin holds the resource types, the actions declared on
+each resource type, and the write path through which every change becomes a
+transaction. The blueprint records that whole placement as stated intent and not
+yet a design, and the feature ledger holds each entry with the status `idea`, so
+every one of those capabilities is Proposed in this book — see
+[archie and remargin](concepts/archie-and-remargin.md) .
 
 **Open in the corpus.** What "archie becomes the core of remargin" means
 mechanically is not settled — whether remargin depends on archie as a crate,
@@ -86,9 +90,16 @@ Every normative statement in this book carries one of three markers, and every
 page carries a status line under its heading.
 
 - **Decided** — recorded as settled in the design corpus. The prose names the
-  document, and the thread or section, that settled it.
+  document, and the thread or section, that settled it. Two things qualify: a
+  numbered decision in the program's vision blueprint, and a point a comment
+  thread records as settled.
 - **Proposed** — present in the corpus but marked as a strawman, a candidate, or
-  an idea. It is written down; it is not agreed.
+  an idea. It is written down; it is not agreed. A direction Eduardo stated whose
+  only record is a feature-ledger entry with the status `idea` together with a
+  candidate goal in the requirements document is written as **Proposed (stated by
+  Eduardo on _date_)**, which credits him with the direction without claiming it
+  was accepted as a goal. The five capabilities he placed in archie on 2026-08-25
+  are all of that kind.
 - **Suggestion** — an addition by the author of this documentation that the
   design does not contain. It is rendered as a blockquote that opens with
   **Suggestion (documentation author):**, and it says what Eduardo would have to
@@ -99,7 +110,8 @@ A page's status line reads **Status:** Decided, Proposed, or Mixed. A page marke
 
 ## How this book is organized
 
-- **Tutorial** — one walk through a first session, front to back.
+- **Tutorial** — [A first session with archie](tutorial/first-session.md), one
+  walk from an empty corpus to a change, front to back.
 - **Guides** — how to accomplish one task, one guide per task.
 - **Reference** — the command line, the Model Context Protocol server, and the
   languages and formats: shapes, the query grammar, validation rules, change

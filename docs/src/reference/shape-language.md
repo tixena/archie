@@ -10,26 +10,31 @@ shape down, so this page does not present one as fact.
 
 Two of the sources quoted below carry a status of their own. The archie feature
 ledger records each entry with the status `idea`, and the requirements document
-lists them as candidate goals that Eduardo has not yet accepted as goals. What is
-settled is that he stated them and that they fall on archie's side of the
-boundary between archie and remargin; that they have been accepted as goals is
-not.
+lists them as candidate goals that Eduardo has not yet accepted as goals. So the
+shape idea and the two schema modes are written as Proposed with the date he
+stated them: he stated them, and the vision blueprint that puts them on archie's
+side of the boundary records that boundary as stated intent rather than as a
+design.
 
 ## What a shape is
 
-**Decided.** archie has a linter, and the shapes it checks against are specified
-by the user. Eduardo said so on 2026-08-25 and the archie feature ledger records
-it in his words, in the entry "Linter with user-specified shapes": "archie must
-have a linter. I can specify the *shape* of any markdown (or sub-markdown part)."
-A shape therefore governs either a whole markdown document or a sub-part of one —
-a section, a fragment — and the linter is what enforces it.
+**Proposed (stated by Eduardo on 2026-08-25).** archie has a linter, and the
+shapes it checks against are specified by the user. The archie feature ledger
+records it in his words, in the entry "Linter with user-specified shapes":
+"archie must have a linter. I can specify the *shape* of any markdown (or
+sub-markdown part)." A shape therefore governs either a whole markdown document
+or a sub-part of one — a section, a fragment — and the linter is what enforces
+it.
 
-**Decided.** The linter belongs to archie; the ideas it enforces belong to
-remargin. The program's vision blueprint records the boundary Eduardo drew on
-2026-08-25 in its section on the design: archie holds the linter with
-user-specified shapes and the schema engine with its modes, while remargin holds
-the resource types and the actions declared on them. He restated the split on
-2026-08-31 on the root design document, superseding what he had said on
+**Proposed (stated by Eduardo on 2026-08-25).** The linter belongs to archie.
+The program's vision blueprint records the boundary Eduardo drew that day in its
+section on the design: archie holds the linter with user-specified shapes and
+the schema engine with its modes, while remargin holds the resource types and
+the actions declared on them. The blueprint records that placement as stated
+intent and not yet a design.
+
+**Decided.** The ideas the linter enforces belong to remargin. He restated the
+split on 2026-08-30 on the root design document, superseding what he had said on
 2026-08-16: resource types are business logic and belong to remargin, and archie
 holds only "ways to help remargin achieve this". The requirements document
 records owning resource types as a stated non-goal for archie. The concept page
@@ -48,16 +53,17 @@ of the governing schema rather than a fixed list.
 
 ## Strict and loose
 
-**Decided.** A schema has two modes. Eduardo's words, recorded on 2026-08-25 in
-the feature ledger entry "Schema modes: strict or loose": "Some remargin schemas
-can have a *strict* or *loose* mode — think of it as Zod's `.strict()`,
-`.loose()` or `.strip()`." Strict rejects content that falls outside the declared
-shape. Loose lets that content through.
+**Proposed (stated by Eduardo on 2026-08-25).** A schema has two modes. His
+words, recorded in the feature ledger entry "Schema modes: strict or loose":
+"Some remargin schemas can have a *strict* or *loose* mode — think of it as
+Zod's `.strict()`, `.loose()` or `.strip()`." Strict rejects content that falls
+outside the declared shape. Loose lets that content through.
 
-**Decided.** There is no stripping mode. In his words, from the same entry: "I
-don't think we will be using `.strip()` here because I wouldn't want to accept
-content and trim it." A document is either accepted as it stands or reported as
-failing; archie does not silently remove the parts a shape does not mention.
+**Proposed (stated by Eduardo on 2026-08-25).** There is no stripping mode. In
+his words, from the same entry: "I don't think we will be using `.strip()` here
+because I wouldn't want to accept content and trim it." A document is either
+accepted as it stands or reported as failing; archie does not silently remove
+the parts a shape does not mention.
 
 The corpus does not say which of the two modes applies when a shape does not
 declare one, nor whether the mode is a property of the shape, of the document, or
@@ -70,7 +76,7 @@ it. Eduardo asked for this on 2026-08-16, on the root design's purpose thread:
 resource types are defined per vault — "those were extracted from MY OwN files,
 but someone else may as well have a whole different set of resource types" — and
 "we should be able to 'extend' a resource type to add more stuff to it". On
-2026-08-31 he moved resource types themselves to remargin, and the root design now
+2026-08-30 he moved resource types themselves to remargin, and the root design now
 carries extension as one of the things remargin needs from archie's means, rather
 than as an archie concept in its own right.
 

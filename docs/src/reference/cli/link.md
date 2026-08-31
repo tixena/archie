@@ -61,7 +61,7 @@ inherits is what the feature discussion has to settle.
   never linked, and every such string is reported as excluded.
 - **It leaves whole regions alone.** Frontmatter, fenced code blocks — remargin
   comment blocks among them, because those are fenced blocks — inline code spans,
-  existing markdown links and wikilinks, and raw web addresses are never
+  existing markdown links and wiki-links, and raw web addresses are never
   rewritten. A person is never linked inside their own profile, and documents
   that carry alias data are never rewritten.
 - **It matches longest first, on word boundaries.** The longest surface string

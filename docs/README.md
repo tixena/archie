@@ -75,6 +75,37 @@ Every page carries a status line directly under its heading: `**Status:**`
 followed by Decided, Proposed, or Mixed — see markers. A page that has not been
 written yet carries `**Status:** pending`.
 
+### Which marker a statement of Eduardo's takes
+
+A statement he made is not by itself a decision, so the two are separated:
+
+- Decided is for what the program's vision blueprint records as a numbered
+  decision, and for what a comment thread records as settled — including a
+  statement a document body then carries as its own position.
+- Proposed is for a statement whose only record is an entry in a feature ledger
+  with the status `idea` together with an entry in the requirements document's
+  candidate goals, which that document says become goals only when Eduardo says
+  so. Write it as **Proposed (stated by Eduardo on _date_).**, so that the page
+  credits him with the direction without claiming it was accepted.
+
+The five capabilities he placed in archie on 2026-08-25 — the linter with
+user-specified shapes, schemas with a strict and a loose mode, the document and
+the schema as abstractions independent of files, the transactional change model,
+and backend-agnostic version tracking — are all in the second group, and the
+blueprint itself says so: it records that boundary as stated intent and not yet a
+design. The two capabilities the same statement places in remargin — actions
+declared on a resource type, and every write being a transaction — take the same
+marker.
+
+### Dating a statement made in a comment thread
+
+Comment timestamps are stored in Coordinated Universal Time; the corpus documents
+themselves date a statement in Eduardo's own time zone, which is where a reader
+would place it. Follow the documents: a statement made late on 2026-08-30 local
+time carries a stored timestamp of 2026-08-31 and is dated **2026-08-30**
+throughout this book. The one statement this decides today is the move of
+resource types from archie to remargin.
+
 ## Writing rules
 
 - Plain, self-sufficient prose. A reader never has to look something up to
@@ -92,9 +123,14 @@ written yet carries `**Status:** pending`.
   renders it as body text. Exactly one level-one heading per page. Links to
   sibling pages are relative.
 - Command examples are console blocks whose lines begin with `$ archie`. Show
-  expected output only where the design specifies it — the root design's
-  output-format section is the one place that does — and otherwise show the
-  command line alone.
+  expected output wherever the design specifies it, as a console block under the
+  command line that produces it; otherwise show the command line alone. The root
+  design specifies output in six places, and all six are rendered rather than
+  described: the three formats of the validation run in its output-format
+  section, the inheritance chain the trace command prints, the interactive
+  proposal the inbox command shows, the export document, the message text of every
+  rule in the validation catalog, and the illustration of a well-formed error
+  message in its error-handling section.
 - Each page is owned by exactly one task. Do not edit a page another task owns,
   and do not add entries to `src/SUMMARY.md`, which the scaffold owns.
 
