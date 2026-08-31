@@ -1,0 +1,7 @@
+[book]
+title = "archie"
+authors = []
+src = "src"
+
+[build]
+build-dir = "book"
