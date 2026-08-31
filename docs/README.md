@@ -58,105 +58,40 @@ mirror remargin's conventions — flat verb-named tools, compact payloads whose
 repeated rows are positional and named once by a columns list, paging that always
 reports the exact total, and a preview step for operations that mutate.
 
-## Status markers
+## Voice — the book reads as tool documentation
 
-Every normative statement in the book carries one of three markers.
+Every page documents archie the way a released command-line tool is documented:
+what it does, what it takes, what it returns, what it refuses. Nothing else.
 
-- **Decided** — recorded as settled in the corpus. Name the source in the
-  section's compact source line, never woven through the prose.
-- **Proposed** — in the corpus, but marked as a strawman, a candidate, or an
-  idea.
-- **Suggestion** — the documentation author's own addition, absent from the
-  design. Render it as a blockquote that begins
-  `> **Suggestion (documentation author):**`, say what Eduardo would have to
-  decide, and never present it as fact.
+- **Behavior first, imperative present.** "`archie link` wraps plain-text
+  mentions of known resources in links to those resources."
+- **No people, no history, no apparatus.** Names of people, internal projects,
+  design documents, discussion threads, dates, and decided/proposed/suggestion
+  markers never appear in `src/`. The gate rejects them mechanically. Provenance
+  lives in this maintainer guide and in the design corpus itself, not in the
+  book.
+- **The intended behavior is written as the behavior.** The book is
+  documentation-first: it describes the tool being built, in the same voice it
+  will keep once the tool exists. The introduction states once that no binary
+  ships yet; no other page repeats it.
+- **A genuinely undefined detail gets one italic line** — *Not yet specified.* —
+  and nothing more. No paragraphs about absence, no explanations of why.
+- **Open questions live on one page.** The design-status page collects, in
+  neutral tool-language, what is still provisional or open. Other pages may link
+  to it; they do not restate it.
+- **remargin may be named** where the behavior genuinely involves it (resource
+  types are declared by remargin; archie enforces them). No other internal
+  project is ever mentioned.
+- Plain, self-sufficient prose; expand shorthand on first use per page; no
+  issue-tracker identifiers; no release framing ("v1", "MVP"); no hype and no
+  speculation words.
+- mdBook markdown: no frontmatter block; exactly one level-one heading per page;
+  relative links; command examples as console blocks (`$ archie …`) showing
+  output only where the design specifies it.
+- Each page is owned by exactly one task; `src/SUMMARY.md` is owned by the
+  scaffold.
 
-Every page carries a status line directly under its heading: `**Status:**`
-followed by Decided, Proposed, or Mixed — see markers. A page that has not been
-written yet carries `**Status:** pending`.
-
-### Which marker a statement of Eduardo's takes
-
-A statement he made is not by itself a decision, so the two are separated:
-
-- Decided is for what the program's vision blueprint records as a numbered
-  decision, and for what a comment thread records as settled — including a
-  statement a document body then carries as its own position.
-- Proposed is for a statement whose only record is an entry in a feature ledger
-  with the status `idea` together with an entry in the requirements document's
-  candidate goals, which that document says become goals only when Eduardo says
-  so. Write it as **Proposed (stated by Eduardo on _date_).**, so that the page
-  credits him with the direction without claiming it was accepted.
-
-The five capabilities he placed in archie on 2026-08-25 — the linter with
-user-specified shapes, schemas with a strict and a loose mode, the document and
-the schema as abstractions independent of files, the transactional change model,
-and backend-agnostic version tracking — are all in the second group, and the
-blueprint itself says so: it records that boundary as stated intent and not yet a
-design. The two capabilities the same statement places in remargin — actions
-declared on a resource type, and every write being a transaction — take the same
-marker.
-
-### Dating a statement made in a comment thread
-
-Comment timestamps are stored in Coordinated Universal Time; the corpus documents
-themselves date a statement in Eduardo's own time zone, which is where a reader
-would place it. Follow the documents: a statement made late on 2026-08-30 local
-time carries a stored timestamp of 2026-08-31 and is dated **2026-08-30**
-throughout this book. The one statement this decides today is the move of
-resource types from archie to remargin.
-
-## Voice
-
-This is reference documentation, not a design chronicle. The subject of every
-sentence is archie — what it does, takes, returns, and refuses — never the
-history of deciding it.
-
-- **Behavior first.** The line after a heading states the contract in the
-  imperative present: "`archie link` turns mentions of a resource into links to
-  that resource." History never leads.
-- **Provenance is a tag, not a story.** Attribution lives in the page's status
-  line and in at most one compact source line per section — written like
-  *Source: planning document, 2026-08-30* — never as narrative. Sentences of the
-  form "Eduardo said/stated/answered … on …" do not appear; the one exception is
-  a quotation whose wording is itself the specification.
-- **Quote only when the wording is the spec** (the Zod analogy, "ALMOST the same
-  behavior"), once per page, never re-quoted across sections.
-- **Silence is one line.** "The corpus does not define X." — then stop. No
-  paragraphs about absence.
-- **Markers are tags.** **Decided** and **Proposed** open a source line or a
-  status line; they are not the subject of sentences.
-- **Suggestion blocks keep their blockquote form**, at most three lines each.
-- **Brevity is part of correctness.** If a sentence can go, it goes. The
-  exemplar for all of this is [archie link](src/reference/cli/link.md).
-
-## Writing rules
-
-- Plain, self-sufficient prose. A reader never has to look something up to
-  understand a sentence.
-- Expand any shorthand on its first use on each page, for example "Model Context
-  Protocol (MCP)".
-- No issue-tracker identifiers anywhere, and no note of which tool or model wrote
-  a page.
-- No release framing. Do not write "v1", "MVP", or "first release"; Eduardo has
-  asked for those words to disappear from his projects.
-- No hype words and no speculation words. Every claim is traceable to a source or
-  is marked as a Suggestion.
-- When the corpus is silent, say so on the page. Do not fill the gap.
-- mdBook markdown: no frontmatter block at the top of a page, because mdBook
-  renders it as body text. Exactly one level-one heading per page. Links to
-  sibling pages are relative.
-- Command examples are console blocks whose lines begin with `$ archie`. Show
-  expected output wherever the design specifies it, as a console block under the
-  command line that produces it; otherwise show the command line alone. The root
-  design specifies output in six places, and all six are rendered rather than
-  described: the three formats of the validation run in its output-format
-  section, the inheritance chain the trace command prints, the interactive
-  proposal the inbox command shows, the export document, the message text of every
-  rule in the validation catalog, and the illustration of a well-formed error
-  message in its error-handling section.
-- Each page is owned by exactly one task. Do not edit a page another task owns,
-  and do not add entries to `src/SUMMARY.md`, which the scaffold owns.
+The exemplar page is [archie link](src/reference/cli/link.md).
 
 ## The gate
 

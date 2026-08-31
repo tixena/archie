@@ -100,8 +100,16 @@ while IFS= read -r page; do
     done < "$page"
 
     [[ $headings -ne 1 ]] && fail "$rel has $headings level-one heading(s); exactly one is required"
-    [[ $has_status -eq 0 ]] && fail "$rel has no line starting with **Status:**"
 done < <(find "$src_dir" -type f -name '*.md' ! -name 'SUMMARY.md' | sort)
+
+[[ $failures -ne 0 ]] && finish_with_failures
+
+# Professional-voice guard: the book never mentions people, internal projects,
+# design documents, dates, or review apparatus. It documents the tool.
+banned='Eduardo|Burgos|aa_tool|vigil|marginalia|2026-|design corpus|root design|planning document|vision blueprint|feature ledger|grammar document|requirements document|remargin_vision|src/tixena|\*\*Status:\*\*|\*\*Decided|\*\*Proposed|Suggestion \(documentation author\)|the corpus'
+if grep -rnE "$banned" "$src_dir" --include='*.md'; then
+    fail "banned token found (see lines above): the book must read as tool documentation"
+fi
 
 [[ $failures -ne 0 ]] && finish_with_failures
 

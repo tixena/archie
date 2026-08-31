@@ -1,10 +1,7 @@
 # archie link
 
-**Status:** Proposed — named by Eduardo on 2026-08-30; generalizes the `link`
-subcommand of `aa_tool`; not yet designed. The feature ledger holds it as an
-idea awaiting a feature discussion.
-
-`archie link` turns mentions of a resource into links to that resource.
+`archie link` wraps plain-text mentions of known resources in links to those
+resources.
 
 ## Synopsis
 
@@ -12,71 +9,54 @@ idea awaiting a feature discussion.
 $ archie link folder/
 ```
 
-The only spelling in the corpus. No option is defined for archie.
+Scans the markdown files under `folder/` and rewrites each qualifying mention
+into a relative-path markdown link. The set of linkable resources, and the
+fields that supply the strings to match, come from the resource types declared
+by remargin. *Options are not yet specified.*
 
 ## Behavior
 
-What is settled, ahead of the feature discussion that will define the rest:
+- Every collision-free mention of a resource's name or alias is wrapped in a
+  link; the display text is the matched text, unchanged.
+- Matching is deterministic: no heuristics. The longest match wins, on Unicode
+  word boundaries.
+- Linking is additive: a link only wraps text that is already present, so
+  stripping every injected link reproduces the file byte for byte.
+- Linking is idempotent: text already inside a link is skipped, and a second run
+  changes nothing.
+- A string claimed by two or more resources is never linked; each such string is
+  reported as excluded.
+- Some regions are never rewritten: frontmatter, fenced code blocks, inline
+  code, existing links and wikilinks, raw web addresses, and a resource's own
+  profile document.
+- Every run reports each edit — file, byte range, matched text, link target —
+  together with the excluded strings.
 
-- The behavior is "ALMOST the same" as `aa_tool link`
-  (`~/src/tixena/aa_tool/src/link.rs`); every difference beyond the next bullet
-  is reserved for that discussion.
-- It is not restricted to people: any resource can be a link target. What counts
-  as a resource, and which of its fields supply the strings to match, is
-  remargin's to declare — resource types are remargin's, a stated non-goal for
-  archie — and archie's to use.
+Because linking is additive and byte-for-byte reversible, a link run is an
+ordinary [change](../change-objects.md): it can be replayed and unapplied like
+any other write.
 
-*Source: planning document threads, 2026-08-30 and 2026-08-31 — Proposed.*
+## Undoing a run
 
-## The reference behavior
+`archie unlink` removes exactly the links a link run produces — a link whose
+display text is a collision-free mention and whose target is what `archie link`
+would emit — and touches nothing else. A link it could not have produced is left
+alone.
 
-The contract of the implementation archie generalizes. These are facts about
-`aa_tool`, adopted by archie only where the feature discussion says so:
+## Not yet specified
 
-- Wraps every collision-free mention of a resource's name or alias in a
-  relative-path link; the display text is the matched text, unchanged.
-- Deterministic: no heuristics. Targets come from identity records (`name` plus
-  `aliases`, keyed by slug); the longest match wins, on Unicode word boundaries.
-- Additive and reversible: a link only wraps text already present, so stripping
-  every injected link reproduces the file byte for byte.
-- Idempotent: text already inside a link is skipped; a second run changes
-  nothing.
-- Collision-guarded: a string claimed by two or more resources is never linked,
-  and every such string is reported as excluded.
-- Never rewrites frontmatter, fenced blocks (remargin comment blocks included),
-  inline code, existing links and wikilinks, raw web addresses, a resource's own
-  profile, or a document that declares aliases.
-- Reports every edit as JSON: file, byte range, matched text, target slug,
-  emitted path — plus the collision-excluded surfaces.
-- Guarded: refuses a dirty git working tree unless `--allow-dirty`; `--dry-run`
-  computes the edits without writing and exits non-zero when edits are pending;
-  `--report <PATH>` writes the report. None of the three is written down for
-  archie.
-- Has an exact inverse: `unlink` strips only a link `link` could have produced —
-  collision-free display text, exactly the target `link` would emit, target
-  still present.
+- Which frontmatter fields of a resource supply its matchable strings.
+- The link target when a resource is a folder rather than a single file.
+- A dry run, an edit report format, and safety guards for uncommitted changes.
+- Output and exit codes.
 
-The additive, byte-for-byte reversible pair is the change-object model applied
-to one kind of edit, and the untouched regions are the parser knowing what a
-link, a fence, a frontmatter block, and a comment block are. See
-[Change objects](../change-objects.md).
-
-*Source: read from the aa_tool implementation — observation, not archie's
-design.*
-
-## Undecided
-
-- Which frontmatter fields of a resource supply its surface strings.
-- The link target when a resource is a folder rather than a file.
-- Whether the dirty-tree guard, the dry run, the report, and `unlink` survive
-  into archie.
-- Output and exit codes: the corpus specifies neither for `archie link`.
+See [Design status](../../design-status.md) for the open questions around this
+command.
 
 ## Related
 
 - [Link resources](../../guides/link-resources.md) — the how-to.
-- [Change objects](../change-objects.md) — the transactional model this pair
-  follows.
+- [Change objects](../change-objects.md) — replay and unapply.
 - [Shapes, schemas, and resource types](../../concepts/shapes-schemas-resource-types.md)
-  — where resource types live.
+  — where resource types are declared.
 - [Command-line interface](index.md) — global options and the command table.
