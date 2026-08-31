@@ -12,7 +12,7 @@ and the inventory of every command the corpus names.
 
 ```console
 $ mdbook build docs
-$ mdbook serve docs
+$ mdbook serve docs -n 0.0.0.0 -p 11311
 ```
 
 `mdbook build docs` writes the rendered book to `docs/book/`, which is ignored by
