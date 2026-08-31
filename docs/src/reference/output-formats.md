@@ -14,9 +14,8 @@ Findings grouped by level, each with its path and message, closing with a count
 per level and a count of the files that passed. Color is on by default; the
 `color` key and the `NO_COLOR` environment variable each turn it off.
 
-```
-archie v0.1.0
-
+```console
+$ archie check
 Scanning src/...
 Found 127 markdown files, 45 assets
 
@@ -24,17 +23,17 @@ ERRORS (3):
   ✗ src/notes/random.md
     Missing frontmatter
 
-  ✗ src/team/new/
+  ✗ src/work/new/
     Missing index.md
 
-  ✗ src/team/projects/old.md
+  ✗ src/work/projects/old.md
     archived=true but not in archive/
 
 WARNINGS (2):
-  ⚠ src/team/notes/planning.md
+  ⚠ src/product/notes/planning.md
     Contains 5 embedded task items
 
-  ⚠ src/team/assets/screenshot.png
+  ⚠ src/work/assets/screenshot.png
     Not referenced by any file
 
 INFO (4):
@@ -108,7 +107,7 @@ Generated: 2025-12-23 10:30:00
 - `src/notes/random.md`
 
 ### Missing index.md
-- `src/team/new/`
+- `src/work/new/`
 
 ...
 ```

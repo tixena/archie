@@ -46,8 +46,8 @@ which every change becomes a transaction. See
   objects, configuration, output formats, and exit codes.
 - **Concepts** — the ideas the rest of the book leans on, including where the
   boundary between archie and remargin runs.
-- **Status** — [Design status](design-status.md): what the design fixes, what it
-  leaves provisional, and every question still open.
+- **Status** — [Design status](design-status.md): what the design leaves
+  provisional, and every question still open.
 
 ## Documentation ahead of implementation
 

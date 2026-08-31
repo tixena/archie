@@ -37,20 +37,20 @@ src/index.md
 
 src/work/index.md
   └─ inherits:
-       area: tixena
+       area: work
 
 src/work/people/index.md
   └─ inherits:
-       area: tixena (from parent)
+       area: work (from parent)
 
 src/work/people/team/index.md
   └─ inherits:
-       area: tixena (from parent)
+       area: work (from parent)
        role: employee
 
 teammate.md
-  └─ MUST have: area=tixena, role=employee
-  └─ HAS: area=tixena, role=employee ✓
+  └─ MUST have: area=work, role=employee
+  └─ HAS: area=work, role=employee ✓
 ```
 
 The check mark on the last line says the two agree.

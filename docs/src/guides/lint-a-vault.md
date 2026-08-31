@@ -8,7 +8,7 @@ only the repair run writes.
 
 ```console
 $ archie check
-$ archie check vault/
+$ archie check src/work/
 ```
 
 With no path, the run scans the root named in the configuration file; with a
@@ -31,17 +31,17 @@ ERRORS (3):
   ✗ src/notes/random.md
     Missing frontmatter
 
-  ✗ src/areas/new/
+  ✗ src/work/new/
     Missing index.md
 
-  ✗ src/areas/projects/old.md
+  ✗ src/work/projects/old.md
     archived=true but not in archive/
 
 WARNINGS (2):
-  ⚠ src/areas/notes/planning.md
+  ⚠ src/product/notes/planning.md
     Contains 5 embedded task items
 
-  ⚠ src/areas/assets/screenshot.png
+  ⚠ src/work/assets/screenshot.png
     Not referenced by any file
 
 INFO (4):
@@ -77,7 +77,7 @@ a build pipeline — see [Run archie in continuous integration](run-in-ci.md).
 
 ```console
 $ archie check --rule frontmatter --rule type
-$ archie check vault/ --ignore templates
+$ archie check src/work/ --ignore templates
 ```
 
 `--rule` restricts the run to named rules and may be given more than once, and
@@ -107,7 +107,7 @@ informational is not yet specified.* See
 
 ```console
 $ archie fix --dry-run
-$ archie fix vault/ --rule inheritance
+$ archie fix src/work/ --rule inheritance
 ```
 
 The repair run addresses what needs no human decision: adding a missing `created`

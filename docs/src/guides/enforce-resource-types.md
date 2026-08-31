@@ -32,7 +32,7 @@ is a way to write it down.
 
 ```console
 $ archie lint folder/
-$ archie check vault/
+$ archie check src/work/
 ```
 
 See [Lint a vault](lint-a-vault.md) for the run and its options, and

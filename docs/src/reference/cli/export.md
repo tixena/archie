@@ -39,7 +39,7 @@ $ archie export
 {
   "files": [
     {
-      "path": "src/projects/service.md",
+      "path": "src/work/projects/service.md",
       "frontmatter": { "type": "project", "area": "work" },
       "observations": [
         { "category": "fact", "content": "Built on Rust with Actix-web", "tags": [] },

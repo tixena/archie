@@ -65,7 +65,7 @@ creating frontmatter.*
 ## Step 5: scope the run to what matters
 
 ```console
-$ archie check vault/ --rule frontmatter --rule type
+$ archie check src/work/ --rule frontmatter --rule type
 $ archie check --ignore templates
 ```
 

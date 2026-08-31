@@ -54,7 +54,7 @@ See [Shape language](../reference/shape-language.md).
 
 ```console
 $ archie lint folder/
-$ archie check vault/
+$ archie check src/work/
 ```
 
 Both spellings name the validation run; every option is written for `check`. See

@@ -52,7 +52,7 @@ ERROR: Invalid YAML in frontmatter
 
 ```
 ERROR: Missing required property 'type'
-  → src/team/notes/meeting.md
+  → src/work/notes/meeting.md
 ```
 
 ### `type-valid`
@@ -69,7 +69,7 @@ ERROR: Invalid type 'meeting'
 
 ```
 ERROR: Missing required property 'created'
-  → src/team/projects/new.md
+  → src/work/projects/new.md
 
 FIX: Can auto-add using file modification time
 ```
@@ -78,9 +78,9 @@ FIX: Can auto-add using file modification time
 
 ```
 ERROR: Missing inherited property 'area'
-  → src/team/people/staff/profile.md
-  Expected: area: team
-  Defined in: src/team/index.md
+  → src/work/people/staff/profile.md
+  Expected: area: work
+  Defined in: src/work/index.md
 ```
 
 The mechanism this rule enforces is under reconsideration; see
@@ -90,32 +90,32 @@ The mechanism this rule enforces is under reconsideration; see
 
 ```
 ERROR: Folder missing index.md
-  → src/team/projects/new_project/
+  → src/work/projects/new_project/
 ```
 
 ### `allowed-types`
 
 ```
 ERROR: Type 'project' not allowed in this folder
-  → src/team/people/staff/some_project.md
+  → src/work/people/staff/some_project.md
   Allowed types: [person]
-  Defined in: src/team/people/staff/index.md
+  Defined in: src/work/people/staff/index.md
 ```
 
 ### `archive-placement`
 
 ```
 ERROR: File has archived=true but not in archive/
-  → src/team/projects/old_project.md
+  → src/work/projects/old_project.md
 
-FIX: Can move to src/team/archive/projects/old_project.md
+FIX: Can move to src/work/archive/projects/old_project.md
 ```
 
 ### `orphaned-assets`
 
 ```
 WARN: Asset not referenced by any markdown file
-  → src/team/assets/old_screenshot.png
+  → src/work/assets/screenshot.png
 ```
 
 Links are protected and orphaned files are detected. *What becomes of an orphaned
@@ -127,7 +127,7 @@ Each task belongs in its own document.
 
 ```
 WARN: File contains 5 independent task items
-  → src/team/notes/planning.md
+  → src/product/notes/planning.md
 
   Consider splitting into individual task files.
 ```
@@ -157,21 +157,21 @@ from a configuration key rather than carrying a fixed one.
 
 ```
 WARN: Invalid observation format
-  → src/projects/nexus.md:15
+  → src/work/projects/service.md:15
   Found: - [bad format
   Expected: - [category] content
 ```
 
 ```
 WARN: Relation target not found
-  → src/projects/nexus.md:22
+  → src/work/projects/service.md:22
   - depends_on [[Nonexistent Service]]
   No file found matching "Nonexistent Service"
 ```
 
 ```
 INFO: Unknown relation type 'foobar'
-  → src/projects/nexus.md:23
+  → src/work/projects/service.md:23
   Consider: depends_on, blocks, owned_by, related_to, part_of, ...
 ```
 

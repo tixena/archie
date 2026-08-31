@@ -65,17 +65,17 @@ ERRORS (3):
   ✗ src/notes/random.md
     Missing frontmatter
 
-  ✗ src/areas/new/
+  ✗ src/work/new/
     Missing index.md
 
-  ✗ src/areas/projects/old.md
+  ✗ src/work/projects/old.md
     archived=true but not in archive/
 
 WARNINGS (2):
-  ⚠ src/areas/notes/planning.md
+  ⚠ src/product/notes/planning.md
     Contains 5 embedded task items
 
-  ⚠ src/areas/assets/screenshot.png
+  ⚠ src/work/assets/screenshot.png
     Not referenced by any file
 
 INFO (4):

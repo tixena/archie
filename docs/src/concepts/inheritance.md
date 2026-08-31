@@ -53,7 +53,7 @@ from, ending with the properties the file must have and the properties it does
 have.
 
 ```console
-$ archie trace people/team/alex-rivera.md
+$ archie trace src/work/people/team/teammate.md
 ```
 
 Configuration names which properties cascade at all, as a list holding `area`,
