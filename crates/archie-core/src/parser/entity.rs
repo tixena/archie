@@ -1,6 +1,10 @@
 //! Backslash escapes and character references, resolved in text and in
 //! link destinations and titles as `CommonMark` resolves them.
 
+/// The length of the longest reference: the `;` that ends any reference lies
+/// within it.
+const LONGEST: usize = "&CounterClockwiseContourIntegral;".len();
+
 /// The HTML5 named character references, without their `&` and `;`, sorted
 /// by name.
 static NAMED: [(&str, &str); 2125] = [
@@ -2166,7 +2170,10 @@ pub fn resolve(text: &str) -> String {
 /// then `;`. A code point that is zero or names no character gives U+FFFD.
 pub fn reference(text: &str) -> Option<(String, usize)> {
     let body = text.strip_prefix('&')?;
-    let name = &body[..body.find(';')?];
+    let name = &body[..body
+        .bytes()
+        .take(LONGEST - 1)
+        .position(|byte| byte == b';')?];
     let length = name.len() + 2;
     let Some(number) = name.strip_prefix('#') else {
         return NAMED
