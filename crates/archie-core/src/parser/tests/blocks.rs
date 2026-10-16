@@ -1762,3 +1762,62 @@ fn a_block_quote_an_underlined_heading_a_break_and_html_read_together() {
 "##,
     );
 }
+
+#[test]
+fn a_no_break_space_at_a_line_end_is_text_and_only_spaces_and_tabs_make_a_line_blank() {
+    check(
+        "a\u{a0}\nb\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "a\u{a0}"
+        Line
+          Text "b"
+"#,
+    );
+    check(
+        "a\n\u{a0}\nb\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "a"
+        Line
+          Text "\u{a0}"
+        Line
+          Text "b"
+"#,
+    );
+    check(
+        "a\n \t\nb\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "a"
+      Paragraph
+        Line
+          Text "b"
+"#,
+    );
+}
+
+#[test]
+fn a_heading_keeps_a_no_break_space_at_its_end() {
+    check(
+        "# a\u{a0}\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "a\u{a0}"
+"#,
+    );
+}

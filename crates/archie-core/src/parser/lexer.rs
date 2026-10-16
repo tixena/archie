@@ -179,7 +179,7 @@ impl Lexer<'_> {
             let text = &source[line.start..line.end];
             let content = text.trim_start_matches(' ');
             let indent = text.len() - content.len();
-            let trimmed = content.trim_end();
+            let trimmed = trim_end_spaces(content);
             if !trimmed.is_empty() && indent < level {
                 break;
             }
@@ -269,7 +269,7 @@ impl Lexer<'_> {
         let line = line_from(source, at, self.base);
         let content = source[line.start..line.end].trim_start_matches(' ');
         let from = line.end - content.len();
-        let text = from..from + content.trim_end().len();
+        let text = from..from + trim_end_spaces(content).len();
         let indent = from - line.start;
         let continues = !text.is_empty()
             && (indent >= level + 4
@@ -337,7 +337,7 @@ impl Lexer<'_> {
             let text = &source[line.start..line.end];
             let content = text.trim_start_matches(' ');
             let indent = text.len() - content.len();
-            if content.trim_end().is_empty() {
+            if trim_end_spaces(content).is_empty() {
                 if matches!(start.end, End::Blank) {
                     break;
                 }
@@ -373,7 +373,7 @@ impl Lexer<'_> {
             let text = &source[line.start..line.end];
             let content = text.trim_start_matches(' ');
             let indent = text.len() - content.len();
-            if content.trim_end().is_empty() {
+            if trim_end_spaces(content).is_empty() {
                 blanks.push(&text[indent.min(column)..]);
             } else if indent >= column {
                 lines.append(&mut blanks);
@@ -403,7 +403,7 @@ impl Lexer<'_> {
         self.pos = line.next;
         let text = &self.source[line.start..line.end];
         let content = text.trim_start_matches(' ');
-        let trimmed = content.trim_end();
+        let trimmed = trim_end_spaces(content);
         if trimmed.is_empty() {
             // An item whose marker line is empty ends at a blank line after it.
             if self
@@ -564,6 +564,12 @@ fn underline(rest: &str) -> Option<u8> {
     rest.chars()
         .all(|character| character == mark)
         .then_some(level)
+}
+
+/// `text` without the spaces and tabs at its end: a line holding nothing
+/// else is blank.
+fn trim_end_spaces(text: &str) -> &str {
+    text.trim_end_matches([' ', '\t'])
 }
 
 /// A quoted line without its `>` and one space after it.

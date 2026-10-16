@@ -346,3 +346,23 @@ fn a_piece_that_two_spaces_end_spans_its_line_break() {
         ],
     );
 }
+
+#[test]
+fn a_piece_of_inline_html_spans_the_spaces_before_its_line_end() {
+    let whole = "x <span  \nclass=\"x\">\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "x <span  \nclass=\"x\">"),
+            ("Heading", ""),
+            ("Paragraph", "x <span  \nclass=\"x\">"),
+            ("Line", "x <span  "),
+            (r#"Text "x ""#, "x "),
+            (r#"Html "<span  " continues=next"#, "<span  "),
+            ("Line", "class=\"x\">"),
+            (r#"Html "class=\"x\">" continues=previous"#, "class=\"x\">"),
+        ],
+    );
+}

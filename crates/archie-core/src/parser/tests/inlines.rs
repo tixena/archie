@@ -1354,3 +1354,133 @@ fn a_paragraph_reads_reference_images_references_brackets_and_code_span_ends() {
 "#,
     );
 }
+
+#[test]
+fn inline_html_and_a_link_title_keep_the_spaces_before_a_line_end() {
+    check(
+        "x <span  \nclass=\"x\">\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "x "
+          Html "<span  " continues=next
+        Line
+          Html "class=\"x\">" continues=previous
+"#,
+    );
+    check(
+        "[a](u \"t  \nx\")\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="u" title="t  \nx" continues=next
+            Text "a"
+        Line
+          Link form=Markdown target="u" title="t  \nx" continues=previous
+"#,
+    );
+    check(
+        "a \nb\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "a"
+        Line
+          Text "b"
+"#,
+    );
+}
+
+#[test]
+fn a_line_ending_at_an_end_of_a_code_span_counts_as_a_space_and_stays_between_its_pieces() {
+    check(
+        "` a\n`\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Code "a" continues=next
+        Line
+          Code "" continues=previous
+"#,
+    );
+    check(
+        "x ` a\n`\n===\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "x "
+        Code "a"
+"#,
+    );
+}
+
+#[test]
+fn a_link_inside_an_image_inside_link_text_leaves_the_outer_brackets_text() {
+    check(
+        "[a ![[b](c)](d) e](f)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[a "
+          Image form=Markdown target="d" alt="[b](c)"
+          Text " e](f)"
+"#,
+    );
+}
+
+#[test]
+fn ten_thousand_brackets_around_a_word_are_text_around_a_wiki_link() {
+    let source = format!("{}x{}\n", "[".repeat(10_000), "]".repeat(10_000));
+    let expected = format!(
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "{}"
+          Link form=Wiki target="x"
+          Text "{}"
+"#,
+        "[".repeat(9_998),
+        "]".repeat(9_998)
+    );
+    check(&source, &expected);
+}
+
+#[test]
+fn of_links_nested_two_thousand_deep_only_the_innermost_is_a_link() {
+    let source = format!("{}a{}\n", "[".repeat(2_000), "](u)".repeat(2_000));
+    let expected = format!(
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "{}"
+          Link form=Markdown target="u"
+            Text "a"
+          Text "{}"
+"#,
+        "[".repeat(1_999),
+        "](u)".repeat(1_999)
+    );
+    check(&source, &expected);
+}
