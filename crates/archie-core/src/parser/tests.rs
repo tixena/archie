@@ -24,20 +24,24 @@ use crate::parser::extension::Extension;
 use crate::parser::parse;
 
 /// One node of a parsed tree: how deep it sits, how it reads, what it covers.
-/// `merged` marks a pair whose key is written more than once.
+/// `merged` marks a pair whose key is written more than once, and `spread` a
+/// cell of a table row written over several lines.
 struct Row {
     depth: usize,
     label: String,
     merged: bool,
     span: Range<usize>,
+    spread: bool,
 }
 
 #[derive(Default)]
-struct Rows {
+struct Rows<'src> {
     rows: Vec<Row>,
+    /// The text the tree was parsed from, or empty for an outline alone.
+    source: &'src str,
 }
 
-impl Rows {
+impl Rows<'_> {
     fn block<E>(&mut self, depth: usize, block: &Block<E>)
     where
         E: Extension,
@@ -96,8 +100,18 @@ impl Rows {
                 let rows = table.rows.iter().map(|row| ("TableRow", row));
                 for (name, row) in head.chain(rows) {
                     self.push(depth + 1, name.to_owned(), &row.span);
+                    let spread = self
+                        .source
+                        .get(row.span.clone())
+                        .is_some_and(|text| text.contains('\n'));
                     for cell in &row.cells {
-                        self.push(depth + 2, "TableCell".to_owned(), &cell.span);
+                        self.rows.push(Row {
+                            depth: depth + 2,
+                            label: "TableCell".to_owned(),
+                            merged: false,
+                            span: cell.span.clone(),
+                            spread,
+                        });
                         self.markdown_block(depth + 3, &cell.body);
                     }
                 }
@@ -166,6 +180,7 @@ impl Rows {
                 label,
                 merged,
                 span: pair.span.clone(),
+                spread: false,
             });
             self.value(depth + 2, &pair.value);
         }
@@ -187,6 +202,7 @@ impl Rows {
             label,
             merged: false,
             span: span.clone(),
+            spread: false,
         });
     }
 
@@ -258,14 +274,19 @@ fn outline(rows: &[Row]) -> String {
 fn rows(source: &str) -> Vec<Row> {
     let document = parse(source).unwrap();
     assert_eq!(document.span, 0..source.len());
-    let mut rows = Rows::default();
+    let mut rows = Rows {
+        rows: Vec::new(),
+        source,
+    };
     rows.document(&document);
     rows.rows
 }
 
 /// Every span lies inside its parent's span and after its previous sibling.
 /// Under a pair whose key is written more than once, the values come from
-/// several places, so each only lies inside the frontmatter.
+/// several places, so each only lies inside the frontmatter. The cells of a
+/// row written over several lines interleave, so each only lies inside its
+/// row.
 fn assert_nested(source: &str, rows: &[Row]) {
     let mut open: Vec<Range<usize>> = Vec::new();
     let mut merged: Option<(usize, Range<usize>)> = None;
@@ -297,7 +318,7 @@ fn assert_nested(source: &str, rows: &[Row]) {
         }
         if let Some(sibling) = open.get(row.depth) {
             assert!(
-                sibling.end <= span.start,
+                row.spread || sibling.end <= span.start,
                 "{label} overlaps the node before it"
             );
         }

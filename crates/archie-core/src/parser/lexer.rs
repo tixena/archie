@@ -572,3 +572,55 @@ fn unquote(line: &str) -> &str {
     let rest = line.strip_prefix('>').unwrap_or(line);
     rest.strip_prefix(' ').unwrap_or(rest)
 }
+
+/// Reads `lines`, ranges of `source`, as consecutive lines of one text, the
+/// way `lex` reads a file. Spans count from the start of `source`.
+pub fn lex_lines(source: &str, lines: &[Range<usize>]) -> Vec<Token> {
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut text = String::new();
+    for line in lines {
+        if !starts.is_empty() {
+            text.push('\n');
+        }
+        starts.push(text.len());
+        text.push_str(&source[line.clone()]);
+    }
+    let place = |at: usize| {
+        let index = starts
+            .partition_point(|&start| start <= at)
+            .saturating_sub(1);
+        lines
+            .get(index)
+            .zip(starts.get(index))
+            .map_or(at, |(line, &start)| line.start + (at - start))
+    };
+    let mut tokens = lex_from(&text, 0, 0);
+    for token in &mut tokens {
+        token.span = place(token.span.start)..place(token.span.end);
+        match &mut token.kind {
+            TokenKind::CodeBlock {
+                content: range,
+                info: _,
+                value: _,
+            }
+            | TokenKind::Heading {
+                level: _,
+                text: range,
+            } => *range = place(range.start)..place(range.end),
+            TokenKind::Table(table) => table.place(&place),
+            TokenKind::Blank
+            | TokenKind::BlockQuote { value: _ }
+            | TokenKind::Definition {
+                label: _,
+                target: _,
+            }
+            | TokenKind::Html { value: _ }
+            | TokenKind::ItemEnd
+            | TokenKind::ItemStart(_)
+            | TokenKind::Text
+            | TokenKind::ThematicBreak
+            | TokenKind::Underline(_) => {}
+        }
+    }
+    tokens
+}

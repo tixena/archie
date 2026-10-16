@@ -1,4 +1,6 @@
 use super::{check, check_spans};
+use crate::parser::ast::Block;
+use crate::parser::parse;
 
 /// A simple table whose columns show the four alignments.
 const SIMPLE_TABLE: &str = "  Right     Left     Center     Default
@@ -263,15 +265,207 @@ a | b
 }
 
 #[test]
-fn a_pipe_table_with_a_row_or_a_delimiter_of_the_wrong_width_is_text() {
+fn a_pipe_row_of_another_width_widens_the_table_or_gets_empty_cells() {
     check(
         "\
 | a | b |
 |---|---|
 | 1 | 2 | 3 |
+| 4 |
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Pipe alignments=Default,Default,Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b"
+          TableCell
+            MarkdownBlock
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "1"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "2"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "3"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "4"
+          TableCell
+            MarkdownBlock
+          TableCell
+            MarkdownBlock
+"#,
+    );
+}
 
+#[test]
+fn a_dash_line_of_another_width_still_makes_a_table() {
+    check(
+        "\
 | a | b |
 |---|---|---|
+| 1 | 2 |
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Pipe alignments=Default,Default,Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b"
+          TableCell
+            MarkdownBlock
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "1"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "2"
+          TableCell
+            MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_column_the_dash_line_does_not_reach_has_the_default_alignment() {
+    check(
+        "\
+| a |
+|:-:|
+| 1 | 2 |
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Pipe alignments=Center,Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+          TableCell
+            MarkdownBlock
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "1"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "2"
+"#,
+    );
+}
+
+#[test]
+fn a_pipe_cell_holds_a_markdown_block_with_its_headings() {
+    check(
+        "\
+| x |
+|---|
+| # Foo |
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Pipe alignments=Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "x"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                  Text "Foo"
+"#,
+    );
+}
+
+#[test]
+fn a_line_with_no_pipe_or_a_header_with_no_dash_line_under_it_is_text() {
+    check(
+        "\
+a | b
+plain
+
+| a | b |
+| 1 | 2 |
 ",
         r#"Document
   MarkdownBlock
@@ -279,16 +473,14 @@ fn a_pipe_table_with_a_row_or_a_delimiter_of_the_wrong_width_is_text() {
       Heading
       Paragraph
         Line
-          Text "| a | b |"
+          Text "a | b"
         Line
-          Text "|---|---|"
-        Line
-          Text "| 1 | 2 | 3 |"
+          Text "plain"
       Paragraph
         Line
           Text "| a | b |"
         Line
-          Text "|---|---|---|"
+          Text "| 1 | 2 |"
 "#,
     );
 }
@@ -425,13 +617,9 @@ fn a_grid_table_reads_its_header_and_the_alignments_of_its_separator() {
 }
 
 #[test]
-fn a_grid_table_with_a_misplaced_wall_or_a_row_over_two_lines_is_text() {
+fn a_grid_row_may_run_over_several_lines() {
     check(
         "\
-+-----+-----+
-| a  | b    |
-+-----+-----+
-
 +-----+-----+
 | a   | b   |
 | c   | d   |
@@ -441,22 +629,137 @@ fn a_grid_table_with_a_misplaced_wall_or_a_row_over_two_lines_is_text() {
   MarkdownBlock
     Section
       Heading
-      Paragraph
-        Line
-          Text "+-----+-----+"
-        Line
-          Text "| a  | b    |"
-        Line
-          Text "+-----+-----+"
-      Paragraph
-        Line
-          Text "+-----+-----+"
-        Line
-          Text "| a   | b   |"
-        Line
-          Text "| c   | d   |"
-        Line
-          Text "+-----+-----+"
+      Table format=Grid alignments=Default,Default
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+                  Line
+                    Text "c"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b"
+                  Line
+                    Text "d"
+"#,
+    );
+}
+
+#[test]
+fn a_grid_wall_out_of_line_leaves_every_character_in_a_cell() {
+    check(
+        "\
++-----+-----+
+| a  | b    |
++-----+-----+
+
++-----+-----+
+| a   | b   |
+| c  | d    |
++-----+-----+
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Grid alignments=Default,Default
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a  |"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b"
+      Table format=Grid alignments=Default,Default
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+                  Line
+                    Text "c  |"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b"
+                  Line
+                    Text "d"
+"#,
+    );
+}
+
+#[test]
+fn a_grid_cell_holds_a_markdown_block_over_its_lines() {
+    check(
+        "\
++-------+-----+
+| - a   | x   |
+| - b   |     |
+|   - c |     |
++-------+-----+
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Grid alignments=Default,Default
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                List
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "a"
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "b"
+                        List
+                          Item
+                            MarkdownBlock
+                              Section
+                                Heading
+                                Paragraph
+                                  Line
+                                    Text "c"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "x"
 "#,
     );
 }
@@ -467,14 +770,87 @@ fn a_simple_table_takes_each_alignment_from_where_its_header_sits() {
 }
 
 #[test]
-fn a_simple_table_with_a_word_across_a_column_edge_or_no_rows_is_not_a_table() {
+fn a_simple_row_that_does_not_fit_its_columns_keeps_every_word_in_a_cell() {
+    check(
+        "  Name    Role
+  ----    ----
+  Ada     host
+  Grace Hopper reviews
+X Linus   maintains
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Simple alignments=Default,Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Name"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Role"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Ada"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "host"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Grace Hopper"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "reviews"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "X Linus"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "maintains"
+"#,
+    );
+}
+
+#[test]
+fn a_simple_table_with_no_rows_is_not_a_table() {
     check(
         "\
-Name    Role
-----    ----
-Ada     host
-Grace Hopper reviews
-
 Name    Role
 ----    ----
 ",
@@ -482,15 +858,6 @@ Name    Role
   MarkdownBlock
     Section
       Heading
-      Paragraph
-        Line
-          Text "Name    Role"
-      ThematicBreak
-      Paragraph
-        Line
-          Text "Ada     host"
-        Line
-          Text "Grace Hopper reviews"
       Paragraph
         Line
           Text "Name    Role"
@@ -538,6 +905,85 @@ fn a_table_spans_from_its_first_line_to_its_last_and_a_cell_spans_its_text() {
             (r#"Text "1""#, "1"),
             ("TableCell", ""),
             ("MarkdownBlock", ""),
+        ],
+    );
+}
+
+#[test]
+fn an_added_cell_is_empty_at_the_end_of_its_row() {
+    let whole = "| a |\n|---|\n| 1 | 2 |\n";
+    let table = "| a |\n|---|\n| 1 | 2 |";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", table),
+            ("Heading", ""),
+            ("Table format=Pipe alignments=Default,Default", table),
+            ("TableRow head", "| a |"),
+            ("TableCell", "a"),
+            ("MarkdownBlock", "a"),
+            ("Section", "a"),
+            ("Heading", ""),
+            ("Paragraph", "a"),
+            ("Line", "a"),
+            (r#"Text "a""#, "a"),
+            ("TableCell", ""),
+            ("MarkdownBlock", ""),
+            ("TableRow", "| 1 | 2 |"),
+            ("TableCell", "1"),
+            ("MarkdownBlock", "1"),
+            ("Section", "1"),
+            ("Heading", ""),
+            ("Paragraph", "1"),
+            ("Line", "1"),
+            (r#"Text "1""#, "1"),
+            ("TableCell", "2"),
+            ("MarkdownBlock", "2"),
+            ("Section", "2"),
+            ("Heading", ""),
+            ("Paragraph", "2"),
+            ("Line", "2"),
+            (r#"Text "2""#, "2"),
+        ],
+    );
+    let document = parse(whole).unwrap();
+    let block = &document.body.sections[0].blocks[0];
+    assert!(matches!(block, Block::Table(read) if read.head[0].cells[1].span == (5..5)));
+}
+
+#[test]
+fn a_grid_cell_spans_from_its_first_line_to_its_last() {
+    let whole = "+---+---+\n| a | b |\n| c | d |\n+---+---+\n";
+    let table = "+---+---+\n| a | b |\n| c | d |\n+---+---+";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", table),
+            ("Heading", ""),
+            ("Table format=Grid alignments=Default,Default", table),
+            ("TableRow", "| a | b |\n| c | d |"),
+            ("TableCell", "a | b |\n| c"),
+            ("MarkdownBlock", "a | b |\n| c"),
+            ("Section", "a | b |\n| c"),
+            ("Heading", ""),
+            ("Paragraph", "a | b |\n| c"),
+            ("Line", "a"),
+            (r#"Text "a""#, "a"),
+            ("Line", "c"),
+            (r#"Text "c""#, "c"),
+            ("TableCell", "b |\n| c | d"),
+            ("MarkdownBlock", "b |\n| c | d"),
+            ("Section", "b |\n| c | d"),
+            ("Heading", ""),
+            ("Paragraph", "b |\n| c | d"),
+            ("Line", "b"),
+            (r#"Text "b""#, "b"),
+            ("Line", "d"),
+            (r#"Text "d""#, "d"),
         ],
     );
 }
