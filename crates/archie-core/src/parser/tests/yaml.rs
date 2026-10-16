@@ -1757,3 +1757,131 @@ fn the_colon_line_of_an_explicit_key_may_hold_a_mapping_or_a_list() {
 ",
     );
 }
+
+#[test]
+fn a_tab_after_the_indentation_of_a_continuation_a_flow_line_a_block_scalar_or_a_comment_stays() {
+    check(
+        "---\na: b\n  \tc\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "b c"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nt: [a,\n \tb]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=t
+        Sequence
+          Scalar String "a"
+          Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na: |\n  x\n  \ty\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "x\n\ty\n"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na:\n \t# c\nb: 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Null
+      Pair key=b
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_block_mapping_line_that_starts_with_a_colon_has_the_empty_key() {
+    check(
+        "---\n: v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=
+        Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na: 1\n: v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+      Pair key=
+        Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- : v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=
+              Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\n: v\n: w\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key= repeats=1
+        Sequence
+          Scalar String "v"
+          Scalar String "w"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn the_colon_of_a_flow_mapping_key_or_of_an_explicit_key_may_be_on_a_later_line() {
+    let mapping = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\na: {x\n  : 1}\n---\n", mapping);
+    check("---\na: {\"x\"\n  : 1}\n---\n", mapping);
+    check("---\na: {? x\n  : 1}\n---\n", mapping);
+    check(
+        "---\na: [? x\n  : 1]\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+            Pair key=x
+              Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
