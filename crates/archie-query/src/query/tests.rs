@@ -182,3 +182,47 @@ fn lexer_errors_span_what_they_name() {
     let backslash = Query::parse(trailing).unwrap_err();
     assert!(backslash.span.end <= trailing.len(), "{backslash:?}");
 }
+
+#[test]
+fn a_string_with_a_toml_comment_is_not_a_date() {
+    let yaml = "---\ndue: \"2031-05-01#anything\"\n---\n";
+    assert!(!matches(yaml, "fm.due == 2031-05-01"));
+    assert!(!matches(yaml, "fm.due < 2031-06-01"));
+}
+
+#[test]
+fn toml_number_forms_parse_in_a_query() {
+    let source = "+++\nn = 16\nf = 1000.0\n+++\n";
+    assert!(matches(source, "fm.n == 0x10"));
+    assert!(matches(source, "fm.n == 0o20"));
+    assert!(matches(source, "fm.f == 1e3"));
+    assert!(matches(source, "fm.n > -inf"));
+}
+
+#[test]
+fn nan_never_matches() {
+    let source = "+++\nn = 16\n+++\n";
+    Query::parse("fm.n == -nan").unwrap();
+    assert!(!matches(source, "fm.n == -nan"));
+    assert!(!matches(source, "fm.n < -nan"));
+    assert!(!matches(source, "fm.n > -nan"));
+}
+
+#[test]
+fn a_trailing_dot_is_not_a_number() {
+    Query::parse("fm.n == 5.").unwrap_err();
+    Query::parse("fm.n == .5").unwrap_err();
+}
+
+#[test]
+fn a_leap_day_exists_only_in_a_leap_year() {
+    let source = "+++\nd = 2032-02-29\n+++\n";
+    assert!(matches(source, "fm.d == 2032-02-29"));
+    Query::parse("fm.d == 2031-02-29").unwrap_err();
+}
+
+#[test]
+fn an_offset_with_sixty_minutes_is_refused() {
+    Query::parse("fm.at == 2031-05-01T10:00:00+05:60").unwrap_err();
+    Query::parse("fm.at == 2031-05-01T10:00:00+05:59").unwrap();
+}

@@ -39,11 +39,15 @@ through something that is not a mapping, names no field.
 | Value | Written as | Notes |
 |---|---|---|
 | String | `"text"` | Escapes: `\"`, `\\`, `\n`, `\t`. Any other escape is an error. |
-| Integer | `42`, `-3` | |
-| Float | `1.5`, `-0.25` | |
+| Integer | `42`, `-3`, `0x10`, `0o7`, `0b101` | Hexadecimal, octal and binary forms are TOML's. |
+| Float | `1.5`, `-0.25`, `1e3`, `-inf`, `-nan` | `-inf` compares as negative infinity. `-nan` never matches. |
 | Boolean | `true`, `false` | |
 | Date | `2031-05-01` | The day must exist in that month. |
 | Datetime | `2031-05-01T09:30:00Z` | RFC 3339: `Z` or `+HH:MM` or `-HH:MM`, optional fraction. With no offset, the time counts as UTC. |
+
+Numbers follow TOML syntax, read by archie-core. A word starts with a digit or
+`-`, so `_` separators and a leading `+` are not available. `5.` and `.5` are
+not numbers.
 
 A date or datetime is written bare, without quotes. `fm.due < "2031-05-01"`
 compares as a string and never matches a date field.

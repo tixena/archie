@@ -79,7 +79,8 @@ const fn time_of(time: AstTime) -> Time {
 /// date or time archie accepts but that is not real (day past the month's end,
 /// hour 24, offset past 23:59).
 pub fn read_literal(text: &str) -> Option<Field> {
-    if text.is_empty() || text.contains(|c: char| c.is_whitespace() || c.is_control()) {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | ':' | '.' | '-');
+    if text.is_empty() || !text.chars().all(allowed) {
         return None;
     }
     let source = format!("v = {text}");
