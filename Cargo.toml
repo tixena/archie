@@ -13,6 +13,9 @@ repository = "https://github.com/tixena/archie"
 # Error handling
 thiserror = "2"
 
+# Cursor encoding
+base64 = "0.22"
+
 # Insertion-ordered map
 indexmap = "2"
 
