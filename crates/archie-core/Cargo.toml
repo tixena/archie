@@ -16,3 +16,6 @@ thiserror.workspace = true
 
 # Insertion-ordered map
 indexmap.workspace = true
+
+# Dates and times, with no clock
+chrono.workspace = true

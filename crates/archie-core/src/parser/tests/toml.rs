@@ -1,4 +1,8 @@
+use chrono::{Datelike as _, Timelike as _};
+
 use super::check;
+use crate::parser::ast::{ScalarValue, Value};
+use crate::parser::parse;
 
 #[test]
 fn every_scalar_type_is_read_from_how_the_value_is_written() {
@@ -43,7 +47,7 @@ seen = 2026-10-10 09:00:00Z
       Pair key=at
         Scalar Time 07:32:00
       Pair key=start
-        Scalar DateTime 2026-10-10T07:32:00
+        Scalar LocalDateTime 2026-10-10T07:32:00
       Pair key=sent
         Scalar DateTime 2026-10-10T07:32:00.250000000-04:00
       Pair key=seen
@@ -625,5 +629,92 @@ pattern = '''
         Scalar String "\\d+ isn't a \"string\""
   MarkdownBlock
 "#,
+    );
+}
+
+/// The value under `key` in the frontmatter of `source`, when it is a scalar.
+fn scalar(source: &str, key: &str) -> Option<ScalarValue> {
+    let mapping = parse(source).ok()?.frontmatter?.mapping;
+    match &mapping.pairs.get(key)?.value {
+        Value::Scalar(scalar) => Some(scalar.value.clone()),
+        Value::Mapping(_) | Value::Sequence(_) => None,
+    }
+}
+
+#[test]
+fn a_date_time_with_an_offset_holds_it_and_one_without_is_local() {
+    let sent = scalar("+++\nts = 2026-10-10T07:32:00-04:00\n+++\n", "ts");
+    assert!(matches!(sent, Some(ScalarValue::DateTime(ts))
+        if ts.offset().local_minus_utc() == -4_i32 * 3_600_i32
+            && (ts.year(), ts.hour()) == (2_026_i32, 7_u32)));
+
+    let start = scalar("+++\nts = 2026-10-10T07:32:00\n+++\n", "ts");
+    assert!(matches!(start, Some(ScalarValue::LocalDateTime(ts))
+        if (ts.day(), ts.minute()) == (10_u32, 32_u32)));
+
+    let at = scalar("+++\nat = 07:32:00\n+++\n", "at");
+    assert!(matches!(at, Some(ScalarValue::Time(time))
+        if (time.hour(), time.minute(), time.second()) == (7_u32, 32_u32, 0_u32)));
+}
+
+#[test]
+fn a_date_is_a_date_only_when_that_day_exists() {
+    check(
+        "\
++++
+leap = 2028-02-29
+millennium = 2000-02-29
++++
+",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=leap
+        Scalar Date 2028-02-29
+      Pair key=millennium
+        Scalar Date 2000-02-29
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn every_separator_and_offset_form_of_a_date_time_is_read() {
+    check(
+        "\
++++
+upper = 2026-10-10T07:32:00Z
+lower = 2026-10-10t07:32:00z
+spaced = 2026-10-10 07:32:00+05:30
+zero = 2026-10-10T07:32:00-00:00
+local = 2026-10-10 07:32:00.5
+leap = 23:59:60
+leap_fraction = 23:59:60.25
+leap_date_time = 2026-12-31T18:59:60-05:00
++++
+",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=upper
+        Scalar DateTime 2026-10-10T07:32:00Z
+      Pair key=lower
+        Scalar DateTime 2026-10-10T07:32:00Z
+      Pair key=spaced
+        Scalar DateTime 2026-10-10T07:32:00+05:30
+      Pair key=zero
+        Scalar DateTime 2026-10-10T07:32:00Z
+      Pair key=local
+        Scalar LocalDateTime 2026-10-10T07:32:00.500000000
+      Pair key=leap
+        Scalar Time 23:59:60
+      Pair key=leap_fraction
+        Scalar Time 23:59:60.250000000
+      Pair key=leap_date_time
+        Scalar DateTime 2026-12-31T18:59:60-05:00
+  MarkdownBlock
+",
     );
 }

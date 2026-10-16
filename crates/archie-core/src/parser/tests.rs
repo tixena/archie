@@ -16,9 +16,12 @@ mod yaml;
 
 use core::ops::Range;
 
+use chrono::{
+    DateTime, Datelike as _, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike as _,
+};
+
 use crate::parser::ast::{
-    Block, Date, DateTime, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Time,
-    Value,
+    Block, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Value,
 };
 use crate::parser::extension::Extension;
 use crate::parser::parse;
@@ -326,41 +329,50 @@ fn scalar_label(value: &ScalarValue) -> String {
     match value {
         ScalarValue::Boolean(boolean) => format!("Boolean {boolean}"),
         ScalarValue::Date(date) => format!("Date {}", date_label(*date)),
-        ScalarValue::DateTime(date_time) => format!("DateTime {}", date_time_label(*date_time)),
+        ScalarValue::DateTime(date_time) => format!("DateTime {}", date_time_label(date_time)),
         ScalarValue::Float(float) => format!("Float {float}"),
         ScalarValue::Integer(integer) => format!("Integer {integer}"),
+        ScalarValue::LocalDateTime(local) => format!("LocalDateTime {}", local_label(*local)),
         ScalarValue::Null => "Null".to_owned(),
         ScalarValue::String(string) => format!("String {string:?}"),
         ScalarValue::Time(time) => format!("Time {}", time_label(*time)),
     }
 }
 
-fn date_label(date: Date) -> String {
-    format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
+fn date_label(date: NaiveDate) -> String {
+    format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day())
 }
 
-fn time_label(time: Time) -> String {
-    let clock = format!("{:02}:{:02}:{:02}", time.hour, time.minute, time.second);
-    if time.nanosecond == 0 {
+/// chrono holds a leap second as second 59 with a second or more of
+/// nanoseconds; it prints as second 60.
+fn time_label(time: NaiveTime) -> String {
+    let leap = time.nanosecond() / 1_000_000_000;
+    let nanosecond = time.nanosecond() % 1_000_000_000;
+    let clock = format!(
+        "{:02}:{:02}:{:02}",
+        time.hour(),
+        time.minute(),
+        time.second() + leap
+    );
+    if nanosecond == 0 {
         clock
     } else {
-        format!("{clock}.{:09}", time.nanosecond)
+        format!("{clock}.{nanosecond:09}")
     }
 }
 
-fn date_time_label(date_time: DateTime) -> String {
-    let offset = match date_time.offset {
-        None => String::new(),
-        Some(0) => "Z".to_owned(),
-        Some(minutes) => {
-            let sign = if minutes < 0 { '-' } else { '+' };
-            let absolute = minutes.unsigned_abs();
-            format!("{sign}{:02}:{:02}", absolute / 60, absolute % 60)
-        }
+fn local_label(local: NaiveDateTime) -> String {
+    format!("{}T{}", date_label(local.date()), time_label(local.time()))
+}
+
+fn date_time_label(date_time: &DateTime<FixedOffset>) -> String {
+    let seconds = date_time.offset().local_minus_utc();
+    let offset = if seconds == 0_i32 {
+        "Z".to_owned()
+    } else {
+        let sign = if seconds < 0_i32 { '-' } else { '+' };
+        let minutes = seconds.unsigned_abs() / 60;
+        format!("{sign}{:02}:{:02}", minutes / 60, minutes % 60)
     };
-    format!(
-        "{}T{}{offset}",
-        date_label(date_time.date),
-        time_label(date_time.time)
-    )
+    format!("{}{offset}", local_label(date_time.naive_local()))
 }
