@@ -1709,3 +1709,48 @@ fn a_link_that_would_nest_past_the_inline_cap_keeps_its_brackets_as_text() {
         assert_eq!(depth, INLINE_CAP - 1);
     });
 }
+
+/// The outline of a document of one paragraph of one line, whose nodes'
+/// outlines are `nodes`.
+fn one_line(nodes: &str) -> String {
+    format!(
+        "Document\n  MarkdownBlock\n    Section\n      Heading\n      Paragraph\n        Line\n{nodes}"
+    )
+}
+
+#[test]
+fn a_hundred_emphasis_spans_on_one_line_are_each_emphasis() {
+    let span = "          Emphasis\n            Text \"a\"\n";
+    let nodes = [span; 100].join("          Text \" \"\n");
+    check(&format!("{}\n", "*a* ".repeat(100)), &one_line(&nodes));
+}
+
+#[test]
+fn four_hundred_code_spans_on_one_line_are_each_a_code_node() {
+    let nodes = ["          Code \"a\"\n"; 400].join("          Text \" \"\n");
+    check(&format!("{}\n", "`a` ".repeat(400)), &one_line(&nodes));
+}
+
+#[test]
+fn a_hundred_unclosed_comments_after_text_are_text() {
+    let text = format!("x {}", "<!--".repeat(100));
+    check(
+        &format!("{text}\n"),
+        &one_line(&format!("          Text \"{text}\"\n")),
+    );
+}
+
+#[test]
+fn a_closed_comment_and_a_processing_instruction_are_inline_html() {
+    check(
+        "x <!-- a --> b <? c ?> d\n",
+        &one_line(
+            r#"          Text "x "
+          Html "<!-- a -->"
+          Text " b "
+          Html "<? c ?>"
+          Text " d"
+"#,
+        ),
+    );
+}

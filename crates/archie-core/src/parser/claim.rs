@@ -1,8 +1,8 @@
 //! The claim pass: every node of a built tree offered to the extensions,
 //! children before parents.
 
-use core::mem;
 use core::ops::Range;
+use core::{iter, mem};
 
 use crate::parser::ast::{
     Block, BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Inline, Item, Kind, Line,
@@ -15,11 +15,13 @@ use crate::parser::extension::{Construct, Context, Extension};
 use crate::parser::inline::children_mut;
 
 /// What the pass carries down the tree: the context of the nodes it offers,
-/// and each grid cell's lines, by the cell's span.
+/// each grid cell's lines, by the cell's span, and where each line of the
+/// source the pass reads starts, in order.
 #[derive(Clone, Copy)]
 struct Pass<'text> {
     cells: &'text Cells,
     context: Context<'text>,
+    starts: &'text [usize],
 }
 
 impl<'text> Pass<'text> {
@@ -27,13 +29,15 @@ impl<'text> Pass<'text> {
     /// how far `start` is from the start of its line, or of its cell's line
     /// in a grid cell.
     fn at(&self, start: usize) -> Context<'text> {
-        let source = self.context.source;
         let line_start = self
             .context
             .lines
-            .and_then(|lines| lines.iter().rfind(|line| line.start <= start))
+            .and_then(|lines| lines[..lines.partition_point(|line| line.start <= start)].last())
             .map_or_else(
-                || source[..start].rfind('\n').map_or(0, |newline| newline + 1),
+                || {
+                    let starts = &self.starts[..self.starts.partition_point(|&at| at <= start)];
+                    starts.last().copied().unwrap_or_default()
+                },
                 |line| line.start,
             );
         Context {
@@ -309,6 +313,7 @@ where
     document.offer(&Pass {
         cells,
         context: *context,
+        starts: &line_starts(context.source, &document.span),
     })
 }
 
@@ -325,6 +330,7 @@ where
     block.offer(&Pass {
         cells,
         context: *context,
+        starts: &line_starts(context.source, &block.span),
     })
 }
 
@@ -369,6 +375,17 @@ where
             return Ok(offered);
         }
     }
+}
+
+/// Where each line of `source` that `span` lies on starts, in order.
+fn line_starts(source: &str, span: &Range<usize>) -> Vec<usize> {
+    let first = source[..span.start]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    let rest = source[span.clone()]
+        .match_indices('\n')
+        .map(|(newline, _)| span.start + newline + 1);
+    iter::once(first).chain(rest).collect()
 }
 
 /// Offers `node` alone, its children already offered.

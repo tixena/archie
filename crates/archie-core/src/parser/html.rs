@@ -1,6 +1,8 @@
 //! Where an HTML block starts and what ends it, by the seven kinds of HTML
 //! block of `CommonMark`, and where inline HTML ends.
 
+use std::collections::HashMap;
+
 /// The tag names that start an HTML block of the sixth kind, in lower case.
 const BLOCK_TAGS: [&str; 62] = [
     "address",
@@ -107,6 +109,32 @@ pub struct Start {
     pub opening: usize,
 }
 
+/// The last search in one text for each closer of a comment, a processing
+/// instruction, a declaration or a CDATA section.
+#[derive(Default)]
+pub struct Searches {
+    /// Each closer sought, by where its last search started and where it
+    /// found the closer, if anywhere.
+    last: HashMap<&'static str, (usize, Option<usize>)>,
+}
+
+impl Searches {
+    /// Where `closer` first starts in `text` at or past `from`. The last
+    /// search for it answers when it started at or before `from` and found
+    /// the closer at or past `from`, or found none.
+    fn find(&mut self, text: &str, closer: &'static str, from: usize) -> Option<usize> {
+        if let Some(&(start, found)) = self.last.get(closer)
+            && start <= from
+            && found.is_none_or(|place| from <= place)
+        {
+            return found;
+        }
+        let found = text[from..].find(closer).map(|offset| from + offset);
+        self.last.insert(closer, (from, found));
+        found
+    }
+}
+
 /// The HTML block `rest`, the text of a line, starts, if any.
 pub fn start(rest: &str) -> Option<Start> {
     if !rest.starts_with('<') {
@@ -153,13 +181,14 @@ pub fn start(rest: &str) -> Option<Start> {
 
 /// Where the inline HTML at `at` in `text` ends, past its last character:
 /// an open or closing tag, a comment, a processing instruction, a
-/// declaration or a CDATA section.
-pub fn inline_end(text: &str, at: usize) -> Option<usize> {
+/// declaration or a CDATA section. `searches` holds the earlier searches in
+/// `text` for what ends them.
+pub fn inline_end(text: &str, at: usize, searches: &mut Searches) -> Option<usize> {
     let rest = &text[at..];
-    let closed = |opening: usize, end: &str| {
-        rest[opening..]
-            .find(end)
-            .map(|found| at + opening + found + end.len())
+    let mut closed = |opening: usize, end: &'static str| {
+        searches
+            .find(text, end, at + opening)
+            .map(|found| found + end.len())
     };
     if rest.starts_with("<!-->") {
         return Some(at + 5);
