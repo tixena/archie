@@ -14,7 +14,7 @@ use crate::parser::ast::{
 };
 use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
-use crate::parser::inline;
+use crate::parser::inline::{self, children_mut};
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
 use crate::parser::table::{Cell, RowToken, TableToken};
 
@@ -520,7 +520,7 @@ where
         join(
             &mut children,
             line.children,
-            end..line.span.start,
+            &(end..line.span.start),
             code_value,
         );
         end = line.span.end;
@@ -531,36 +531,60 @@ where
 /// Adds `line`, the nodes of the line after the one `nodes` end on, to
 /// them. The line end, at `gap`, is a space unless a hard line break ends
 /// the line. A node that goes on into the next line takes in its piece
-/// there.
-fn join<E, F>(nodes: &mut Vec<Inline<E>>, line: Vec<Inline<E>>, gap: Range<usize>, code_value: &F)
-where
+/// there, whose children then join the node's the same way, one level after
+/// another, so nesting takes no call depth.
+fn join<E, F>(
+    nodes: &mut Vec<Inline<E>>,
+    mut line: Vec<Inline<E>>,
+    gap: &Range<usize>,
+    code_value: &F,
+) where
     E: Extension,
     F: Fn(&Range<usize>) -> String,
 {
-    let mut next = line.into_iter().peekable();
-    match next.next_if(continued) {
-        Some(piece) => merge(nodes, piece, gap, code_value),
-        None if matches!(nodes.last(), Some(Inline::LineBreak(_))) => {}
-        None => push_text(nodes, " ", gap),
-    }
-    for node in next {
-        match node {
-            Inline::Text(text) => push_text(nodes, &text.value, text.span),
-            Inline::Code(_)
-            | Inline::Emphasis(_)
-            | Inline::Html(_)
-            | Inline::Image(_)
-            | Inline::LineBreak(_)
-            | Inline::Link(_)
-            | Inline::Strong(_) => nodes.push(node),
+    let mut into = nodes;
+    loop {
+        let mut next = line.into_iter().peekable();
+        let last = into.len().checked_sub(1);
+        let inner = match next.next_if(continued) {
+            Some(piece) => merge(into, piece, code_value),
+            None if matches!(into.last(), Some(Inline::LineBreak(_))) => None,
+            None => {
+                push_text(into, " ", gap.clone());
+                None
+            }
+        };
+        for node in next {
+            match node {
+                Inline::Text(text) => push_text(into, &text.value, text.span),
+                Inline::Code(_)
+                | Inline::Emphasis(_)
+                | Inline::Html(_)
+                | Inline::Image(_)
+                | Inline::LineBreak(_)
+                | Inline::Link(_)
+                | Inline::Strong(_) => into.push(node),
+            }
         }
+        let (Some(children), Some(at)) = (inner, last) else {
+            return;
+        };
+        let Some(deeper) = into.get_mut(at).and_then(children_mut) else {
+            return;
+        };
+        into = deeper;
+        line = children;
     }
 }
 
 /// Joins `piece` to the last of `nodes`, the node it is the next line's
-/// piece of, with the line end at `gap` between them. A code span takes its
-/// value from `code_value` once it is whole.
-fn merge<E, F>(nodes: &mut Vec<Inline<E>>, piece: Inline<E>, gap: Range<usize>, code_value: &F)
+/// piece of. A code span takes its value from `code_value` once it is whole.
+/// Gives the children of the piece, which join those of the node.
+fn merge<E, F>(
+    nodes: &mut Vec<Inline<E>>,
+    piece: Inline<E>,
+    code_value: &F,
+) -> Option<Vec<Inline<E>>>
 where
     E: Extension,
     F: Fn(&Range<usize>) -> String,
@@ -572,33 +596,39 @@ where
             if matches!(code.continues, Continues::Neither) {
                 code.value = code_value(&code.span);
             }
+            None
         }
         (Some(Inline::Emphasis(emphasis)), Inline::Emphasis(rest)) => {
-            join(&mut emphasis.children, rest.children, gap, code_value);
             emphasis.continues = carried(rest.continues);
             emphasis.span.end = rest.span.end;
+            Some(rest.children)
         }
         (Some(Inline::Html(html)), Inline::Html(rest)) => {
             html.continues = carried(rest.continues);
             html.span.end = rest.span.end;
             html.value = format!("{}\n{}", html.value, rest.value);
+            None
         }
         (Some(Inline::Image(image)), Inline::Image(rest)) => {
             image.alt = format!("{} {}", image.alt, rest.alt);
             image.continues = carried(rest.continues);
             image.span.end = rest.span.end;
+            None
         }
         (Some(Inline::Link(link)), Inline::Link(rest)) => {
-            join(&mut link.children, rest.children, gap, code_value);
             link.continues = carried(rest.continues);
             link.span.end = rest.span.end;
+            Some(rest.children)
         }
         (Some(Inline::Strong(strong)), Inline::Strong(rest)) => {
-            join(&mut strong.children, rest.children, gap, code_value);
             strong.continues = carried(rest.continues);
             strong.span.end = rest.span.end;
+            Some(rest.children)
         }
-        (_, other) => nodes.push(other),
+        (_, other) => {
+            nodes.push(other);
+            None
+        }
     }
 }
 

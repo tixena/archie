@@ -1142,3 +1142,59 @@ fn a_definition_in_a_table_inside_a_grid_cell_is_a_definition_of_the_file() {
 "#,
     );
 }
+
+#[test]
+fn a_row_line_keeps_a_no_break_space_at_its_end_and_loses_its_spaces() {
+    check(
+        "| a |\n|---|\n| b\u{a0}\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Pipe alignments=Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b\u{a0}"
+"#,
+    );
+    let whole = "| a |\n|---|\n| b  \n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "| a |\n|---|\n| b"),
+            ("Heading", ""),
+            ("Table format=Pipe alignments=Default", "| a |\n|---|\n| b"),
+            ("TableRow head", "| a |"),
+            ("TableCell", "a"),
+            ("MarkdownBlock", "a"),
+            ("Section", "a"),
+            ("Heading", ""),
+            ("Paragraph", "a"),
+            ("Line", "a"),
+            (r#"Text "a""#, "a"),
+            ("TableRow", "| b"),
+            ("TableCell", "b"),
+            ("MarkdownBlock", "b"),
+            ("Section", "b"),
+            ("Heading", ""),
+            ("Paragraph", "b"),
+            ("Line", "b"),
+            (r#"Text "b""#, "b"),
+        ],
+    );
+}

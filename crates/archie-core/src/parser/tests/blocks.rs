@@ -1863,3 +1863,31 @@ fn a_heading_keeps_a_no_break_space_at_its_end() {
 "#,
     );
 }
+
+#[test]
+fn a_definition_title_over_a_line_end_keeps_the_spaces_before_it() {
+    check(
+        "[x]: /u \"t  \nx\"\n\n[a][x]\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="/u" title="t  \nx"
+            Text "a"
+"#,
+    );
+    check(
+        "[x]: /u  \n\"t\"\n\n[a][x]\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="/u" title="t"
+            Text "a"
+"#,
+    );
+}

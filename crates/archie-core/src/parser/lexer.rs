@@ -286,13 +286,15 @@ impl Lexer<'_> {
 
     /// Reads a link reference definition that starts at `at`, over its line
     /// and as many lines after it as it needs that would continue a
-    /// paragraph. Gives whether there was one.
+    /// paragraph, each up to its line ending, so a title over a line end
+    /// keeps the spaces and tabs before it. Gives whether there was one.
     fn definition(&mut self, at: usize, end: usize) -> bool {
         let source = self.source;
         if !source[at..end].starts_with('[') {
             return false;
         }
-        let mut text = source[at..end].to_owned();
+        let written = |from: usize| &source[from..line_at(source, from).end];
+        let mut text = written(at).to_owned();
         let mut ends = vec![(end, self.pos)];
         let read = loop {
             let reading = definition::read(&text);
@@ -306,7 +308,7 @@ impl Lexer<'_> {
                 break reading.definition;
             };
             text.push('\n');
-            text.push_str(&source[line.clone()]);
+            text.push_str(written(line.start));
             ends.push((line.end, after));
         };
         let Some(found) = read else {
@@ -577,7 +579,7 @@ fn underline(rest: &str) -> Option<u8> {
 
 /// `text` without the spaces and tabs at its end: a line holding nothing
 /// else is blank.
-fn trim_end_spaces(text: &str) -> &str {
+pub fn trim_end_spaces(text: &str) -> &str {
     text.trim_end_matches([' ', '\t'])
 }
 
