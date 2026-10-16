@@ -8,12 +8,13 @@ use core::ops::Range;
 use std::collections::HashMap;
 
 use crate::parser::ast::{
-    Block, BlockQuote, CodeBlock, Heading, Html, Inline, Item, Kind, Line, List, MarkdownBlock,
-    Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text, ThematicBreak,
+    Block, BlockQuote, CodeBlock, Continues, Heading, Html, Inline, Item, Kind, Line, List,
+    MarkdownBlock, Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text,
+    ThematicBreak,
 };
 use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
-use crate::parser::inline::line;
+use crate::parser::inline;
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
 use crate::parser::table::{Cell, RowToken, TableToken};
 
@@ -89,7 +90,7 @@ where
             empty_heading(written.start)
         } else {
             Heading {
-                children: line(self.source, text, &self.definitions, false).children,
+                children: joined(inline::lines(self.source, &[text], &self.definitions)),
                 kind: Kind(None),
                 span: written.clone(),
             }
@@ -185,6 +186,7 @@ where
                     None
                 }
                 TokenKind::Html { value } => Some(Block::Html(Html {
+                    continues: Continues::Neither,
                     kind: Kind(None),
                     span: token.span,
                     value,
@@ -258,12 +260,7 @@ where
             ranges.push(token.span.clone());
             self.pos += 1;
         }
-        let last = ranges.len() - 1;
-        let lines: Vec<Line<E>> = ranges
-            .into_iter()
-            .enumerate()
-            .map(|(index, range)| line(self.source, range, &self.definitions, index < last))
-            .collect();
+        let lines = inline::lines(self.source, &ranges, &self.definitions);
         let end = lines.last().map_or(start, |written| written.span.end);
         if let Some(token) = self.tokens.get(self.pos)
             && let TokenKind::Underline(level) = token.kind
@@ -485,35 +482,119 @@ fn definitions(tokens: &[Token]) -> Definitions {
 }
 
 /// The inline nodes of `lines` as those of one line, with a space where
-/// each line ends, unless it ends with a hard line break.
+/// each line ends, unless it ends with a hard line break. The pieces of a
+/// node cut at a line end are joined into the whole node.
 fn joined<E>(lines: Vec<Line<E>>) -> Vec<Inline<E>>
 where
     E: Extension,
 {
-    let mut children = Vec::new();
-    let mut previous_end = None;
-    for line in lines {
-        let broken = matches!(children.last(), Some(Inline::LineBreak(_)));
-        if let Some(end) = previous_end
-            && !broken
-        {
-            push_text(&mut children, " ", end..line.span.start);
-        }
-        previous_end = Some(line.span.end);
-        for child in line.children {
-            match child {
-                Inline::Text(text) => push_text(&mut children, &text.value, text.span),
-                Inline::Code(_)
-                | Inline::Emphasis(_)
-                | Inline::Html(_)
-                | Inline::Image(_)
-                | Inline::LineBreak(_)
-                | Inline::Link(_)
-                | Inline::Strong(_) => children.push(child),
-            }
-        }
+    let mut rest = lines.into_iter();
+    let Some(first) = rest.next() else {
+        return Vec::new();
+    };
+    let mut end = first.span.end;
+    let mut children = first.children;
+    for line in rest {
+        join(&mut children, line.children, end..line.span.start);
+        end = line.span.end;
     }
     children
+}
+
+/// Adds `line`, the nodes of the line after the one `nodes` end on, to
+/// them. The line end, at `gap`, is a space unless a hard line break ends
+/// the line. A node that goes on into the next line takes in its piece
+/// there.
+fn join<E>(nodes: &mut Vec<Inline<E>>, line: Vec<Inline<E>>, gap: Range<usize>)
+where
+    E: Extension,
+{
+    let mut next = line.into_iter().peekable();
+    match next.next_if(continued) {
+        Some(piece) => merge(nodes, piece, gap),
+        None if matches!(nodes.last(), Some(Inline::LineBreak(_))) => {}
+        None => push_text(nodes, " ", gap),
+    }
+    for node in next {
+        match node {
+            Inline::Text(text) => push_text(nodes, &text.value, text.span),
+            Inline::Code(_)
+            | Inline::Emphasis(_)
+            | Inline::Html(_)
+            | Inline::Image(_)
+            | Inline::LineBreak(_)
+            | Inline::Link(_)
+            | Inline::Strong(_) => nodes.push(node),
+        }
+    }
+}
+
+/// Joins `piece` to the last of `nodes`, the node it is the next line's
+/// piece of, with the line end at `gap` between them.
+fn merge<E>(nodes: &mut Vec<Inline<E>>, piece: Inline<E>, gap: Range<usize>)
+where
+    E: Extension,
+{
+    match (nodes.last_mut(), piece) {
+        (Some(Inline::Code(code)), Inline::Code(rest)) => {
+            code.continues = carried(rest.continues);
+            code.span.end = rest.span.end;
+            code.value = format!("{} {}", code.value, rest.value);
+        }
+        (Some(Inline::Emphasis(emphasis)), Inline::Emphasis(rest)) => {
+            join(&mut emphasis.children, rest.children, gap);
+            emphasis.continues = carried(rest.continues);
+            emphasis.span.end = rest.span.end;
+        }
+        (Some(Inline::Html(html)), Inline::Html(rest)) => {
+            html.continues = carried(rest.continues);
+            html.span.end = rest.span.end;
+            html.value = format!("{}\n{}", html.value, rest.value);
+        }
+        (Some(Inline::Image(image)), Inline::Image(rest)) => {
+            image.alt = format!("{} {}", image.alt, rest.alt);
+            image.continues = carried(rest.continues);
+            image.span.end = rest.span.end;
+        }
+        (Some(Inline::Link(link)), Inline::Link(rest)) => {
+            join(&mut link.children, rest.children, gap);
+            link.continues = carried(rest.continues);
+            link.span.end = rest.span.end;
+        }
+        (Some(Inline::Strong(strong)), Inline::Strong(rest)) => {
+            join(&mut strong.children, rest.children, gap);
+            strong.continues = carried(rest.continues);
+            strong.span.end = rest.span.end;
+        }
+        (_, other) => nodes.push(other),
+    }
+}
+
+/// Whether `node` is a piece that goes on from the line before.
+const fn continued<E>(node: &Inline<E>) -> bool
+where
+    E: Extension,
+{
+    let continues = match node {
+        Inline::Code(code) => code.continues,
+        Inline::Emphasis(emphasis) => emphasis.continues,
+        Inline::Html(html) => html.continues,
+        Inline::Image(image) => image.continues,
+        Inline::Link(link) => link.continues,
+        Inline::Strong(strong) => strong.continues,
+        Inline::LineBreak(_) | Inline::Text(_) => Continues::Neither,
+    };
+    matches!(continues, Continues::Both | Continues::Previous)
+}
+
+/// How a node goes on once it has taken in its next piece, which
+/// `continues`: into the line after only when that piece does.
+const fn carried(continues: Continues) -> Continues {
+    if matches!(continues, Continues::Both) {
+        Continues::Next
+    } else {
+        Continues::Neither
+    }
 }
 
 /// Adds `value`, written at `span`, to the text node that ends `children`,

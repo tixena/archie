@@ -1,16 +1,39 @@
 //! Inline nodes inside the text lines of a paragraph or a heading.
 
 use core::mem;
-use core::ops::Range;
+use core::ops::{Range, RangeInclusive};
 
 use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
 
 use crate::parser::ast::{
-    Code, Emphasis, Html, Image, Inline, Kind, Line, LineBreak, Link, LinkForm, Strong, Text,
+    Code, Continues, Emphasis, Html, Image, Inline, Kind, Line, LineBreak, Link, LinkForm, Strong,
+    Text,
 };
 use crate::parser::definition::{self, Definitions, Target, fold_label};
 use crate::parser::extension::{Extension, Plain};
 use crate::parser::html;
+
+/// What ends a line of a paragraph before the line after it.
+#[derive(Clone, Copy)]
+enum Ending {
+    /// A backslash that ends the line is a hard line break.
+    Backslash,
+    /// No hard line break can end the line.
+    Soft,
+    /// Two or more spaces, up to this place in the source, are a hard line
+    /// break.
+    Spaces(usize),
+}
+
+/// The lines of a paragraph, `ranges` of the source, joined by `\n` into
+/// `text`, which the scanner reads: where each line sits in `text`, and how
+/// it ends.
+struct Layout<'src> {
+    endings: Vec<Ending>,
+    places: Vec<Range<usize>>,
+    ranges: &'src [Range<usize>],
+    text: String,
+}
 
 /// What the scanner has read: a node, or a run of `*` or `_` not yet
 /// paired, by its place in the scanner's runs.
@@ -40,23 +63,269 @@ struct Wiki {
     target: Range<usize>,
 }
 
-struct Scanner<'src, 'defs, E>
+/// Reads the text of a layout into nodes whose spans are places in that
+/// text.
+struct Scanner<'lay, 'defs, E>
 where
     E: Extension,
 {
-    /// The line read: its ends count as whitespace beside a run.
-    bounds: Range<usize>,
-    /// Set when a backslash that ends the scanned range is a hard line break.
-    breaks: bool,
     definitions: &'defs Definitions,
+    layout: &'lay Layout<'lay>,
     /// Off inside the text of a link, where another link cannot start.
     links: bool,
     pieces: Vec<Piece<E>>,
     runs: Vec<Run>,
-    source: &'src str,
     text: String,
     text_end: usize,
     text_start: Option<usize>,
+}
+
+impl Ending {
+    /// How the line whose text ends at `end` in `source` ends: when another
+    /// line of its paragraph `follows`, a backslash or two or more spaces
+    /// that end it make a hard line break.
+    fn of(source: &str, end: usize, follows: bool) -> Self {
+        let trailing = source[end..]
+            .bytes()
+            .take_while(|&byte| matches!(byte, b' ' | b'\t'))
+            .count();
+        let close = end + trailing;
+        let breaks = follows && matches!(source.as_bytes().get(close), None | Some(b'\n' | b'\r'));
+        if !breaks {
+            Self::Soft
+        } else if trailing == 0 {
+            Self::Backslash
+        } else if source[end..close].ends_with("  ") {
+            Self::Spaces(close)
+        } else {
+            Self::Soft
+        }
+    }
+}
+
+impl<'src> Layout<'src> {
+    /// The pieces of `node`, read from `text`, one for each line it lies
+    /// on, by that line, with their spans in the source.
+    fn cut<E>(&self, node: Inline<E>) -> Vec<(usize, Inline<E>)>
+    where
+        E: Extension,
+    {
+        let read = node.span().clone();
+        match node {
+            Inline::Code(code) => {
+                let mut values = code.value.split('\n');
+                self.pieces(&read, |continues, span| {
+                    Inline::Code(Code {
+                        continues,
+                        kind: Kind(None),
+                        span,
+                        value: values.next().unwrap_or_default().to_owned(),
+                    })
+                })
+            }
+            Inline::Emphasis(emphasis) => {
+                let mut children = self.spread(emphasis.children, &read);
+                self.pieces(&read, |continues, span| {
+                    Inline::Emphasis(Emphasis {
+                        children: children.next().unwrap_or_default(),
+                        continues,
+                        kind: Kind(None),
+                        span,
+                    })
+                })
+            }
+            Inline::Html(html) => {
+                let mut values = html.value.split('\n');
+                self.pieces(&read, |continues, span| {
+                    Inline::Html(Html {
+                        continues,
+                        kind: Kind(None),
+                        span,
+                        value: values.next().unwrap_or_default().to_owned(),
+                    })
+                })
+            }
+            Inline::Image(image) => {
+                let mut alts = image.alt.split('\n');
+                self.pieces(&read, |continues, span| {
+                    Inline::Image(Image {
+                        alt: alts.next().unwrap_or_default().to_owned(),
+                        continues,
+                        form: image.form,
+                        kind: Kind(None),
+                        span,
+                        target: image.target.clone(),
+                        title: image.title.clone(),
+                    })
+                })
+            }
+            Inline::LineBreak(mut line_break) => {
+                let line = self.line(read.start);
+                // A break of spaces sits at its line end with an empty span.
+                line_break.span = if read.is_empty() {
+                    self.ranges[line].end..self.end(line)
+                } else {
+                    self.place(read.start)..self.place(read.end)
+                };
+                vec![(line, Inline::LineBreak(line_break))]
+            }
+            Inline::Link(link) => {
+                let mut children = self.spread(link.children, &read);
+                self.pieces(&read, |continues, span| {
+                    Inline::Link(Link {
+                        children: children.next().unwrap_or_default(),
+                        continues,
+                        form: link.form,
+                        kind: Kind(None),
+                        span,
+                        target: link.target.clone(),
+                        title: link.title.clone(),
+                    })
+                })
+            }
+            Inline::Strong(strong) => {
+                let mut children = self.spread(strong.children, &read);
+                self.pieces(&read, |continues, span| {
+                    Inline::Strong(Strong {
+                        children: children.next().unwrap_or_default(),
+                        continues,
+                        kind: Kind(None),
+                        span,
+                    })
+                })
+            }
+            Inline::Text(mut text) => {
+                text.span = self.place(read.start)..self.place(read.end);
+                vec![(self.line(read.start), Inline::Text(text))]
+            }
+        }
+    }
+
+    /// Where the `Line` of `line` ends in the source: past the spaces of a
+    /// hard line break that ends it, or at the end of its text.
+    fn end(&self, line: usize) -> usize {
+        match self.endings[line] {
+            Ending::Spaces(end) => end,
+            Ending::Backslash | Ending::Soft => self.ranges[line].end,
+        }
+    }
+
+    /// How the line that holds `at`, a place in `text`, ends.
+    fn ending(&self, at: usize) -> Ending {
+        self.endings[self.line(at)]
+    }
+
+    /// The line that holds `at`, a place in `text`. The `\n` after a line
+    /// belongs to it.
+    fn line(&self, at: usize) -> usize {
+        self.places
+            .partition_point(|place| place.start <= at)
+            .saturating_sub(1)
+    }
+
+    /// The lines of the layout, each with its pieces of `nodes`.
+    fn lines<E>(&self, nodes: Vec<Inline<E>>) -> Vec<Line<E>>
+    where
+        E: Extension,
+    {
+        self.spread(nodes, &(0..self.text.len()))
+            .zip(self.ranges)
+            .enumerate()
+            .map(|(line, (children, range))| Line {
+                children,
+                kind: Kind(None),
+                span: range.start..self.end(line),
+            })
+            .collect()
+    }
+
+    /// The first and the last line that `span`, in `text`, lies on.
+    fn lines_of(&self, span: &Range<usize>) -> RangeInclusive<usize> {
+        let last = span.end.saturating_sub(1).max(span.start);
+        self.line(span.start)..=self.line(last)
+    }
+
+    fn new(source: &str, ranges: &'src [Range<usize>]) -> Self {
+        let mut text = String::new();
+        let mut places = Vec::with_capacity(ranges.len());
+        let mut endings = Vec::with_capacity(ranges.len());
+        for (index, range) in ranges.iter().enumerate() {
+            if index > 0 {
+                text.push('\n');
+            }
+            let start = text.len();
+            text.push_str(&source[range.clone()]);
+            places.push(start..text.len());
+            endings.push(Ending::of(source, range.end, index + 1 < ranges.len()));
+        }
+        Self {
+            endings,
+            places,
+            ranges,
+            text,
+        }
+    }
+
+    /// The pieces of the node read at `read` in `text`, one for each line it
+    /// lies on, by that line. `build` makes each piece from how it goes on
+    /// and its span in the source: from the node's start, or the line's, to
+    /// the node's end, or the line's.
+    fn pieces<E, F>(&self, read: &Range<usize>, mut build: F) -> Vec<(usize, Inline<E>)>
+    where
+        E: Extension,
+        F: FnMut(Continues, Range<usize>) -> Inline<E>,
+    {
+        let lines = self.lines_of(read);
+        let (first, last) = (*lines.start(), *lines.end());
+        lines
+            .map(|line| {
+                let start = if line == first {
+                    self.place(read.start)
+                } else {
+                    self.ranges[line].start
+                };
+                let end = if line == last {
+                    self.place(read.end)
+                } else {
+                    self.end(line)
+                };
+                let continues = match (line > first, line < last) {
+                    (false, false) => Continues::Neither,
+                    (false, true) => Continues::Next,
+                    (true, false) => Continues::Previous,
+                    (true, true) => Continues::Both,
+                };
+                (line, build(continues, start..end))
+            })
+            .collect()
+    }
+
+    /// The place in the source of `at`, a place in `text`.
+    fn place(&self, at: usize) -> usize {
+        let line = self.line(at);
+        self.ranges[line].start + (at - self.places[line].start)
+    }
+
+    /// The pieces of `nodes`, the children of a node read at `read` in
+    /// `text`, on each line that node lies on, in order.
+    fn spread<E>(
+        &self,
+        nodes: Vec<Inline<E>>,
+        read: &Range<usize>,
+    ) -> impl Iterator<Item = Vec<Inline<E>>>
+    where
+        E: Extension,
+    {
+        let lines = self.lines_of(read);
+        let first = *lines.start();
+        let mut spread: Vec<Vec<Inline<E>>> = lines.map(|_| Vec::new()).collect();
+        for node in nodes {
+            for (line, piece) in self.cut(node) {
+                spread[line - first].push(piece);
+            }
+        }
+        spread.into_iter()
+    }
 }
 
 impl Run {
@@ -91,13 +360,13 @@ impl Run {
     }
 }
 
-impl<'src, 'defs, E> Scanner<'src, 'defs, E>
+impl<'lay, 'defs, E> Scanner<'lay, 'defs, E>
 where
     E: Extension,
 {
     /// An autolink, inline HTML, or a `<` that starts neither.
     fn angle(&mut self, at: usize, end: usize) -> usize {
-        let source = self.source;
+        let source = self.layout.text.as_str();
         if let Some((target, close)) = autolink_at(source, at, end) {
             let shown = at + 1..close - 1;
             self.push(Inline::Link(Link {
@@ -106,6 +375,7 @@ where
                     value: source[shown.clone()].to_owned(),
                     span: shown,
                 })],
+                continues: Continues::Neither,
                 form: LinkForm::Markdown,
                 kind: Kind(None),
                 span: at..close,
@@ -116,6 +386,7 @@ where
         }
         if let Some(close) = html::inline_end(&source[..end], at) {
             self.push(Inline::Html(Html {
+                continues: Continues::Neither,
                 kind: Kind(None),
                 span: at..close,
                 value: source[at..close].to_owned(),
@@ -128,7 +399,7 @@ where
 
     /// An image, or a `!` that starts none.
     fn bang(&mut self, at: usize, end: usize) -> usize {
-        if let Some((image, close)) = image_at(self.source, at, end) {
+        if let Some((image, close)) = image_at(&self.layout.text, at, end) {
             self.push(Inline::Image(image));
             return close;
         }
@@ -147,13 +418,14 @@ where
 
     /// A code span closes at the next run of exactly as many backticks.
     fn code(&mut self, at: usize, end: usize) -> usize {
-        let source = self.source;
+        let source = self.layout.text.as_str();
         let ticks = run(source.as_bytes(), at, end);
         let Some(close) = code_end(source.as_bytes(), at, end) else {
             self.push_text(at..at + ticks, &source[at..at + ticks]);
             return at + ticks;
         };
         self.push(Inline::Code(Code {
+            continues: Continues::Neither,
             kind: Kind(None),
             span: at..close,
             value: source[at + ticks..close - ticks].to_owned(),
@@ -165,15 +437,15 @@ where
     /// left-flanking and close it when it is right-flanking, by the
     /// characters around it. A `_` inside a word does neither.
     fn delimiters(&mut self, at: usize, end: usize) -> usize {
-        let source = self.source;
+        let source = self.layout.text.as_str();
         let character = char::from(source.as_bytes()[at]);
         let length = source[at..end]
             .chars()
             .take_while(|&next| next == character)
             .count();
         let close = at + length;
-        let before = source[self.bounds.start..at].chars().next_back();
-        let after = source[close..self.bounds.end].chars().next();
+        let before = source[..at].chars().next_back();
+        let after = source[close..].chars().next();
         let space_before = before.is_none_or(is_whitespace);
         let space_after = after.is_none_or(is_whitespace);
         let mark_before = before.is_some_and(is_punctuation);
@@ -201,23 +473,40 @@ where
         close
     }
 
+    /// The end of a line: the text read so far ends, and two or more spaces
+    /// that end the line are a hard line break. The text does not hold those
+    /// spaces, so the break has an empty span at the line end.
+    fn end_line(&mut self, at: usize) -> usize {
+        if matches!(self.layout.ending(at), Ending::Spaces(_)) {
+            self.push(Inline::LineBreak(LineBreak {
+                kind: Kind(None),
+                span: at..at,
+            }));
+        } else {
+            self.flush();
+        }
+        at + 1
+    }
+
     /// A backslash before ASCII punctuation makes that character plain text.
     /// A backslash that ends a line followed by another is a hard line break.
     fn escape(&mut self, at: usize, end: usize) -> usize {
-        if self.breaks && at + 1 == end {
+        let source = self.layout.text.as_str();
+        let bytes = source.as_bytes();
+        if bytes.get(at + 1) == Some(&b'\n') && matches!(self.layout.ending(at), Ending::Backslash)
+        {
             self.push(Inline::LineBreak(LineBreak {
                 kind: Kind(None),
-                span: at..end,
+                span: at..at + 1,
             }));
-            return end;
+            return at + 1;
         }
-        let escaped = at + 1 < end && self.source.as_bytes()[at + 1].is_ascii_punctuation();
+        let escaped = at + 1 < end && bytes[at + 1].is_ascii_punctuation();
         let (from, to) = if escaped {
             (at + 1, at + 2)
         } else {
             (at, at + 1)
         };
-        let source = self.source;
         self.push_text(at..to, &source[from..to]);
         to
     }
@@ -238,16 +527,14 @@ where
         }
     }
 
-    /// A scanner for the text of a link on the same line.
+    /// A scanner for the text of a link.
     const fn inner(&self) -> Self {
         Self {
-            bounds: self.bounds.start..self.bounds.end,
-            breaks: false,
             definitions: self.definitions,
+            layout: self.layout,
             links: false,
             pieces: Vec::new(),
             runs: Vec::new(),
-            source: self.source,
             text: String::new(),
             text_end: 0,
             text_start: None,
@@ -256,7 +543,7 @@ where
 
     /// A wiki link, `[text](destination "title")`, or a reference link.
     fn link(&mut self, at: usize, end: usize) -> Option<usize> {
-        let source = self.source;
+        let source = self.layout.text.as_str();
         if let Some(wiki) = wiki_at(source, at, end) {
             let children = wiki.alias.map_or_else(Vec::new, |alias| {
                 vec![Inline::Text(Text {
@@ -267,6 +554,7 @@ where
             });
             self.push(Inline::Link(Link {
                 children,
+                continues: Continues::Neither,
                 form: LinkForm::Wiki,
                 kind: Kind(None),
                 span: at..wiki.close,
@@ -282,6 +570,7 @@ where
         inner.scan(at + 1..text_close);
         self.push(Inline::Link(Link {
             children: inner.finish(),
+            continues: Continues::Neither,
             form: LinkForm::Markdown,
             kind: Kind(None),
             span: at..close,
@@ -291,35 +580,33 @@ where
         Some(close)
     }
 
-    const fn new(
-        source: &'src str,
-        bounds: Range<usize>,
-        definitions: &'defs Definitions,
-        breaks: bool,
-    ) -> Self {
+    const fn new(layout: &'lay Layout<'lay>, definitions: &'defs Definitions) -> Self {
         Self {
-            bounds,
-            breaks,
             definitions,
+            layout,
             links: true,
             pieces: Vec::new(),
             runs: Vec::new(),
-            source,
             text: String::new(),
             text_end: 0,
             text_start: None,
         }
     }
 
-    /// Text up to the next character that can start another node.
+    /// Text up to the next character that can start another node, or the
+    /// end of the line.
     fn plain(&mut self, at: usize, end: usize) -> usize {
-        let bytes = self.source.as_bytes();
+        let source = self.layout.text.as_str();
+        let bytes = source.as_bytes();
         let mut next = at + 1;
-        while next < end && !matches!(bytes[next], b'\\' | b'`' | b'[' | b'!' | b'<' | b'*' | b'_')
+        while next < end
+            && !matches!(
+                bytes[next],
+                b'\n' | b'\\' | b'`' | b'[' | b'!' | b'<' | b'*' | b'_'
+            )
         {
             next += 1;
         }
-        let source = self.source;
         self.push_text(at..next, &source[at..next]);
         next
     }
@@ -343,7 +630,7 @@ where
     /// `[text][label]`, `[label][]` or `[label]`. A label with no
     /// definition gives none.
     fn reference(&self, open: usize, close: usize, end: usize) -> Option<(Target, usize)> {
-        let text = &self.source[..end];
+        let text = &self.layout.text[..end];
         let after = close + 1;
         if let Some(label_close) = definition::label_at(text, after) {
             let target = self.target(&text[after + 1..label_close])?;
@@ -360,10 +647,11 @@ where
     }
 
     fn scan(&mut self, range: Range<usize>) {
-        let bytes = self.source.as_bytes();
+        let bytes = self.layout.text.as_bytes();
         let mut at = range.start;
         while at < range.end {
             at = match bytes[at] {
+                b'\n' => self.end_line(at),
                 b'\\' => self.escape(at, range.end),
                 b'`' => self.code(at, range.end),
                 b'!' => self.bang(at, range.end),
@@ -381,42 +669,19 @@ where
     }
 }
 
-/// The inline nodes written on one line, with the link `definitions` of
-/// the file. When another line of the paragraph `follows`, a backslash or
-/// two or more spaces that end the line make a hard line break.
-pub fn line<E>(
-    source: &str,
-    range: Range<usize>,
-    definitions: &Definitions,
-    follows: bool,
-) -> Line<E>
+/// The lines of a paragraph and the inline nodes written on them, with the
+/// link `definitions` of the file. Nodes are matched over the whole
+/// paragraph, and a node that crosses a line end is cut into one piece per
+/// line.
+pub fn lines<E>(source: &str, ranges: &[Range<usize>], definitions: &Definitions) -> Vec<Line<E>>
 where
     E: Extension,
 {
-    let trailing = source[range.end..]
-        .bytes()
-        .take_while(|&byte| matches!(byte, b' ' | b'\t'))
-        .count();
-    let ending = range.end + trailing;
-    let breaks = follows && matches!(source.as_bytes().get(ending), None | Some(b'\n' | b'\r'));
-    let spaced = breaks && source[range.end..ending].ends_with("  ");
-    let mut scanner = Scanner::new(source, range.clone(), definitions, breaks && trailing == 0);
-    scanner.scan(range.clone());
-    let mut children = scanner.finish();
-    let end = if spaced {
-        children.push(Inline::LineBreak(LineBreak {
-            kind: Kind(None),
-            span: range.end..ending,
-        }));
-        ending
-    } else {
-        range.end
-    };
-    Line {
-        children,
-        kind: Kind(None),
-        span: range.start..end,
-    }
+    let layout = Layout::new(source, ranges);
+    let mut scanner = Scanner::new(&layout, definitions);
+    scanner.scan(0..layout.text.len());
+    let nodes = scanner.finish();
+    layout.lines(nodes)
 }
 
 /// Pairs the runs among `pieces` into emphasis and strong emphasis, by
@@ -487,12 +752,14 @@ where
     let node = if used == 2 {
         Inline::Strong(Strong {
             children,
+            continues: Continues::Neither,
             kind: Kind(None),
             span,
         })
     } else {
         Inline::Emphasis(Emphasis {
             children,
+            continues: Continues::Neither,
             kind: Kind(None),
             span,
         })
@@ -510,7 +777,8 @@ where
 }
 
 /// `pieces` as nodes: each run as the text of its characters not paired,
-/// and texts side by side joined into one.
+/// and texts that touch joined into one. A line end lies between the texts
+/// of two lines.
 fn nodes<E, I>(pieces: I, runs: &[Run]) -> Vec<Inline<E>>
 where
     E: Extension,
@@ -523,7 +791,7 @@ where
             Piece::Run(run) => runs[run].text(),
         };
         match (nodes.last_mut(), node) {
-            (Some(Inline::Text(last)), Inline::Text(text)) => {
+            (Some(Inline::Text(last)), Inline::Text(text)) if last.span.end == text.span.start => {
                 last.value.push_str(&text.value);
                 last.span.end = text.span.end;
             }
@@ -596,13 +864,13 @@ fn is_email(text: &str) -> bool {
         })
 }
 
-/// `[[target]]` or `[[target|alias]]` starting at `at`. Neither part holds a
-/// bracket.
+/// `[[target]]` or `[[target|alias]]` starting at `at`, on one line. Neither
+/// part holds a bracket.
 fn wiki_at(source: &str, at: usize, end: usize) -> Option<Wiki> {
     let inner = source[at..end].strip_prefix("[[")?;
     let length = inner.find("]]")?;
     let written = &inner[..length];
-    if written.is_empty() || written.contains(['[', ']']) {
+    if written.is_empty() || written.contains(['[', ']', '\n']) {
         return None;
     }
     let start = at + 2;
@@ -655,6 +923,7 @@ where
             alt: wiki
                 .alias
                 .map_or_else(String::new, |alias| source[alias].to_owned()),
+            continues: Continues::Neither,
             form: LinkForm::Wiki,
             kind: Kind(None),
             span: at..wiki.close,
@@ -667,6 +936,7 @@ where
     let (target, close) = definition::inline(&source[..end], text_close + 1)?;
     let image = Image {
         alt: source[open + 1..text_close].to_owned(),
+        continues: Continues::Neither,
         form: LinkForm::Markdown,
         kind: Kind(None),
         span: at..close,

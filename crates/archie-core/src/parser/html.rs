@@ -202,7 +202,7 @@ fn complete_tag(rest: &str) -> bool {
 }
 
 /// Where the opening or closing tag whose `<` is at `at` ends, past its
-/// `>`.
+/// `>`. The spaces and tabs inside it may each hold one line ending.
 fn tag_end(bytes: &[u8], at: usize) -> Option<usize> {
     let closing = bytes.get(at + 1) == Some(&b'/');
     let mut end = at + if closing { 2 } else { 1 };
@@ -217,17 +217,17 @@ fn tag_end(bytes: &[u8], at: usize) -> Option<usize> {
             end = next;
         }
     }
-    end = skip(bytes, end, is_space);
+    end = gap(bytes, end);
     if !closing && bytes.get(end) == Some(&b'/') {
         end += 1;
     }
     (bytes.get(end) == Some(&b'>')).then_some(end + 1)
 }
 
-/// Where the attribute that starts at `at`, after at least one space,
-/// ends: a name, then optionally `=` and a value.
+/// Where the attribute that starts at `at`, after at least one space or line
+/// ending, ends: a name, then optionally `=` and a value.
 fn attribute(bytes: &[u8], at: usize) -> Option<usize> {
-    let name = skip(bytes, at, is_space);
+    let name = gap(bytes, at);
     if name == at
         || !bytes
             .get(name)
@@ -238,11 +238,11 @@ fn attribute(bytes: &[u8], at: usize) -> Option<usize> {
     let name_end = skip(bytes, name + 1, |byte| {
         byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-')
     });
-    let equals = skip(bytes, name_end, is_space);
+    let equals = gap(bytes, name_end);
     if bytes.get(equals) != Some(&b'=') {
         return Some(name_end);
     }
-    let value = skip(bytes, equals + 1, is_space);
+    let value = gap(bytes, equals + 1);
     match bytes.get(value) {
         Some(&quote @ (b'"' | b'\'')) => {
             let close = bytes[value + 1..].iter().position(|&byte| byte == quote)?;
@@ -255,6 +255,17 @@ fn attribute(bytes: &[u8], at: usize) -> Option<usize> {
             (end > value).then_some(end)
         }
         None => None,
+    }
+}
+
+/// Past the spaces and tabs at `at`, with at most one line ending among
+/// them.
+fn gap(bytes: &[u8], at: usize) -> usize {
+    let spaces = skip(bytes, at, is_space);
+    if bytes.get(spaces) == Some(&b'\n') {
+        skip(bytes, spaces + 1, is_space)
+    } else {
+        spaces
     }
 }
 

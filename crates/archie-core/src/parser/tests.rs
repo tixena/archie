@@ -21,7 +21,7 @@ use chrono::{
 };
 
 use crate::parser::ast::{
-    Block, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Value,
+    Block, Continues, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Value,
 };
 use crate::parser::extension::Extension;
 use crate::parser::parse;
@@ -145,14 +145,17 @@ impl Rows<'_> {
         for inline in inlines {
             match inline {
                 Inline::Code(code) => {
-                    self.push(depth, format!("Code {:?}", code.value), &code.span);
+                    let label = format!("Code {:?}{}", code.value, continues_label(code.continues));
+                    self.push(depth, label, &code.span);
                 }
                 Inline::Emphasis(emphasis) => {
-                    self.push(depth, "Emphasis".to_owned(), &emphasis.span);
+                    let label = format!("Emphasis{}", continues_label(emphasis.continues));
+                    self.push(depth, label, &emphasis.span);
                     self.inlines(depth + 1, &emphasis.children);
                 }
                 Inline::Html(html) => {
-                    self.push(depth, format!("Html {:?}", html.value), &html.span);
+                    let label = format!("Html {:?}{}", html.value, continues_label(html.continues));
+                    self.push(depth, label, &html.span);
                 }
                 Inline::Image(image) => {
                     let alt = if image.alt.is_empty() {
@@ -161,10 +164,11 @@ impl Rows<'_> {
                         format!(" alt={:?}", image.alt)
                     };
                     let label = format!(
-                        "Image form={:?} target={:?}{}{alt}",
+                        "Image form={:?} target={:?}{}{alt}{}",
                         image.form,
                         image.target,
-                        title_label(image.title.as_deref())
+                        title_label(image.title.as_deref()),
+                        continues_label(image.continues)
                     );
                     self.push(depth, label, &image.span);
                 }
@@ -173,16 +177,18 @@ impl Rows<'_> {
                 }
                 Inline::Link(link) => {
                     let label = format!(
-                        "Link form={:?} target={:?}{}",
+                        "Link form={:?} target={:?}{}{}",
                         link.form,
                         link.target,
-                        title_label(link.title.as_deref())
+                        title_label(link.title.as_deref()),
+                        continues_label(link.continues)
                     );
                     self.push(depth, label, &link.span);
                     self.inlines(depth + 1, &link.children);
                 }
                 Inline::Strong(strong) => {
-                    self.push(depth, "Strong".to_owned(), &strong.span);
+                    let label = format!("Strong{}", continues_label(strong.continues));
+                    self.push(depth, label, &strong.span);
                     self.inlines(depth + 1, &strong.children);
                 }
                 Inline::Text(text) => {
@@ -355,6 +361,16 @@ fn assert_nested(source: &str, rows: &[Row]) {
                 .get(1)
                 .map(|frontmatter| (row.depth, frontmatter.clone()));
         }
+    }
+}
+
+/// ` continues=...` for a piece of a node cut at a line end, else nothing.
+const fn continues_label(continues: Continues) -> &'static str {
+    match continues {
+        Continues::Both => " continues=both",
+        Continues::Neither => "",
+        Continues::Next => " continues=next",
+        Continues::Previous => " continues=previous",
     }
 }
 

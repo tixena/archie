@@ -184,13 +184,15 @@ where
     pub value: String,
 }
 
-/// Raw HTML, as written: a block, or an inline node such as `<span>`.
+/// Raw HTML, as written: a block, or an inline node such as `<span>`. A
+/// block's `continues` is always `Continues::Neither`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Html<E = Markdown>
 where
     E: Extension,
 {
+    pub continues: Continues,
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
@@ -408,6 +410,23 @@ where
     }
 }
 
+/// Whether an inline node goes on from the line before or into the line
+/// after. A node written across lines of a paragraph is cut into one piece
+/// per line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Continues {
+    /// A middle piece: it goes on from the line before and into the line after.
+    Both,
+    /// The node is whole on its line.
+    #[default]
+    Neither,
+    /// The first piece: it goes on into the line after.
+    Next,
+    /// The last piece: it goes on from the line before.
+    Previous,
+}
+
 /// Plain text.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -428,6 +447,7 @@ where
     E: Extension,
 {
     pub children: Vec<Inline<E>>,
+    pub continues: Continues,
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
@@ -440,6 +460,7 @@ where
     E: Extension,
 {
     pub children: Vec<Inline<E>>,
+    pub continues: Continues,
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
@@ -469,6 +490,7 @@ where
     E: Extension,
 {
     pub children: Vec<Inline<E>>,
+    pub continues: Continues,
     pub form: LinkForm,
     pub kind: Kind<E>,
     pub span: Range<usize>,
@@ -497,6 +519,7 @@ where
     E: Extension,
 {
     pub alt: String,
+    pub continues: Continues,
     pub form: LinkForm,
     pub kind: Kind<E>,
     pub span: Range<usize>,
@@ -511,6 +534,7 @@ pub struct Code<E = Markdown>
 where
     E: Extension,
 {
+    pub continues: Continues,
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,

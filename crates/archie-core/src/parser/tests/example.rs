@@ -7,8 +7,8 @@ use chrono::NaiveDate;
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line, Link,
-    LinkForm, List, Mapping, MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section,
+    Block, Continues, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line,
+    Link, LinkForm, List, Mapping, MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section,
     Sequence, Text, Value,
 };
 use crate::parser::parse;
@@ -157,6 +157,7 @@ fn dependencies() -> Block {
                 text(121, "Depends on "),
                 Inline::Link(Link {
                     children: Vec::new(),
+                    continues: Continues::Neither,
                     form: LinkForm::Wiki,
                     kind: Kind(None),
                     span: span(132, "[[grammar]]"),
@@ -166,6 +167,7 @@ fn dependencies() -> Block {
                 text(143, " and the "),
                 Inline::Link(Link {
                     children: vec![text(153, "spec")],
+                    continues: Continues::Neither,
                     form: LinkForm::Markdown,
                     kind: Kind(None),
                     span: span(152, "[spec](spec.md)"),

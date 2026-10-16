@@ -301,3 +301,48 @@ fn the_text_of_a_heading_over_two_lines_spans_both() {
         ],
     );
 }
+
+#[test]
+fn each_piece_of_a_node_across_lines_spans_its_part_on_its_line() {
+    let whole = "Some *emphasis that\ngoes on* here.\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "Some *emphasis that\ngoes on* here."),
+            ("Heading", ""),
+            ("Paragraph", "Some *emphasis that\ngoes on* here."),
+            ("Line", "Some *emphasis that"),
+            (r#"Text "Some ""#, "Some "),
+            ("Emphasis continues=next", "*emphasis that"),
+            (r#"Text "emphasis that""#, "emphasis that"),
+            ("Line", "goes on* here."),
+            ("Emphasis continues=previous", "goes on*"),
+            (r#"Text "goes on""#, "goes on"),
+            (r#"Text " here.""#, " here."),
+        ],
+    );
+}
+
+#[test]
+fn a_piece_that_two_spaces_end_spans_its_line_break() {
+    let whole = "*a  \nb*\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "*a  \nb*"),
+            ("Heading", ""),
+            ("Paragraph", "*a  \nb*"),
+            ("Line", "*a  "),
+            ("Emphasis continues=next", "*a  "),
+            (r#"Text "a""#, "a"),
+            ("LineBreak", "  "),
+            ("Line", "b*"),
+            ("Emphasis continues=previous", "b*"),
+            (r#"Text "b""#, "b"),
+        ],
+    );
+}

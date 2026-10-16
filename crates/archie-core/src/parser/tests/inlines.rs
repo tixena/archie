@@ -160,7 +160,7 @@ Document
 }
 
 #[test]
-fn an_inline_node_stays_on_one_line_and_link_text_holds_no_brackets() {
+fn a_link_may_cross_a_line_end_and_link_text_holds_no_brackets() {
     check(
         "\
 [text
@@ -172,9 +172,12 @@ more](dest) and [a [b] c](d)
       Heading
       Paragraph
         Line
-          Text "[text"
+          Link form=Markdown target="dest" continues=next
+            Text "text"
         Line
-          Text "more](dest) and [a [b] c](d)"
+          Link form=Markdown target="dest" continues=previous
+            Text "more"
+          Text " and [a [b] c](d)"
 "#,
     );
 }
@@ -816,5 +819,275 @@ Document
           Emphasis
             Text \"\u{A3}x\u{A3}\"
 ",
+    );
+}
+
+#[test]
+fn emphasis_across_a_line_end_is_cut_into_a_piece_on_each_line() {
+    check(
+        "Some *emphasis that\ngoes on* here.\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Some "
+          Emphasis continues=next
+            Text "emphasis that"
+        Line
+          Emphasis continues=previous
+            Text "goes on"
+          Text " here."
+"#,
+    );
+}
+
+#[test]
+fn an_opening_with_no_closing_in_its_paragraph_stays_text() {
+    check(
+        "Some *emphasis that\ngoes on here.\n\nThis is not emphasis\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Some *emphasis that"
+        Line
+          Text "goes on here."
+      Paragraph
+        Line
+          Text "This is not emphasis"
+"#,
+    );
+}
+
+#[test]
+fn a_middle_piece_goes_on_both_ways() {
+    check(
+        "*a\nb\nc*\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Emphasis continues=next
+            Text "a"
+        Line
+          Emphasis continues=both
+            Text "b"
+        Line
+          Emphasis continues=previous
+            Text "c"
+"#,
+    );
+}
+
+#[test]
+fn nested_nodes_across_a_line_end_are_each_cut() {
+    check(
+        "**a *b\nc* d**\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Strong continues=next
+            Text "a "
+            Emphasis continues=next
+              Text "b"
+        Line
+          Strong continues=previous
+            Emphasis continues=previous
+              Text "c"
+            Text " d"
+"#,
+    );
+}
+
+#[test]
+fn delimiter_runs_pair_across_a_line_end() {
+    check(
+        "**foo*\n*foo**\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Emphasis continues=next
+            Emphasis
+              Text "foo"
+        Line
+          Emphasis continues=previous
+            Emphasis
+              Text "foo"
+"#,
+    );
+}
+
+#[test]
+fn a_code_span_across_a_line_end_holds_the_part_on_each_line() {
+    check(
+        "`a\nb`\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Code "a" continues=next
+        Line
+          Code "b" continues=previous
+"#,
+    );
+}
+
+#[test]
+fn each_piece_of_a_link_holds_its_target() {
+    check(
+        "[a\nb](u)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="u" continues=next
+            Text "a"
+        Line
+          Link form=Markdown target="u" continues=previous
+            Text "b"
+"#,
+    );
+}
+
+#[test]
+fn a_piece_of_a_link_may_hold_no_text() {
+    check(
+        "[a](u\n\"t\")\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="u" title="t" continues=next
+            Text "a"
+        Line
+          Link form=Markdown target="u" title="t" continues=previous
+"#,
+    );
+}
+
+#[test]
+fn each_piece_of_an_image_holds_the_alt_text_on_its_line() {
+    check(
+        "![a\nb](u)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Image form=Markdown target="u" alt="a" continues=next
+        Line
+          Image form=Markdown target="u" alt="b" continues=previous
+"#,
+    );
+}
+
+#[test]
+fn inline_html_across_a_line_end_holds_what_is_written_on_each_line() {
+    check(
+        "<span\nclass=\"x\">a</span>\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Html "<span" continues=next
+        Line
+          Html "class=\"x\">" continues=previous
+          Text "a"
+          Html "</span>"
+"#,
+    );
+}
+
+#[test]
+fn a_hard_line_break_ends_the_first_piece() {
+    check(
+        "*a\\\nb*\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Emphasis continues=next
+            Text "a"
+            LineBreak
+        Line
+          Emphasis continues=previous
+            Text "b"
+"#,
+    );
+}
+
+#[test]
+fn an_underlined_heading_holds_whole_nodes() {
+    check(
+        "x *a\nb*\n===\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "x "
+        Emphasis
+          Text "a b"
+"#,
+    );
+}
+
+#[test]
+fn an_underlined_heading_joins_the_pieces_of_each_node() {
+    check(
+        "`a\nb` [c\nd](u) ![e\nf](u) <span\nclass=\"x\">\n===\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Code "a b"
+        Text " "
+        Link form=Markdown target="u"
+          Text "c d"
+        Text " "
+        Image form=Markdown target="u" alt="e f"
+        Text " "
+        Html "<span\nclass=\"x\">"
+"#,
+    );
+}
+
+#[test]
+fn a_code_span_does_not_cross_a_blank_line() {
+    check(
+        "`a\n\nb`\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "`a"
+      Paragraph
+        Line
+          Text "b`"
+"#,
     );
 }

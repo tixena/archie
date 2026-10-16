@@ -87,7 +87,8 @@ pub fn fold_label(label: &str) -> String {
 
 /// The target of the inline link `(destination "title")` whose `(` is at
 /// `open` in `text`, and where it ends, past its `)`. The destination and
-/// the title may each be left out.
+/// the title may each be left out. Spaces and tabs around them may hold one
+/// line ending.
 pub fn inline(text: &str, open: usize) -> Option<(Target, usize)> {
     let bytes = Bytes {
         bytes: text.as_bytes(),
@@ -96,20 +97,20 @@ pub fn inline(text: &str, open: usize) -> Option<(Target, usize)> {
     if bytes.at(open) != Some(b'(') {
         return None;
     }
-    let start = spaces_end(&bytes, open + 1);
+    let start = gap(&bytes, open + 1);
     let (destination, after) = if bytes.at(start) == Some(b')') {
         (String::new(), start)
     } else {
         destination(text, &bytes, start)?
     };
-    let title_at = spaces_end(&bytes, after);
+    let title_at = gap(&bytes, after);
     let titled = (title_at > after)
         .then(|| title_end(&bytes, title_at))
         .flatten();
     let (title, close) = titled.map_or((None, title_at), |title_close| {
         (
             Some(resolve(&text[title_at + 1..title_close - 1])),
-            spaces_end(&bytes, title_close),
+            gap(&bytes, title_close),
         )
     });
     (bytes.at(close) == Some(b')')).then(|| (Target { destination, title }, close + 1))
