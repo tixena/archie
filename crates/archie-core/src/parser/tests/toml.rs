@@ -48,7 +48,7 @@ seen = 2026-10-10 09:00:00Z
         Scalar DateTime 2026-10-10T07:32:00.250000000-04:00
       Pair key=seen
         Scalar DateTime 2026-10-10T09:00:00Z
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -94,9 +94,12 @@ Body text.
         Scalar String "x"
       Pair key=empty
         Sequence
-  Body
-    Paragraph
-      Text "Body text."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Body text."
 "#,
     );
 }
@@ -116,7 +119,7 @@ literal = 'tab\there'
         Scalar String "tab\there \"quoted\" A"
       Pair key=literal
         Scalar String "tab\\there"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -150,7 +153,7 @@ Document
         Scalar Float 500
       Pair key=infinite
         Scalar Float -inf
-  Body
+  MarkdownBlock
 ",
     );
 }
@@ -172,7 +175,7 @@ Document
         Scalar Integer 7
       Pair key=doubled_underscore
         Scalar Integer 10
-  Body
+  MarkdownBlock
 ",
     );
 }

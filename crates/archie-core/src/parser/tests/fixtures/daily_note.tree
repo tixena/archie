@@ -1,47 +1,77 @@
 Document
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "2026-10-03"
       Paragraph
-        Text "#daily #journal"
-      Section level=2
+        Line
+          Text "#daily #journal"
+      Section
         Heading
           Text "Morning"
         List
           Item
-            Paragraph
-              Text "[x] Review the tree"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[x] Review the tree"
           Item
-            Paragraph
-              Text "[x] Answer "
-              Link form=Wiki target="Grace Hopper"
-                Text "Grace"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[x] Answer "
+                    Link form=Wiki target="Grace Hopper"
+                      Text "Grace"
           Item
-            Paragraph
-              Text "[ ] Draft the grammar"
-      Section level=2
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[ ] Draft the grammar"
+      Section
         Heading
           Text "Log"
         List
           Item
-            Paragraph
-              Text "09:15 started on the lexer"
-          Item
-            Paragraph
-              Text "11:40 "
-              Code "cargo test"
-              Text " green"
-            List
-              Item
+            MarkdownBlock
+              Section
+                Heading
                 Paragraph
-                  Text "65 tests"
+                  Line
+                    Text "09:15 started on the lexer"
           Item
-            Paragraph
-              Text "14:00 call with "
-              Link form=Wiki target="Ada Lovelace"
-      Section level=2
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "11:40 "
+                    Code "cargo test"
+                    Text " green"
+                List
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "65 tests"
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "14:00 call with "
+                    Link form=Wiki target="Ada Lovelace"
+      Section
         Heading
           Text "Tomorrow"
         Paragraph
-          Text "Carry over anything unchecked."
+          Line
+            Text "Carry over anything unchecked."

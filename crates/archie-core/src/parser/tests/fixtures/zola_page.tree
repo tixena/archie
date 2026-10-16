@@ -28,15 +28,21 @@ Document
             Scalar Boolean false
           Pair key=order
             Scalar Integer 3
-  Body
-    Paragraph
-      Text "Short introduction shown in listings."
-    Paragraph
-      Text "<!-- more -->"
-    Section level=1
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Short introduction shown in listings."
+      Paragraph
+        Line
+          Text "<!-- more -->"
+    Section
       Heading
         Text "Releases"
       Paragraph
-        Text "Each release has its own section[^1]."
+        Line
+          Text "Each release has its own section[^1]."
       Paragraph
-        Text "[^1]: Footnotes are not read; this line stays text."
+        Line
+          Text "[^1]: Footnotes are not read; this line stays text."

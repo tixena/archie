@@ -17,7 +17,8 @@ mod yaml;
 use core::ops::Range;
 
 use crate::parser::ast::{
-    Block, Date, DateTime, Document, Inline, Mapping, ScalarValue, Time, Value,
+    Block, Date, DateTime, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Time,
+    Value,
 };
 use crate::parser::parse;
 
@@ -47,12 +48,15 @@ impl Rows {
                 self.push(depth, "List".to_owned(), &list.span);
                 for item in &list.items {
                     self.push(depth + 1, "Item".to_owned(), &item.span);
-                    self.blocks(depth + 2, &item.children);
+                    self.markdown_block(depth + 2, &item.body);
                 }
             }
             Block::Paragraph(paragraph) => {
                 self.push(depth, "Paragraph".to_owned(), &paragraph.span);
-                self.inlines(depth + 1, &paragraph.children);
+                for line in &paragraph.lines {
+                    self.push(depth + 1, "Line".to_owned(), &line.span);
+                    self.inlines(depth + 2, &line.children);
+                }
             }
             Block::Table(table) => {
                 let alignments: Vec<String> = table
@@ -72,23 +76,10 @@ impl Rows {
                     self.push(depth + 1, name.to_owned(), &row.span);
                     for cell in &row.cells {
                         self.push(depth + 2, "TableCell".to_owned(), &cell.span);
-                        self.blocks(depth + 3, &cell.children);
+                        self.markdown_block(depth + 3, &cell.body);
                     }
                 }
             }
-            Block::Section(section) => {
-                let label = format!("Section level={}", section.level);
-                self.push(depth, label, &section.span);
-                self.push(depth + 1, "Heading".to_owned(), &section.heading.span);
-                self.inlines(depth + 2, &section.heading.children);
-                self.blocks(depth + 1, &section.children);
-            }
-        }
-    }
-
-    fn blocks(&mut self, depth: usize, blocks: &[Block]) {
-        for block in blocks {
-            self.block(depth, block);
         }
     }
 
@@ -99,8 +90,7 @@ impl Rows {
             self.push(1, label, &frontmatter.span);
             self.mapping(2, &frontmatter.mapping);
         }
-        self.push(1, "Body".to_owned(), &document.body.span);
-        self.blocks(2, &document.body.children);
+        self.markdown_block(1, &document.body);
     }
 
     fn inlines(&mut self, depth: usize, inlines: &[Inline]) {
@@ -139,12 +129,31 @@ impl Rows {
         }
     }
 
+    fn markdown_block(&mut self, depth: usize, block: &MarkdownBlock) {
+        self.push(depth, "MarkdownBlock".to_owned(), &block.span);
+        for section in &block.sections {
+            self.section(depth + 1, section);
+        }
+    }
+
     fn push(&mut self, depth: usize, label: String, span: &Range<usize>) {
         self.rows.push(Row {
             depth,
             label,
             span: span.clone(),
         });
+    }
+
+    fn section(&mut self, depth: usize, section: &Section) {
+        self.push(depth, "Section".to_owned(), &section.span);
+        self.push(depth + 1, "Heading".to_owned(), &section.heading.span);
+        self.inlines(depth + 2, &section.heading.children);
+        for block in &section.blocks {
+            self.block(depth + 1, block);
+        }
+        for subsection in &section.subsections {
+            self.section(depth + 1, subsection);
+        }
     }
 
     fn value(&mut self, depth: usize, value: &Value) {

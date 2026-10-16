@@ -6,8 +6,9 @@ use core::ops::Range;
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Block, Body, Date, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Link,
-    LinkForm, List, Mapping, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Text, Value,
+    Block, Date, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Line, Link,
+    LinkForm, List, Mapping, MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section,
+    Sequence, Text, Value,
 };
 use crate::parser::parse;
 
@@ -63,9 +64,29 @@ fn text(start: usize, value: &str) -> Inline {
 
 fn paragraph(start: usize, value: &str) -> Block {
     Block::Paragraph(Paragraph {
-        children: vec![text(start, value)],
+        lines: vec![Line {
+            children: vec![text(start, value)],
+            span: span(start, value),
+        }],
         span: span(start, value),
     })
+}
+
+/// A list item's content: one section with an empty heading, holding
+/// `blocks`.
+fn content(start: usize, covered: &str, blocks: Vec<Block>) -> MarkdownBlock {
+    MarkdownBlock {
+        sections: vec![Section {
+            blocks,
+            heading: Heading {
+                children: Vec::new(),
+                span: start..start,
+            },
+            span: span(start, covered),
+            subsections: Vec::new(),
+        }],
+        span: span(start, covered),
+    }
 }
 
 fn frontmatter() -> Frontmatter {
@@ -120,25 +141,29 @@ fn frontmatter() -> Frontmatter {
 }
 
 fn dependencies() -> Block {
+    let written = "Depends on [[grammar]] and the [spec](spec.md).";
     Block::Paragraph(Paragraph {
-        children: vec![
-            text(121, "Depends on "),
-            Inline::Link(Link {
-                children: Vec::new(),
-                form: LinkForm::Wiki,
-                span: span(132, "[[grammar]]"),
-                target: "grammar".to_owned(),
-            }),
-            text(143, " and the "),
-            Inline::Link(Link {
-                children: vec![text(153, "spec")],
-                form: LinkForm::Markdown,
-                span: span(152, "[spec](spec.md)"),
-                target: "spec.md".to_owned(),
-            }),
-            text(167, "."),
-        ],
-        span: span(121, "Depends on [[grammar]] and the [spec](spec.md)."),
+        lines: vec![Line {
+            children: vec![
+                text(121, "Depends on "),
+                Inline::Link(Link {
+                    children: Vec::new(),
+                    form: LinkForm::Wiki,
+                    span: span(132, "[[grammar]]"),
+                    target: "grammar".to_owned(),
+                }),
+                text(143, " and the "),
+                Inline::Link(Link {
+                    children: vec![text(153, "spec")],
+                    form: LinkForm::Markdown,
+                    span: span(152, "[spec](spec.md)"),
+                    target: "spec.md".to_owned(),
+                }),
+                text(167, "."),
+            ],
+            span: span(121, written),
+        }],
+        span: span(121, written),
     })
 }
 
@@ -146,20 +171,24 @@ fn steps() -> Block {
     Block::List(List {
         items: vec![
             Item {
-                children: vec![
-                    paragraph(172, "define tree"),
-                    Block::List(List {
-                        items: vec![Item {
-                            children: vec![paragraph(188, "spans")],
+                body: content(
+                    172,
+                    "define tree\n  - spans",
+                    vec![
+                        paragraph(172, "define tree"),
+                        Block::List(List {
+                            items: vec![Item {
+                                body: content(188, "spans", vec![paragraph(188, "spans")]),
+                                span: span(186, "- spans"),
+                            }],
                             span: span(186, "- spans"),
-                        }],
-                        span: span(186, "- spans"),
-                    }),
-                ],
+                        }),
+                    ],
+                ),
                 span: span(170, "- define tree\n  - spans"),
             },
             Item {
-                children: vec![paragraph(196, "write rules")],
+                body: content(196, "write rules", vec![paragraph(196, "write rules")]),
                 span: span(194, "- write rules"),
             },
         ],
@@ -170,17 +199,17 @@ fn steps() -> Block {
 #[test]
 fn the_example_parses_into_the_tree_written_by_hand() {
     let section = Section {
-        children: vec![dependencies(), steps()],
+        blocks: vec![dependencies(), steps()],
         heading: Heading {
             children: vec![text(108, "Ship parser")],
             span: span(106, "# Ship parser"),
         },
-        level: 1,
         span: span(106, SOURCE[106..].trim_end()),
+        subsections: Vec::new(),
     };
     let document = Document {
-        body: Body {
-            children: vec![Block::Section(section)],
+        body: MarkdownBlock {
+            sections: vec![section],
             span: span(106, &SOURCE[106..]),
         },
         frontmatter: Some(frontmatter()),

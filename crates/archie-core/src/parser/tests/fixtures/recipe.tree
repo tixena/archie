@@ -22,24 +22,40 @@ Document
           Scalar String "2 cups black beans"
           Scalar String "1 onion, diced"
           Scalar String "1 tsp cumin: toasted"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Black bean soup"
-      Section level=2
+      Section
         Heading
           Text "Steps"
         Paragraph
-          Text "1. Soak the beans overnight.\n2. Simmer for 40 minutes.\nStir now and then.\n3. Season and serve."
-      Section level=2
+          Line
+            Text "1. Soak the beans overnight."
+          Line
+            Text "2. Simmer for 40 minutes."
+          Line
+            Text "Stir now and then."
+          Line
+            Text "3. Season and serve."
+      Section
         Heading
           Text "Notes"
         List
           Item
-            Paragraph
-              Text "Keeps 3 days in the fridge"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Keeps 3 days in the fridge"
           Item
-            Paragraph
-              Text "Freezes well"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Freezes well"
         Paragraph
-          Text "*Adapted from a family recipe.*"
+          Line
+            Text "*Adapted from a family recipe.*"

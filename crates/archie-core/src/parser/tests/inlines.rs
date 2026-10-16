@@ -5,16 +5,19 @@ fn a_wiki_link_has_a_target_and_may_have_an_alias() {
     check(
         "See [[grammar]], [[notes/parser|the parser notes]] and [[spec#Lists]].\n",
         r#"Document
-  Body
-    Paragraph
-      Text "See "
-      Link form=Wiki target="grammar"
-      Text ", "
-      Link form=Wiki target="notes/parser"
-        Text "the parser notes"
-      Text " and "
-      Link form=Wiki target="spec#Lists"
-      Text "."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "See "
+          Link form=Wiki target="grammar"
+          Text ", "
+          Link form=Wiki target="notes/parser"
+            Text "the parser notes"
+          Text " and "
+          Link form=Wiki target="spec#Lists"
+          Text "."
 "#,
     );
 }
@@ -24,15 +27,18 @@ fn a_link_holds_its_text_as_children_and_its_destination() {
     check(
         "Read [the spec](docs/spec.md) or [`parse`](https://example.com/parse?x=1).\n",
         r#"Document
-  Body
-    Paragraph
-      Text "Read "
-      Link form=Markdown target="docs/spec.md"
-        Text "the spec"
-      Text " or "
-      Link form=Markdown target="https://example.com/parse?x=1"
-        Code "parse"
-      Text "."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Read "
+          Link form=Markdown target="docs/spec.md"
+            Text "the spec"
+          Text " or "
+          Link form=Markdown target="https://example.com/parse?x=1"
+            Code "parse"
+          Text "."
 "#,
     );
 }
@@ -42,13 +48,16 @@ fn a_code_span_keeps_what_is_inside_it_as_written() {
     check(
         "Use `[[not a link]]` and ``a ` tick`` here.\n",
         r#"Document
-  Body
-    Paragraph
-      Text "Use "
-      Code "[[not a link]]"
-      Text " and "
-      Code "a ` tick"
-      Text " here."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Use "
+          Code "[[not a link]]"
+          Text " and "
+          Code "a ` tick"
+          Text " here."
 "#,
     );
 }
@@ -59,9 +68,12 @@ fn a_backslash_before_punctuation_makes_it_plain_text() {
         r"\[\[not a link\]\] and \* star, a path C:\temp
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "[[not a link]] and * star, a path C:\\temp"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[[not a link]] and * star, a path C:\\temp"
 "#,
     );
 }
@@ -71,30 +83,36 @@ fn brackets_that_do_not_form_a_link_stay_text() {
     check(
         "[text] (gap), [text](has space), [[]], [[a]b]], [unclosed, an ![image](pic.png)\n",
         r#"Document
-  Body
-    Paragraph
-      Text "[text] (gap), [text](has space), [[]], [[a]b]], [unclosed, an "
-      Image form=Markdown target="pic.png" alt="image"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[text] (gap), [text](has space), [[]], [[a]b]], [unclosed, an "
+          Image form=Markdown target="pic.png" alt="image"
 "#,
     );
 }
 
 #[test]
-fn a_line_break_inside_a_paragraph_is_a_newline_in_the_text() {
+fn each_line_of_a_paragraph_holds_the_inline_nodes_written_on_it() {
     check(
         "\
 Start [[a]]
 [b](c) end
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "Start "
-      Link form=Wiki target="a"
-      Text "\n"
-      Link form=Markdown target="c"
-        Text "b"
-      Text " end"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Start "
+          Link form=Wiki target="a"
+        Line
+          Link form=Markdown target="c"
+            Text "b"
+          Text " end"
 "#,
     );
 }
@@ -104,11 +122,15 @@ fn backticks_with_no_matching_run_stay_text() {
     check(
         "A lone ` tick.\n\n``two` ticks\n",
         r#"Document
-  Body
-    Paragraph
-      Text "A lone ` tick."
-    Paragraph
-      Text "``two` ticks"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "A lone ` tick."
+      Paragraph
+        Line
+          Text "``two` ticks"
 "#,
     );
 }
@@ -123,13 +145,16 @@ Document
     Mapping
       Pair key=title
         Scalar String \"caf\u{e9}\"
-  Body
-    Paragraph
-      Text \"caf\u{e9} \"
-      Link form=Wiki target=\"na\u{ef}ve\"
-        Text \"\u{f1}\"
-      Text \" \"
-      Code \"\u{2014}\"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text \"caf\u{e9} \"
+          Link form=Wiki target=\"na\u{ef}ve\"
+            Text \"\u{f1}\"
+          Text \" \"
+          Code \"\u{2014}\"
 ",
     );
 }
@@ -142,9 +167,14 @@ fn an_inline_node_stays_on_one_line_and_link_text_holds_no_brackets() {
 more](dest) and [a [b] c](d)
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "[text\nmore](dest) and [a [b] c](d)"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[text"
+        Line
+          Text "more](dest) and [a [b] c](d)"
 "#,
     );
 }
@@ -154,18 +184,21 @@ fn an_image_is_an_embed_in_either_form_and_may_sit_inside_a_link() {
     check(
         "Hi! ![logo](logo.svg) ![[tree.png]] ![[note#Heading|the note]] [![build](badge.svg)](https://ci) ![not an image\n",
         r#"Document
-  Body
-    Paragraph
-      Text "Hi! "
-      Image form=Markdown target="logo.svg" alt="logo"
-      Text " "
-      Image form=Wiki target="tree.png"
-      Text " "
-      Image form=Wiki target="note#Heading" alt="the note"
-      Text " "
-      Link form=Markdown target="https://ci"
-        Image form=Markdown target="badge.svg" alt="build"
-      Text " ![not an image"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Hi! "
+          Image form=Markdown target="logo.svg" alt="logo"
+          Text " "
+          Image form=Wiki target="tree.png"
+          Text " "
+          Image form=Wiki target="note#Heading" alt="the note"
+          Text " "
+          Link form=Markdown target="https://ci"
+            Image form=Markdown target="badge.svg" alt="build"
+          Text " ![not an image"
 "#,
     );
 }

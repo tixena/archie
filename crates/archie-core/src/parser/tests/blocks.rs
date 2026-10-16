@@ -1,7 +1,7 @@
 use super::check;
 
 #[test]
-fn adjacent_lines_are_one_paragraph_and_a_blank_line_ends_it() {
+fn a_paragraph_is_a_set_of_lines_and_a_blank_line_ends_it() {
     check(
         "\
 First line
@@ -10,11 +10,17 @@ second line of the same paragraph.
 A second paragraph.
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "First line\nsecond line of the same paragraph."
-    Paragraph
-      Text "A second paragraph."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "First line"
+        Line
+          Text "second line of the same paragraph."
+      Paragraph
+        Line
+          Text "A second paragraph."
 "#,
     );
 }
@@ -40,26 +46,31 @@ Text in beta.
 # Epsilon
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "Intro before any heading."
-    Section level=1
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Intro before any heading."
+    Section
       Heading
         Text "Alpha"
       Paragraph
-        Text "Text in alpha."
-      Section level=2
+        Line
+          Text "Text in alpha."
+      Section
         Heading
           Text "Beta"
         Paragraph
-          Text "Text in beta."
-        Section level=3
+          Line
+            Text "Text in beta."
+        Section
           Heading
             Text "Gamma"
-      Section level=2
+      Section
         Heading
           Text "Delta"
-    Section level=1
+    Section
       Heading
         Text "Epsilon"
 "#,
@@ -67,7 +78,75 @@ Text in beta.
 }
 
 #[test]
-fn a_skipped_level_still_nests_under_the_nearest_higher_heading() {
+fn a_deeper_heading_opens_a_section_inside_the_current_one() {
+    check(
+        "\
+# A
+text
+
+## D
+text in D
+
+# E
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+      Paragraph
+        Line
+          Text "text"
+      Section
+        Heading
+          Text "D"
+        Paragraph
+          Line
+            Text "text in D"
+    Section
+      Heading
+        Text "E"
+"#,
+    );
+}
+
+#[test]
+fn a_skipped_level_is_a_section_with_an_empty_heading() {
+    let tree = r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "Hi H1"
+      Section
+        Heading
+        Section
+          Heading
+            Text "This is H3"
+"#;
+    check("# Hi H1\n### This is H3\n", tree);
+    check("# Hi H1\n##\n### This is H3\n", tree);
+}
+
+#[test]
+fn text_before_a_deeper_first_heading_holds_that_heading_as_a_subsection() {
+    check(
+        "intro\n\n## B\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "intro"
+      Section
+        Heading
+          Text "B"
+"#,
+    );
+}
+
+#[test]
+fn a_body_whose_first_heading_is_deeper_starts_with_an_empty_heading() {
     check(
         "\
 ## Starts at two
@@ -79,17 +158,21 @@ fn a_skipped_level_still_nests_under_the_nearest_higher_heading() {
 ## Two
 ",
         r#"Document
-  Body
-    Section level=2
+  MarkdownBlock
+    Section
       Heading
-        Text "Starts at two"
-    Section level=1
+      Section
+        Heading
+          Text "Starts at two"
+    Section
       Heading
         Text "One"
-      Section level=3
+      Section
         Heading
-          Text "Three"
-      Section level=2
+        Section
+          Heading
+            Text "Three"
+      Section
         Heading
           Text "Two"
 "#,
@@ -110,20 +193,56 @@ fn a_heading_needs_one_to_six_hashes_and_a_space() {
 ",
         "\
 Document
-  Body
-    Paragraph
-      Text \"#NoSpace is a paragraph\"
-    Paragraph
-      Text \"####### Seven hashes is a paragraph\"
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
-      Section level=2
+      Paragraph
+        Line
+          Text \"#NoSpace is a paragraph\"
+      Paragraph
+        Line
+          Text \"####### Seven hashes is a paragraph\"
+    Section
+      Heading
+      Section
         Heading
           Text \"See \"
           Link form=Wiki target=\"grammar\"
           Text \" and \"
           Code \"parse\"
 ",
+    );
+}
+
+#[test]
+fn a_list_item_holds_sections_whose_levels_count_from_the_item() {
+    check(
+        "\
+- # B
+  in B
+  # C
+  in C
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+                Text "B"
+              Paragraph
+                Line
+                  Text "in B"
+            Section
+              Heading
+                Text "C"
+              Paragraph
+                Line
+                  Text "in C"
+"#,
     );
 }
 
@@ -137,17 +256,33 @@ fn a_line_indented_to_the_item_text_continues_the_item() {
 - three
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "one"
-      Item
-        Paragraph
-          Text "two\ncontinues two"
-      Item
-        Paragraph
-          Text "three"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "one"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "two"
+                Line
+                  Text "continues two"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "three"
 "#,
     );
 }
@@ -165,27 +300,50 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
 - sibling
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "parent"
-        List
-          Item
-            Paragraph
-              Text "child"
-            List
-              Item
-                Paragraph
-                  Text "grandchild"
-          Item
-            Paragraph
-              Text "second child"
-        Paragraph
-          Text "A second paragraph of parent."
-      Item
-        Paragraph
-          Text "sibling"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "parent"
+              List
+                Item
+                  MarkdownBlock
+                    Section
+                      Heading
+                      Paragraph
+                        Line
+                          Text "child"
+                      List
+                        Item
+                          MarkdownBlock
+                            Section
+                              Heading
+                              Paragraph
+                                Line
+                                  Text "grandchild"
+                Item
+                  MarkdownBlock
+                    Section
+                      Heading
+                      Paragraph
+                        Line
+                          Text "second child"
+              Paragraph
+                Line
+                  Text "A second paragraph of parent."
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "sibling"
 "#,
     );
 }
@@ -202,18 +360,33 @@ fn blank_lines_and_other_bullets_keep_one_list_and_an_item_may_be_empty() {
 - after the empty item
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "star"
-      Item
-        Paragraph
-          Text "plus"
-      Item
-      Item
-        Paragraph
-          Text "after the empty item"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "star"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "plus"
+        Item
+          MarkdownBlock
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "after the empty item"
 "#,
     );
 }
@@ -226,13 +399,20 @@ fn a_line_left_of_the_item_text_ends_the_list() {
 continues at column zero
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "item"
-    Paragraph
-      Text "continues at column zero"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "item"
+      Paragraph
+        Line
+          Text "continues at column zero"
 "#,
     );
 }
@@ -242,13 +422,22 @@ fn a_bullet_after_a_bullet_on_one_line_nests() {
     check(
         "- - inner\n",
         r#"Document
-  Body
-    List
-      Item
-        List
-          Item
-            Paragraph
-              Text "inner"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              List
+                Item
+                  MarkdownBlock
+                    Section
+                      Heading
+                      Paragraph
+                        Line
+                          Text "inner"
 "#,
     );
 }
@@ -267,10 +456,13 @@ fn main() {
 After the code.
 ",
         r#"Document
-  Body
-    CodeBlock info="rust" value="fn main() {\n    // # not a heading\n    - not a list\n}"
-    Paragraph
-      Text "After the code."
+  MarkdownBlock
+    Section
+      Heading
+      CodeBlock info="rust" value="fn main() {\n    // # not a heading\n    - not a list\n}"
+      Paragraph
+        Line
+          Text "After the code."
 "#,
     );
 }
@@ -290,15 +482,25 @@ fn a_fence_inside_an_item_closes_only_on_a_fence_at_least_as_long() {
 - next
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "step"
-        CodeBlock info="text" value="```\ninner fence\n\nstays code"
-      Item
-        Paragraph
-          Text "next"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "step"
+              CodeBlock info="text" value="```\ninner fence\n\nstays code"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "next"
 "#,
     );
 }
@@ -312,8 +514,10 @@ never closed
 # still code
 ",
         r#"Document
-  Body
-    CodeBlock info="" value="never closed\n# still code"
+  MarkdownBlock
+    Section
+      Heading
+      CodeBlock info="" value="never closed\n# still code"
 "#,
     );
 }
@@ -328,15 +532,25 @@ fn an_unclosed_fence_inside_an_item_ends_with_the_item() {
 - next
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "item"
-        CodeBlock info="" value="code"
-      Item
-        Paragraph
-          Text "next"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "item"
+              CodeBlock info="" value="code"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "next"
 "#,
     );
 }
@@ -351,26 +565,34 @@ Text line
 text under the heading
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "Text line"
-    List
-      Item
-        Paragraph
-          Text "item"
-    Section level=1
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Text line"
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "item"
+    Section
       Heading
         Text "Heading"
       Paragraph
-        Text "text under the heading"
+        Line
+          Text "text under the heading"
 "#,
     );
 }
 
 #[test]
 fn an_empty_file_is_a_document_with_an_empty_body() {
-    check("", "Document\n  Body\n");
-    check("\n\n", "Document\n  Body\n");
+    check("", "Document\n  MarkdownBlock\n");
+    check("\n\n", "Document\n  MarkdownBlock\n");
 }
 
 #[test]
@@ -381,15 +603,25 @@ fn the_item_text_column_is_two_past_the_bullet_however_it_is_spaced() {
   - inner
 ",
         r#"Document
-  Body
-    List
-      Item
-        Paragraph
-          Text "wide"
-        List
-          Item
-            Paragraph
-              Text "inner"
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "wide"
+              List
+                Item
+                  MarkdownBlock
+                    Section
+                      Heading
+                      Paragraph
+                        Line
+                          Text "inner"
 "#,
     );
 }
@@ -399,11 +631,15 @@ fn indentation_outside_a_list_means_nothing_and_a_tab_is_text() {
     check(
         "    four spaces\n\n\t- tab\n",
         r#"Document
-  Body
-    Paragraph
-      Text "four spaces"
-    Paragraph
-      Text "\t- tab"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "four spaces"
+      Paragraph
+        Line
+          Text "\t- tab"
 "#,
     );
 }
@@ -413,8 +649,8 @@ fn closing_hashes_of_a_heading_are_kept_as_text() {
     check(
         "# Title ##\n",
         r#"Document
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Title ##"
 "#,
@@ -430,9 +666,16 @@ code
 ~~~
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "~~~\ncode\n~~~"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "~~~"
+        Line
+          Text "code"
+        Line
+          Text "~~~"
 "#,
     );
 }
@@ -455,12 +698,16 @@ Looks good.
 More text.
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "Intro."
-    CodeBlock info="remargin" value="---\nid: abc\nauthor: ada\ntype: human\n---\nLooks good."
-    Paragraph
-      Text "More text."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Intro."
+      CodeBlock info="remargin" value="---\nid: abc\nauthor: ada\ntype: human\n---\nLooks good."
+      Paragraph
+        Line
+          Text "More text."
 "#,
     );
 }

@@ -23,23 +23,32 @@ Document
         Scalar Date 2026-09-28
       Pair key=notes
         Scalar String "Prefers \"async\" updates; it's fine to email."
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Ada Lovelace"
       Paragraph
-        Text "Works with "
-        Link form=Wiki target="Grace Hopper"
-        Text " at "
-        Link form=Wiki target="Analytical Engines"
-        Text "."
-      Section level=2
+        Line
+          Text "Works with "
+          Link form=Wiki target="Grace Hopper"
+          Text " at "
+          Link form=Wiki target="Analytical Engines"
+          Text "."
+      Section
         Heading
           Text "Log"
         List
           Item
-            Paragraph
-              Text "2026-09-28: call about the parser"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "2026-09-28: call about the parser"
           Item
-            Paragraph
-              Text "2026-09-12: met at the meetup"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "2026-09-12: met at the meetup"

@@ -11,18 +11,27 @@ Document
         Scalar String "bug, needs-triage"
       Pair key=assignees
         Scalar String ""
-  Body
-    Paragraph
-      Text "**What happened**"
-    Paragraph
-      Text "A clear description of the bug."
-    Paragraph
-      Text "**Steps to reproduce**"
-    Paragraph
-      Text "1. Run "
-      Code "quill check"
-      Text "\n2. See the error"
-    Paragraph
-      Text "**Expected**"
-    Paragraph
-      Text "What should have happened instead."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "**What happened**"
+      Paragraph
+        Line
+          Text "A clear description of the bug."
+      Paragraph
+        Line
+          Text "**Steps to reproduce**"
+      Paragraph
+        Line
+          Text "1. Run "
+          Code "quill check"
+        Line
+          Text "2. See the error"
+      Paragraph
+        Line
+          Text "**Expected**"
+      Paragraph
+        Line
+          Text "What should have happened instead."

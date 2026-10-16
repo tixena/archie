@@ -4,14 +4,13 @@
 use core::marker::PhantomData;
 use core::mem;
 use core::ops::Range;
-use core::slice;
 
 use crate::parser::ast::{
-    Block, CodeBlock, Extension, FencedCode, Heading, Item, List, Paragraph, Section, Table,
-    TableCell, TableRow,
+    Block, CodeBlock, Extension, FencedCode, Heading, Item, List, MarkdownBlock, Paragraph,
+    Section, Table, TableCell, TableRow,
 };
 use crate::parser::error::ParseError;
-use crate::parser::inline::inlines;
+use crate::parser::inline::line;
 use crate::parser::lexer::{Token, TokenKind, lex};
 use crate::parser::table::{RowToken, TableToken};
 
@@ -22,68 +21,55 @@ struct Parser<'src, E> {
     tokens: Vec<Token>,
 }
 
+/// The sections of a `MarkdownBlock` being read: `closed` holds the finished
+/// top-level sections, `open` the open ones, outermost first, so a section's
+/// depth is its place in `open`.
+struct Sections<E>
+where
+    E: Extension,
+{
+    closed: Vec<Section<E>>,
+    open: Vec<Section<E>>,
+}
+
 impl<E> Parser<'_, E>
 where
     E: Extension,
 {
-    /// The blocks up to the end of the enclosing list item, or up to a
-    /// heading that closes a section of `level`.
-    fn blocks(&mut self, level: u8) -> Result<Vec<Block<E>>, ParseError> {
-        let mut blocks = Vec::new();
-        while !self.stops(level) {
-            let Some(token) = self.take() else {
-                break;
-            };
-            match token.kind {
-                TokenKind::Blank | TokenKind::ItemEnd => {}
-                TokenKind::CodeBlock {
-                    content,
-                    info,
-                    value,
-                } => {
-                    let fenced = FencedCode {
-                        content,
-                        info: &info,
-                        source: self.source,
-                        value: &value,
-                    };
-                    let kind = E::code_block(&fenced).transpose()?;
-                    blocks.push(Block::CodeBlock(CodeBlock {
-                        info,
-                        kind,
-                        span: token.span,
-                        value,
-                    }));
-                }
-                TokenKind::Heading { level: found, text } => {
-                    blocks.push(Block::Section(self.section(found, text, token.span)?));
-                }
-                TokenKind::ItemStart => blocks.push(Block::List(self.list(token.span)?)),
-                TokenKind::Table(table) => blocks.push(Block::Table(self.table(table, token.span))),
-                TokenKind::Text => blocks.push(Block::Paragraph(self.paragraph(token.span))),
-            }
-        }
-        Ok(blocks)
-    }
-
-    /// A cell holds one paragraph of inline nodes, or nothing when empty.
+    /// A cell holds one section, with an empty heading, holding a paragraph
+    /// of one line, or nothing when empty.
     fn cell(&self, range: Range<usize>) -> TableCell<E> {
-        let children = if range.is_empty() {
-            Vec::new()
-        } else {
-            vec![Block::Paragraph(Paragraph {
-                children: inlines(self.source, slice::from_ref(&range)),
+        let mut sections = Sections::new();
+        if !range.is_empty() {
+            sections.block(Block::Paragraph(Paragraph {
+                lines: vec![line(self.source, range.clone())],
                 span: range.clone(),
-            })]
-        };
+            }));
+        }
         TableCell {
-            children,
+            body: MarkdownBlock {
+                sections: sections.finish(),
+                span: range.clone(),
+            },
             span: range,
         }
     }
 
+    /// The heading of the heading line at `written`, whose text is at `text`.
+    /// A line with no text gives an empty heading at its start.
+    fn heading(&self, text: Range<usize>, written: &Range<usize>) -> Heading {
+        if text.is_empty() {
+            empty_heading(written.start)
+        } else {
+            Heading {
+                children: line(self.source, text).children,
+                span: written.clone(),
+            }
+        }
+    }
+
     fn item(&mut self, marker: Range<usize>) -> Result<Item<E>, ParseError> {
-        let children = self.blocks(0)?;
+        let body = self.markdown_block(marker.end)?;
         if self
             .tokens
             .get(self.pos)
@@ -91,9 +77,12 @@ where
         {
             self.pos += 1;
         }
-        let end = children.last().map_or(marker.end, |block| block.span().end);
+        let end = body
+            .sections
+            .last()
+            .map_or(marker.end, |section| section.span.end);
         Ok(Item {
-            children,
+            body,
             span: marker.start..end,
         })
     }
@@ -110,6 +99,59 @@ where
         Ok(List {
             items,
             span: start..end,
+        })
+    }
+
+    /// The sections up to the end of the enclosing list item, or of the
+    /// tokens. It spans its sections, or is empty at `at` when it has none.
+    fn markdown_block(&mut self, at: usize) -> Result<MarkdownBlock<E>, ParseError> {
+        let mut sections = Sections::new();
+        while !self.stops() {
+            let Some(token) = self.take() else {
+                break;
+            };
+            let found = match token.kind {
+                TokenKind::Blank | TokenKind::ItemEnd => None,
+                TokenKind::CodeBlock {
+                    content,
+                    info,
+                    value,
+                } => {
+                    let fenced = FencedCode {
+                        content,
+                        info: &info,
+                        source: self.source,
+                        value: &value,
+                    };
+                    let kind = E::code_block(&fenced).transpose()?;
+                    Some(Block::CodeBlock(CodeBlock {
+                        info,
+                        kind,
+                        span: token.span,
+                        value,
+                    }))
+                }
+                TokenKind::Heading { level, text } => {
+                    let heading = self.heading(text, &token.span);
+                    sections.open(usize::from(level), heading, token.span);
+                    None
+                }
+                TokenKind::ItemStart => Some(Block::List(self.list(token.span)?)),
+                TokenKind::Table(table) => Some(Block::Table(self.table(table, token.span))),
+                TokenKind::Text => Some(Block::Paragraph(self.paragraph(token.span))),
+            };
+            if let Some(block) = found {
+                sections.block(block);
+            }
+        }
+        let read = sections.finish();
+        let span = read
+            .first()
+            .zip(read.last())
+            .map_or(at..at, |(first, last)| first.span.start..last.span.end);
+        Ok(MarkdownBlock {
+            sections: read,
+            span,
         })
     }
 
@@ -132,16 +174,16 @@ where
     fn paragraph(&mut self, first: Range<usize>) -> Paragraph {
         let start = first.start;
         let mut end = first.end;
-        let mut lines = vec![first];
+        let mut lines = vec![line(self.source, first)];
         while let Some(token) = self.tokens.get(self.pos)
             && matches!(token.kind, TokenKind::Text)
         {
             end = token.span.end;
-            lines.push(token.span.clone());
+            lines.push(line(self.source, token.span.clone()));
             self.pos += 1;
         }
         Paragraph {
-            children: inlines(self.source, &lines),
+            lines,
             span: start..end,
         }
     }
@@ -153,46 +195,12 @@ where
         }
     }
 
-    fn section(
-        &mut self,
-        level: u8,
-        text: Range<usize>,
-        heading: Range<usize>,
-    ) -> Result<Section<E>, ParseError> {
-        let children = self.blocks(level)?;
-        let end = children
-            .last()
-            .map_or(heading.end, |block| block.span().end);
-        Ok(Section {
-            children,
-            heading: Heading {
-                children: inlines(self.source, &[text]),
-                span: heading.clone(),
-            },
-            level,
-            span: heading.start..end,
-        })
-    }
-
-    fn stops(&self, level: u8) -> bool {
+    /// Only the end of the enclosing list item, or of the tokens, ends a
+    /// `MarkdownBlock`.
+    fn stops(&self) -> bool {
         self.tokens
             .get(self.pos)
-            .is_none_or(|token| match token.kind {
-                TokenKind::ItemEnd => true,
-                TokenKind::Heading {
-                    level: found,
-                    text: _,
-                } => found <= level,
-                TokenKind::Blank
-                | TokenKind::CodeBlock {
-                    content: _,
-                    info: _,
-                    value: _,
-                }
-                | TokenKind::ItemStart
-                | TokenKind::Table(_)
-                | TokenKind::Text => false,
-            })
+            .is_none_or(|token| matches!(token.kind, TokenKind::ItemEnd))
     }
 
     fn table(&self, table: TableToken, span: Range<usize>) -> Table<E> {
@@ -215,9 +223,74 @@ where
     }
 }
 
-/// The blocks of the body that starts at byte `start` of `source`, with
-/// code block subtypes from `E`.
-pub fn parse<E>(source: &str, start: usize) -> Result<Vec<Block<E>>, ParseError>
+impl<E> Sections<E>
+where
+    E: Extension,
+{
+    /// Adds `block` to the innermost open section. A block read while none
+    /// is open opens the first section, with an empty heading.
+    fn block(&mut self, block: Block<E>) {
+        let span = block.span().clone();
+        if self.open.is_empty() {
+            self.open.push(untitled(span.start));
+        }
+        if let Some(section) = self.open.last_mut() {
+            section.span.end = span.end;
+            section.blocks.push(block);
+        }
+    }
+
+    /// Puts `section`, just closed, into the section around it, or among the
+    /// top-level sections.
+    fn close(&mut self, section: Section<E>) {
+        match self.open.last_mut() {
+            Some(parent) => {
+                parent.span.end = section.span.end;
+                parent.subsections.push(section);
+            }
+            None => self.closed.push(section),
+        }
+    }
+
+    /// Closes every open section and gives the top-level ones.
+    fn finish(mut self) -> Vec<Section<E>> {
+        while let Some(section) = self.open.pop() {
+            self.close(section);
+        }
+        self.closed
+    }
+
+    const fn new() -> Self {
+        Self {
+            closed: Vec::new(),
+            open: Vec::new(),
+        }
+    }
+
+    /// Opens the section of a heading `level` marks deep: closes every open
+    /// section at that depth or deeper, and fills a skipped level with a
+    /// section whose heading is empty. `written` is the heading line.
+    fn open(&mut self, level: usize, heading: Heading, written: Range<usize>) {
+        while self.open.len() >= level
+            && let Some(section) = self.open.pop()
+        {
+            self.close(section);
+        }
+        while self.open.len() + 1 < level {
+            self.open.push(untitled(written.start));
+        }
+        self.open.push(Section {
+            blocks: Vec::new(),
+            heading,
+            span: written,
+            subsections: Vec::new(),
+        });
+    }
+}
+
+/// The body that starts at byte `start` of `source`, with code block
+/// subtypes from `E`. It spans everything after the frontmatter.
+pub fn parse<E>(source: &str, start: usize) -> Result<MarkdownBlock<E>, ParseError>
 where
     E: Extension,
 {
@@ -227,5 +300,30 @@ where
         source,
         tokens: lex(source, start),
     };
-    parser.blocks(0)
+    let body = parser.markdown_block(start)?;
+    Ok(MarkdownBlock {
+        sections: body.sections,
+        span: start..source.len(),
+    })
+}
+
+/// An empty heading at `at`: no children and an empty span.
+const fn empty_heading(at: usize) -> Heading {
+    Heading {
+        children: Vec::new(),
+        span: at..at,
+    }
+}
+
+/// A section with an empty heading, starting at `at`.
+const fn untitled<E>(at: usize) -> Section<E>
+where
+    E: Extension,
+{
+    Section {
+        blocks: Vec::new(),
+        heading: empty_heading(at),
+        span: at..at,
+        subsections: Vec::new(),
+    }
 }

@@ -1,38 +1,49 @@
 use super::check_spans;
+use crate::parser::ast::Heading;
+use crate::parser::parse;
 
 #[test]
-fn a_text_spans_the_indentation_between_its_lines() {
+fn a_line_spans_its_own_text_and_a_paragraph_spans_its_lines() {
     let whole = "- a\n  b\n";
     check_spans(
         whole,
         &[
             ("Document", whole),
-            ("Body", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "- a\n  b"),
+            ("Heading", ""),
             ("List", "- a\n  b"),
             ("Item", "- a\n  b"),
+            ("MarkdownBlock", "a\n  b"),
+            ("Section", "a\n  b"),
+            ("Heading", ""),
             ("Paragraph", "a\n  b"),
-            (r#"Text "a\nb""#, "a\n  b"),
+            ("Line", "a"),
+            (r#"Text "a""#, "a"),
+            ("Line", "b"),
+            (r#"Text "b""#, "b"),
         ],
     );
 }
 
 #[test]
-fn a_section_runs_from_its_heading_to_the_end_of_its_last_block() {
+fn a_section_runs_from_its_heading_to_the_end_of_what_it_holds() {
     let whole = "# A\n\ntext\n\n## B\n\n# C\n";
     check_spans(
         whole,
         &[
             ("Document", whole),
-            ("Body", whole),
-            ("Section level=1", "# A\n\ntext\n\n## B"),
+            ("MarkdownBlock", whole),
+            ("Section", "# A\n\ntext\n\n## B"),
             ("Heading", "# A"),
             (r#"Text "A""#, "A"),
             ("Paragraph", "text"),
+            ("Line", "text"),
             (r#"Text "text""#, "text"),
-            ("Section level=2", "## B"),
+            ("Section", "## B"),
             ("Heading", "## B"),
             (r#"Text "B""#, "B"),
-            ("Section level=1", "# C"),
+            ("Section", "# C"),
             ("Heading", "# C"),
             (r#"Text "C""#, "C"),
         ],
@@ -40,16 +51,48 @@ fn a_section_runs_from_its_heading_to_the_end_of_its_last_block() {
 }
 
 #[test]
+fn an_empty_heading_has_an_empty_span_at_the_start_of_its_section() {
+    let source = "intro\n\n# A\n### C\n##\n";
+    let sections = parse(source).unwrap().body.sections;
+    assert_eq!(sections.len(), 2);
+    let subsections = &sections[1].subsections;
+    assert_eq!(subsections.len(), 2);
+    for (section, covered) in [
+        (&sections[0], "intro"),
+        (&subsections[0], "### C"),
+        (&subsections[1], "##"),
+    ] {
+        assert_eq!(&source[section.span.clone()], covered);
+        let start = section.span.start;
+        assert_eq!(
+            section.heading,
+            Heading {
+                children: Vec::new(),
+                span: start..start,
+            }
+        );
+    }
+}
+
+#[test]
 fn a_code_block_spans_from_its_opening_fence_to_its_closing_fence() {
     let whole = "- x\n  ```sh\n  ls\n  ```\n";
+    let item = "- x\n  ```sh\n  ls\n  ```";
+    let content = "x\n  ```sh\n  ls\n  ```";
     check_spans(
         whole,
         &[
             ("Document", whole),
-            ("Body", whole),
-            ("List", "- x\n  ```sh\n  ls\n  ```"),
-            ("Item", "- x\n  ```sh\n  ls\n  ```"),
+            ("MarkdownBlock", whole),
+            ("Section", item),
+            ("Heading", ""),
+            ("List", item),
+            ("Item", item),
+            ("MarkdownBlock", content),
+            ("Section", content),
+            ("Heading", ""),
             ("Paragraph", "x"),
+            ("Line", "x"),
             (r#"Text "x""#, "x"),
             (r#"CodeBlock info="sh" value="ls""#, "```sh\n  ls\n  ```"),
         ],
@@ -59,12 +102,16 @@ fn a_code_block_spans_from_its_opening_fence_to_its_closing_fence() {
 #[test]
 fn inline_nodes_span_their_delimiters() {
     let whole = "a [b](c) `d` [[e|f]]\n";
+    let line = "a [b](c) `d` [[e|f]]";
     check_spans(
         whole,
         &[
             ("Document", whole),
-            ("Body", whole),
-            ("Paragraph", "a [b](c) `d` [[e|f]]"),
+            ("MarkdownBlock", whole),
+            ("Section", line),
+            ("Heading", ""),
+            ("Paragraph", line),
+            ("Line", line),
             (r#"Text "a ""#, "a "),
             (r#"Link form=Markdown target="c""#, "[b](c)"),
             (r#"Text "b""#, "b"),
@@ -93,8 +140,11 @@ fn yaml_frontmatter_spans() {
             (r#"Scalar String "x""#, "x"),
             ("Pair key=c", "c:"),
             ("Scalar Null", ""),
-            ("Body", "body\n"),
+            ("MarkdownBlock", "body\n"),
+            ("Section", "body"),
+            ("Heading", ""),
             ("Paragraph", "body"),
+            ("Line", "body"),
             (r#"Text "body""#, "body"),
         ],
     );
@@ -120,7 +170,7 @@ fn toml_frontmatter_spans() {
             ("Mapping", "{ a = 2 }"),
             ("Pair key=a", "a = 2"),
             ("Scalar Integer 2", "2"),
-            ("Body", ""),
+            ("MarkdownBlock", ""),
         ],
     );
 }

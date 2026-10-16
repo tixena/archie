@@ -17,7 +17,7 @@ mod yaml;
 
 use core::ops::Range;
 
-use crate::parser::ast::{Body, Document, Extension, Mapping, Plain};
+use crate::parser::ast::{Document, Extension, Mapping, Plain};
 use crate::parser::error::ParseError;
 
 /// Parses a markdown file into its document tree.
@@ -43,10 +43,7 @@ where
 {
     let (frontmatter, body_start) = frontmatter::parse(source)?;
     Ok(Document {
-        body: Body {
-            children: block::parse(source, body_start)?,
-            span: body_start..source.len(),
-        },
+        body: block::parse(source, body_start)?,
         frontmatter,
         span: 0..source.len(),
     })

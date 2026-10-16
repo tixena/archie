@@ -18,17 +18,30 @@ Setext heading
 ==============
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "> quoted line\n> - not a list"
-    Paragraph
-      Text "1. ordered item\n2. second"
-    Paragraph
-      Text "*emphasis* and **strong** stay as written."
-    Paragraph
-      Text "- - -"
-    Paragraph
-      Text "Setext heading\n=============="
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "> quoted line"
+        Line
+          Text "> - not a list"
+      Paragraph
+        Line
+          Text "1. ordered item"
+        Line
+          Text "2. second"
+      Paragraph
+        Line
+          Text "*emphasis* and **strong** stay as written."
+      Paragraph
+        Line
+          Text "- - -"
+      Paragraph
+        Line
+          Text "Setext heading"
+        Line
+          Text "=============="
 "#,
     );
 }
@@ -42,25 +55,17 @@ fn a_heading_or_a_fence_is_not_recognized_inside_a_block_quote() {
 > quoted code
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "> # quoted heading\n> ```\n> quoted code"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "> # quoted heading"
+        Line
+          Text "> ```"
+        Line
+          Text "> quoted code"
 "#,
-    );
-}
-
-#[test]
-fn a_heading_marker_inside_a_list_item_is_text() {
-    check(
-        "- # not a heading\n",
-        "\
-Document
-  Body
-    List
-      Item
-        Paragraph
-          Text \"# not a heading\"
-",
     );
 }
 
@@ -73,11 +78,15 @@ fn reference_links_autolinks_and_html_stay_text() {
 [ref]: https://example.com
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "[label][ref] and <https://example.com> and <b>html</b>"
-    Paragraph
-      Text "[ref]: https://example.com"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[label][ref] and <https://example.com> and <b>html</b>"
+      Paragraph
+        Line
+          Text "[ref]: https://example.com"
 "#,
     );
 }

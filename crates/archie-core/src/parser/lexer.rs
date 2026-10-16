@@ -90,9 +90,7 @@ impl Lexer<'_> {
     /// `line_start`.
     fn content(&mut self, line_start: usize, at: usize, end: usize) {
         let rest = &self.source[at..end];
-        if self.levels.is_empty()
-            && let Some((level, text_at)) = heading(rest)
-        {
+        if let Some((level, text_at)) = heading(rest) {
             let text = at + text_at..end;
             self.push(TokenKind::Heading { level, text }, at..end);
         } else if let Some(ticks) = fence(rest) {

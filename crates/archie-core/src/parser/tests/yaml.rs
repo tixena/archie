@@ -50,8 +50,8 @@ aliases: [Parser, "The parser"]
         Sequence
           Scalar String "Parser"
           Scalar String "The parser"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Title"
 "#,
@@ -95,7 +95,7 @@ nothing:
           Scalar String "third"
       Pair key=nothing
         Scalar Null
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -112,7 +112,7 @@ text: "tab\there \"quoted\" A"
     Mapping
       Pair key=text
         Scalar String "tab\there \"quoted\" A"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -151,7 +151,7 @@ leading_dot: .5
         Scalar Boolean true
       Pair key=leading_dot
         Scalar String ".5"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -197,7 +197,7 @@ reactions:
                   Scalar String "ada"
                 Pair key=ts
                   Scalar DateTime 2026-10-01T10:00:00Z
-  Body
+  MarkdownBlock
 "#,
     );
 }

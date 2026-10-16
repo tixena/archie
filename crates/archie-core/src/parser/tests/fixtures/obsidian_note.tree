@@ -15,53 +15,87 @@ Document
         Scalar String "in-progress"
       Pair key=cssclasses
         Sequence
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Parser design"
       Paragraph
-        Text "Follows from "
-        Link form=Wiki target="archie"
-        Text " and the discussion in "
-        Link form=Wiki target="2026-09-10 planning"
-          Text "the planning note"
-        Text ". See also "
-        Link form=Wiki target="grammar#Body"
-        Text "."
+        Line
+          Text "Follows from "
+          Link form=Wiki target="archie"
+          Text " and the discussion in "
+          Link form=Wiki target="2026-09-10 planning"
+            Text "the planning note"
+          Text ". See also "
+          Link form=Wiki target="grammar#Body"
+          Text "."
       Paragraph
-        Text "> [!note] Open point\n> The tree and the grammar change together."
-      Section level=2
+        Line
+          Text "> [!note] Open point"
+        Line
+          Text "> The tree and the grammar change together."
+      Section
         Heading
           Text "Decisions"
         List
           Item
-            Paragraph
-              Text "One tree for every consumer"
-            List
-              Item
+            MarkdownBlock
+              Section
+                Heading
                 Paragraph
-                  Text "frontmatter holds values, not syntax"
-              Item
-                Paragraph
-                  Text "spans are byte ranges"
+                  Line
+                    Text "One tree for every consumer"
+                List
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "frontmatter holds values, not syntax"
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "spans are byte ranges"
           Item
-            Paragraph
-              Text "TOML first, YAML also read"
-      Section level=2
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "TOML first, YAML also read"
+      Section
         Heading
           Text "Tasks"
         List
           Item
-            Paragraph
-              Text "[x] Model the tree"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[x] Model the tree"
           Item
-            Paragraph
-              Text "[ ] Write the lexer #next"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[ ] Write the lexer #next"
           Item
-            Paragraph
-              Text "[ ] Review with "
-              Link form=Wiki target="Ada Lovelace"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[ ] Review with "
+                    Link form=Wiki target="Ada Lovelace"
         Paragraph
-          Image form=Wiki target="tree-sketch.png"
+          Line
+            Image form=Wiki target="tree-sketch.png"
         Paragraph
-          Text "#design #archie"
+          Line
+            Text "#design #archie"
