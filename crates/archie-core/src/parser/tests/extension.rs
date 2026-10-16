@@ -9,7 +9,7 @@ use crate::parser::ast::{
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, With};
-use crate::parser::{ParseOptions, parse, parse_with, read_yaml};
+use crate::parser::{ParseOptions, parse, parse_with, read_yaml, rebuild_with};
 use crate::writer::{WriteOptions, Writer, write};
 
 const SOURCE: &str = "\
@@ -39,12 +39,12 @@ fn main() {}
 const NO_HEADER: &str = "a comment opens with a header between `---` lines";
 
 #[derive(Debug, Clone, PartialEq)]
-struct Comments;
+pub(super) struct Comments;
 
 /// A comment: its YAML header, and its body read as markdown with the
 /// extensions the file is parsed with.
 #[derive(Debug, Clone, PartialEq)]
-struct Comment<T>
+pub(super) struct Comment<T>
 where
     T: Extension,
 {
@@ -465,6 +465,22 @@ where
 {
     let mut rows = Rows::default();
     rows.document(document);
+    outline(&rows.rows)
+}
+
+/// `document` written to JSON, read back, and its extension nodes built
+/// again.
+fn rebuilt(document: &Document<With<Comments>>) -> Document<With<Comments>> {
+    let json = serde_json::to_string(document).unwrap();
+    let back: Document<With<Comments>> = serde_json::from_str(&json).unwrap();
+    rebuild_with::<Comments>(&back, &ParseOptions::strict()).unwrap()
+}
+
+/// The outline of a comment's body, then of its header.
+fn comment_outline(comment: &Comment<With<Comments>>) -> String {
+    let mut rows = Rows::default();
+    rows.markdown_block(0, &comment.body);
+    rows.mapping(0, &comment.header);
     outline(&rows.rows)
 }
 
@@ -1143,4 +1159,38 @@ fn an_extension_that_only_reads_writes_the_plain_node_in_archies_form() {
         write(&marked, &WriteOptions::default()).unwrap(),
         "*a* **b** <br>\\\nc\n"
     );
+}
+
+#[test]
+fn a_comment_in_a_grid_cell_is_built_again_from_json() {
+    let grid = in_grid_cell("```remargin\n---\nid: abc\n---\n# Title\n\n- point\n```");
+    let document = parse_with::<Comments>(&grid, &ParseOptions::strict()).unwrap();
+    let again = rebuilt(&document);
+    assert!(document_outline(&again).contains("Table format=Grid"));
+    let comment = |read: &Document<With<Comments>>| {
+        code_blocks(&first_cell(&read.body).body)[0]
+            .kind
+            .0
+            .as_deref()
+            .and_then(second)
+            .map(comment_outline)
+    };
+    assert!(comment(&document).unwrap().contains("Text \"Title\""));
+    assert_eq!(comment(&again), comment(&document));
+}
+
+#[test]
+fn a_markdown_block_in_a_list_item_is_built_again_from_json() {
+    let source = "- ```markdown\n  # A\n\n  text\n  ```\n";
+    let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
+    let markdown = |read: &Document<With<Comments>>| {
+        code_blocks(first_item(&read.body))[0]
+            .kind
+            .0
+            .as_deref()
+            .and_then(first)
+            .map(block_outline)
+    };
+    assert!(markdown(&document).unwrap().contains("Text \"text\""));
+    assert_eq!(markdown(&rebuilt(&document)), markdown(&document));
 }

@@ -1,9 +1,10 @@
 //! Whole documents. Each is a file under `fixtures/`, with the outline of
 //! the tree it parses into beside it in a `.tree` file. Each reads back from
-//! JSON as that tree, every `kind` empty.
+//! JSON as that tree, every `kind` empty, and its extension nodes build
+//! again from it.
 
 use super::check;
-use super::json::reads_back_from_json;
+use super::json::{reads_back_from_json, rebuilds_from_json};
 
 macro_rules! document {
     ($name:ident) => {
@@ -15,6 +16,7 @@ macro_rules! document {
                 include_str!(concat!("fixtures/", stringify!($name), ".tree")),
             );
             reads_back_from_json(source);
+            rebuilds_from_json(source);
         }
     };
 }

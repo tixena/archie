@@ -1,17 +1,17 @@
 //! The tree written to JSON and read back, and the TypeScript its types
 //! publish. The JSON holds the markdown's own tree: no node writes its
-//! `kind`, and the claim pass builds it again.
+//! `kind`, and `rebuild_with` builds it again.
 
-use std::collections::HashMap;
-
+use super::extension::Comments;
 use crate::parser::ast::{
-    Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, Heading, Html, Image,
-    Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock, Pair, Paragraph,
-    Scalar, Section, Sequence, Strong, Table, TableCell, TableRow, Text, ThematicBreak,
+    Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
+    Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock,
+    Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Strong, Table, TableCell, TableRow,
+    Text, ThematicBreak, Value,
 };
-use crate::parser::claim;
-use crate::parser::extension::Context;
-use crate::parser::parse;
+use crate::parser::extension::{Plain, With};
+use crate::parser::{ParseOptions, parse, parse_with, rebuild_with};
+use crate::writer::{WriteOptions, write};
 
 /// Parses `source`, writes the tree to JSON and reads it back: the same
 /// tree, every `kind` empty.
@@ -21,6 +21,24 @@ pub(super) fn reads_back_from_json(source: &str) {
     let back: Document = serde_json::from_str(&json).unwrap();
     unclaim(&mut parsed);
     assert_eq!(back, parsed);
+}
+
+/// Parses `source` with `Comments`, writes the tree to JSON, reads it back
+/// and builds its extension nodes again: the tree that `source` written in
+/// archie's form, its frontmatter in its own syntax, parses into.
+pub(super) fn rebuilds_from_json(source: &str) {
+    let options = ParseOptions::default();
+    let parsed = parse_with::<Comments>(source, &options).unwrap();
+    let json = serde_json::to_string(&parsed).unwrap();
+    let back: Document<With<Comments>> = serde_json::from_str(&json).unwrap();
+    let own = WriteOptions {
+        frontmatter: parsed
+            .frontmatter
+            .as_ref()
+            .map_or_else(FrontmatterFormat::default, |frontmatter| frontmatter.format),
+    };
+    let written = parse_with::<Comments>(&write(&parsed, &own).unwrap(), &options).unwrap();
+    assert_eq!(rebuild_with::<Comments>(&back, &options).unwrap(), written);
 }
 
 #[test]
@@ -61,10 +79,11 @@ fn a_span_is_written_as_its_start_and_its_end() {
 #[test]
 fn the_claim_pass_builds_a_claimed_block_again_from_json() {
     let source = "```markdown\n# Inner\n```\n";
-    let parsed = parse(source).unwrap();
-    let mut back: Document =
+    let options = ParseOptions::default();
+    let parsed = parse_with::<Plain>(source, &options).unwrap();
+    let back: Document<With<Plain>> =
         serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
-    let claimed = |document: &Document| {
+    let claimed = |document: &Document<With<Plain>>| {
         matches!(
             &document.body.sections[0].blocks[0],
             Block::CodeBlock(block) if block.kind.0.is_some()
@@ -72,14 +91,31 @@ fn the_claim_pass_builds_a_claimed_block_again_from_json() {
     };
     assert!(claimed(&parsed));
     assert!(!claimed(&back));
-    let context = Context {
-        column: 0,
-        lines: None,
-        source,
-        strict: false,
+    assert_eq!(rebuild_with::<Plain>(&back, &options).unwrap(), parsed);
+}
+
+#[test]
+fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
+    let options = ParseOptions::default();
+    let source = "+++\ntitle = \"Notes\"\n+++\n```markdown\n# A\n```\n";
+    let mut parsed = parse_with::<Plain>(source, &options).unwrap();
+    let frontmatter = parsed.frontmatter.as_mut().unwrap();
+    frontmatter.mapping.pairs["title"].value = Value::Scalar(Scalar {
+        span: 0..0,
+        value: ScalarValue::Null,
+    });
+    let back: Document<With<Plain>> =
+        serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+    let rebuilt = rebuild_with::<Plain>(&back, &options).unwrap();
+    let yaml = WriteOptions {
+        frontmatter: FrontmatterFormat::Yaml,
     };
-    claim::document(&mut back, &context, &HashMap::new()).unwrap();
-    assert_eq!(back, parsed);
+    let written = parse_with::<Plain>(&write(&parsed, &yaml).unwrap(), &options).unwrap();
+    assert_eq!(
+        rebuilt.frontmatter.as_ref().map(|read| read.format),
+        Some(FrontmatterFormat::Yaml)
+    );
+    assert_eq!(rebuilt, written);
 }
 
 #[test]

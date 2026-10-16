@@ -507,18 +507,44 @@ pub fn write<E>(document: &Document<E>, options: &WriteOptions) -> Result<String
 where
     E: Extension,
 {
-    let mut text = match (&document.frontmatter, options.frontmatter) {
+    let frontmatter = match (&document.frontmatter, options.frontmatter) {
         (None, _) => String::new(),
         (Some(frontmatter), FrontmatterFormat::Toml) => toml::frontmatter(&frontmatter.mapping)?,
         (Some(frontmatter), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
     };
+    Ok(with_body(frontmatter, document))
+}
+
+/// Writes `document` in archie's form, its frontmatter in the syntax it was
+/// read in, or in YAML when that syntax is TOML and the frontmatter holds a
+/// null, which TOML cannot hold.
+pub(crate) fn write_for_rebuild<E>(document: &Document<E>) -> String
+where
+    E: Extension,
+{
+    let frontmatter = document
+        .frontmatter
+        .as_ref()
+        .map_or_else(String::new, |frontmatter| match frontmatter.format {
+            FrontmatterFormat::Toml => toml::frontmatter(&frontmatter.mapping)
+                .unwrap_or_else(|_| yaml::frontmatter(&frontmatter.mapping)),
+            FrontmatterFormat::Yaml => yaml::frontmatter(&frontmatter.mapping),
+        });
+    with_body(frontmatter, document)
+}
+
+/// `frontmatter`, the written frontmatter of `document`, then its body.
+fn with_body<E>(mut frontmatter: String, document: &Document<E>) -> String
+where
+    E: Extension,
+{
     let mut writer = Writer {
         file_start: document.frontmatter.is_none(),
         ..Writer::new()
     };
     writer.node(&document.kind, Construct::Document(document));
-    text.push_str(&writer.finish());
-    Ok(text)
+    frontmatter.push_str(&writer.finish());
+    frontmatter
 }
 
 /// A date and time with no offset, such as `2026-10-10T07:32:00`, with the

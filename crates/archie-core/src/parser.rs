@@ -25,6 +25,7 @@ use core::ops::Range;
 use crate::parser::ast::{Document, Kind, Mapping};
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Context, Extension, Markdown, With};
+use crate::writer;
 
 /// What happens when an extension claims a construct and cannot read it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -77,6 +78,26 @@ where
     E: Extension,
 {
     parse_with_set::<With<E>>(source, options)
+}
+
+/// Builds the extension nodes of `document` again, for a document read from
+/// storage that keeps only the plain tree, such as JSON.
+///
+/// The plain tree is written in archie's form and parsed again with `E`, so
+/// the spans of the document returned count from that written text.
+///
+/// # Errors
+///
+/// Returns an error when the parse fails, as `parse_with` does.
+pub fn rebuild_with<E>(
+    document: &Document<With<E>>,
+    options: &ParseOptions,
+) -> Result<Document<With<E>>, ParseError>
+where
+    E: Extension,
+{
+    let text = writer::write_for_rebuild(document);
+    parse_with::<E>(&text, options)
 }
 
 /// Builds the tree, then offers every node to the extensions `T`.
