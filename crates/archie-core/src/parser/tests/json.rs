@@ -2,6 +2,7 @@
 //! publish. The JSON holds the markdown's own tree: no node writes its
 //! `kind`, and `rebuild_with` builds it again.
 
+use super::blocks::{nested_grid_tables, nested_markdown_blocks};
 use super::extension::Comments;
 use super::on_two_megabytes;
 use crate::parser::ast::{
@@ -11,6 +12,8 @@ use crate::parser::ast::{
     TableRow, Text, ThematicBreak, Value,
 };
 use crate::parser::extension::{Plain, With};
+use crate::parser::inline::INLINE_CAP;
+use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{ParseOptions, from_json, parse, parse_with, rebuild_with, to_json};
 use crate::writer::{WriteOptions, write};
 
@@ -65,14 +68,18 @@ fn the_sample_document_reads_back_from_json() {
 #[test]
 fn a_tree_at_the_caps_reads_back_from_json() {
     on_two_megabytes(|| {
+        let stars = "*".repeat(2 * INLINE_CAP);
         for source in [
-            format!("{}a{}\n", "*".repeat(2_000), "*".repeat(2_000)),
-            format!("{}a\n", "- ".repeat(100)),
+            format!("{stars}a{stars}\n"),
+            format!("{}a\n", "- ".repeat(BLOCK_CAP)),
+            nested_grid_tables(BLOCK_CAP),
         ] {
-            let document = parse(&source).unwrap();
-            let back: Document = from_json(&to_json(&document).unwrap()).unwrap();
-            assert_eq!(back, document);
+            reads_back_from_json(&source);
         }
+        let options = ParseOptions::default();
+        let parsed = parse_with::<Plain>(&nested_markdown_blocks(BLOCK_CAP), &options).unwrap();
+        let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+        assert_eq!(rebuild_with::<Plain>(&back, &options).unwrap(), parsed);
     });
 }
 

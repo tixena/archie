@@ -2076,7 +2076,7 @@ fn container_depth(body: &MarkdownBlock) -> usize {
 
 /// `levels` markdown blocks around `a`, each inside the one before: the
 /// innermost fence is three backticks, and each one around it one longer.
-fn nested_markdown_blocks(levels: usize) -> String {
+pub(super) fn nested_markdown_blocks(levels: usize) -> String {
     let fences: Vec<String> = (3..levels + 3).map(|length| "`".repeat(length)).collect();
     let mut source = String::new();
     for fence in fences.iter().rev() {
@@ -2093,7 +2093,7 @@ fn nested_markdown_blocks(levels: usize) -> String {
 
 /// `levels` grid tables around `a`, each in the single cell of the one
 /// before.
-fn nested_grid_tables(levels: usize) -> String {
+pub(super) fn nested_grid_tables(levels: usize) -> String {
     let line =
         |depth: usize, text: &str| format!("{}{text}{}\n", "| ".repeat(depth), " |".repeat(depth));
     let borders: Vec<String> = (0..levels)
