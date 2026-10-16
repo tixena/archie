@@ -4,7 +4,7 @@ use core::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 
-use crate::parser::ast::ScalarValue;
+use crate::parser::ast::{NonFinite, ScalarValue};
 
 const TOML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8), ("0b", 2)];
 const YAML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8)];
@@ -14,16 +14,16 @@ pub fn toml(text: &str) -> Option<ScalarValue> {
     match text {
         "true" => Some(ScalarValue::Boolean(true)),
         "false" => Some(ScalarValue::Boolean(false)),
-        "inf" | "+inf" => Some(ScalarValue::Float(f64::INFINITY)),
-        "-inf" => Some(ScalarValue::Float(f64::NEG_INFINITY)),
-        "nan" | "+nan" | "-nan" => Some(ScalarValue::Float(f64::NAN)),
+        "inf" | "+inf" => Some(ScalarValue::NonFinite(NonFinite::Infinity)),
+        "-inf" => Some(ScalarValue::NonFinite(NonFinite::NegativeInfinity)),
+        "nan" | "+nan" | "-nan" => Some(ScalarValue::NonFinite(NonFinite::Nan)),
         _ => {
             let number = text.replace('_', "");
             date_time(text)
                 .or_else(|| date(text).map(ScalarValue::Date))
                 .or_else(|| time(text).map(ScalarValue::Time))
                 .or_else(|| integer(&number, TOML_RADIXES).map(ScalarValue::Integer))
-                .or_else(|| float(&number).map(ScalarValue::Float))
+                .or_else(|| float(&number).map(finite_or_infinite))
         }
     }
 }
@@ -35,12 +35,14 @@ pub fn yaml(text: &str) -> ScalarValue {
         "" | "~" | "null" | "Null" | "NULL" => ScalarValue::Null,
         "true" | "True" | "TRUE" => ScalarValue::Boolean(true),
         "false" | "False" | "FALSE" => ScalarValue::Boolean(false),
-        ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => ScalarValue::Float(f64::INFINITY),
-        "-.inf" | "-.Inf" | "-.INF" => ScalarValue::Float(f64::NEG_INFINITY),
-        ".nan" | ".NaN" | ".NAN" => ScalarValue::Float(f64::NAN),
+        ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => {
+            ScalarValue::NonFinite(NonFinite::Infinity)
+        }
+        "-.inf" | "-.Inf" | "-.INF" => ScalarValue::NonFinite(NonFinite::NegativeInfinity),
+        ".nan" | ".NaN" | ".NAN" => ScalarValue::NonFinite(NonFinite::Nan),
         _ => integer(text, YAML_RADIXES)
             .map(ScalarValue::Integer)
-            .or_else(|| float(text).map(ScalarValue::Float))
+            .or_else(|| float(text).map(finite_or_infinite))
             .or_else(|| date_time(text))
             .or_else(|| date(text).map(ScalarValue::Date))
             .unwrap_or_else(|| ScalarValue::String(text.to_owned())),
@@ -180,6 +182,17 @@ fn float(text: &str) -> Option<f64> {
         return None;
     }
     text.parse().ok()
+}
+
+/// A `Float`, or an infinity for digits too large for a float to hold.
+const fn finite_or_infinite(float: f64) -> ScalarValue {
+    if float.is_finite() {
+        ScalarValue::Float(float)
+    } else if float.is_sign_negative() {
+        ScalarValue::NonFinite(NonFinite::NegativeInfinity)
+    } else {
+        ScalarValue::NonFinite(NonFinite::Infinity)
+    }
 }
 
 fn digits<T>(text: &str) -> Option<T>

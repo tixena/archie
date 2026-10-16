@@ -1073,6 +1073,7 @@ fn scalar_text(cursor: &Cursor<'_>, value: ScalarValue, span: &Range<usize>) -> 
         | ScalarValue::Float(_)
         | ScalarValue::Integer(_)
         | ScalarValue::LocalDateTime(_)
+        | ScalarValue::NonFinite(_)
         | ScalarValue::Null
         | ScalarValue::Time(_) => folded(cursor.slice(span.clone())),
     }
@@ -1085,7 +1086,7 @@ fn typed(name: &str, text: &str) -> Option<ScalarValue> {
         ("str", _) => Some(ScalarValue::String(text.to_owned())),
         ("float", ScalarValue::Integer(_)) => text.parse().ok().map(ScalarValue::Float),
         ("bool", fitting @ ScalarValue::Boolean(_))
-        | ("float", fitting @ ScalarValue::Float(_))
+        | ("float", fitting @ (ScalarValue::Float(_) | ScalarValue::NonFinite(_)))
         | ("int", fitting @ ScalarValue::Integer(_))
         | ("null", fitting @ ScalarValue::Null)
         | (

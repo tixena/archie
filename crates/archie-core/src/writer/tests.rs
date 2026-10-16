@@ -829,6 +829,20 @@ fn a_time_of_day_is_written_into_yaml_as_quoted_text() {
 }
 
 #[test]
+fn a_non_finite_float_is_written_in_the_syntax_of_each_format() {
+    let source = "---\nup: .Inf\ndown: -.inf\nnothing: .NaN\n---\n";
+    let yaml = written(source);
+    assert_eq!(yaml, "---\nup: .inf\ndown: -.inf\nnothing: .nan\n---\n");
+    assert_eq!(mapping(&yaml), mapping(source));
+    let toml_text = toml(source);
+    assert_eq!(
+        toml_text,
+        "+++\nup = inf\ndown = -inf\nnothing = nan\n+++\n"
+    );
+    assert_eq!(mapping(&toml_text), mapping(source));
+}
+
+#[test]
 fn toml_quotes_all_text_and_puts_tables_after_the_plain_keys() {
     let source = "---
 title: Notes

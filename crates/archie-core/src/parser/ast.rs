@@ -142,14 +142,27 @@ pub enum ScalarValue {
     Date(NaiveDate),
     /// A date and time with its offset from UTC.
     DateTime(DateTime<FixedOffset>),
+    /// A finite float.
     Float(f64),
     Integer(i64),
     /// A date and time with no offset.
     LocalDateTime(NaiveDateTime),
+    NonFinite(NonFinite),
     /// YAML only: TOML has no null.
     Null,
     String(String),
     Time(NaiveTime),
+}
+
+/// A float that is not a finite number: `.inf`, `-.inf` and `.nan` in
+/// YAML; `inf`, `-inf` and `nan` in TOML.
+#[model_schema()]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum NonFinite {
+    Infinity,
+    Nan,
+    NegativeInfinity,
 }
 
 /// A stretch of markdown read by the same rules: the body, a list item's

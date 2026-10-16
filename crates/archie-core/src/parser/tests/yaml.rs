@@ -570,6 +570,55 @@ quoted: {"a b": 1, 'c': "d"}
 }
 
 #[test]
+fn a_non_finite_float_reads_as_its_name() {
+    check(
+        "\
+---
+up: .Inf
+plus: +.INF
+down: -.inf
+nothing: .NaN
+huge: 1e999
+below: -1e999
+---
+",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=up
+        Scalar NonFinite Infinity
+      Pair key=plus
+        Scalar NonFinite Infinity
+      Pair key=down
+        Scalar NonFinite NegativeInfinity
+      Pair key=nothing
+        Scalar NonFinite Nan
+      Pair key=huge
+        Scalar NonFinite Infinity
+      Pair key=below
+        Scalar NonFinite NegativeInfinity
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_float_tag_reads_a_non_finite_float() {
+    check(
+        "---\nup: !!float .inf\nnothing: !!float .nan\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=up
+        Scalar NonFinite Infinity
+      Pair key=nothing
+        Scalar NonFinite Nan
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
 fn a_tag_fixes_the_type_of_its_value() {
     check(
         r#"---

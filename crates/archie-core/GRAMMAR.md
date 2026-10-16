@@ -215,7 +215,8 @@ A value's type comes from how it is written:
 | A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | DateTime |
 | A date, then `T`, `t` or one space, then a time, with no offset | LocalDateTime |
 | An optional sign and digits; or `0x`, `0o`, `0b` and digits in that base | Integer, 64 bits |
-| Digits with a fraction, an exponent or both; `inf` and `nan`, with an optional sign | Float |
+| Digits with a fraction, an exponent or both | Float, finite |
+| `inf` and `nan`, with an optional sign; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 
 ## YAML frontmatter
 
@@ -414,9 +415,9 @@ Any other tag, such as `!point`, fails the file with
 
 - A tagged scalar's text is read again by the rules for an unquoted value of the
   tag's type in the table below: `!!str 01234` is the String `"01234"`, and
-  `!!timestamp` reads a Date or a DateTime. `!!float` also reads the text of a
-  decimal integer, so `!!float 1` is the Float `1`. `!!map` and `!!seq` only check
-  that the value is a mapping or a list.
+  `!!timestamp` reads a Date or a DateTime. `!!float` reads a Float or a NonFinite,
+  and also reads the text of a decimal integer, so `!!float 1` is the Float `1`.
+  `!!map` and `!!seq` only check that the value is a mapping or a list.
 - A value that does not fit its tag fails the file, as
   ``"`abc` is not a value of the tag `!!int`"``, or
   ``"a list is not a value of the tag `!!map`"``.
@@ -429,7 +430,8 @@ A `PLAIN` value's type comes from how it is written:
 | Nothing, `~`, `null`, `Null`, `NULL` | Null |
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
 | An optional sign and digits; or `0x`, `0o` and digits in that base | Integer, 64 bits |
-| Digits with a fraction, an exponent or both; `.inf` and `.nan` | Float |
+| Digits with a fraction, an exponent or both | Float, finite |
+| `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 | `2026-10-10`, when that day exists in the calendar | Date |
 | A date-time, written as in TOML, whose date exists in the calendar | DateTime, or LocalDateTime when it has no offset |
 | Anything else | String |

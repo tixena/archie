@@ -6,8 +6,8 @@ use super::extension::Comments;
 use crate::parser::ast::{
     Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
     Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock,
-    Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Strong, Table, TableCell, TableRow,
-    Text, ThematicBreak, Value,
+    NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Strong, Table, TableCell,
+    TableRow, Text, ThematicBreak, Value,
 };
 use crate::parser::extension::{Plain, With};
 use crate::parser::{ParseOptions, parse, parse_with, rebuild_with};
@@ -119,22 +119,41 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
 }
 
 #[test]
-fn a_non_finite_float_is_written_as_null_and_does_not_read_back() {
-    for source in [
-        "---\nx: .nan\n---\n",
-        "---\nx: .inf\n---\n",
-        "---\nx: -.inf\n---\n",
+fn a_non_finite_float_reads_back_from_json() {
+    for (source, value) in [
+        ("---\nx: .nan\n---\n", NonFinite::Nan),
+        ("---\nx: .inf\n---\n", NonFinite::Infinity),
+        ("---\nx: -.inf\n---\n", NonFinite::NegativeInfinity),
+        ("+++\nx = nan\n+++\n", NonFinite::Nan),
     ] {
-        let json = serde_json::to_string(&parse(source).unwrap()).unwrap();
-        assert!(json.contains(r#""value":{"Float":null}"#), "{json}");
-        let error = serde_json::from_str::<Document>(&json).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .starts_with("invalid type: null, expected f64"),
-            "{error}"
-        );
+        let document = parse(source).unwrap();
+        let json = serde_json::to_string(&document).unwrap();
+        let back: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, document);
+        assert_eq!(scalar(&back, "x"), ScalarValue::NonFinite(value));
     }
+}
+
+#[test]
+fn a_non_finite_float_is_written_as_its_name() {
+    let json = serde_json::to_string(&parse("---\nx: .nan\n---\n").unwrap()).unwrap();
+    assert!(json.contains(r#""value":{"NonFinite":"Nan"}"#), "{json}");
+}
+
+#[test]
+fn the_typescript_of_a_scalar_names_the_non_finite_floats() {
+    let scalar_value = ScalarValue::ts_definition();
+    let non_finite = NonFinite::ts_definition();
+    assert!(
+        scalar_value.contains(r#""NonFinite": NonFinite;"#),
+        "{scalar_value}"
+    );
+    assert!(
+        non_finite.contains(
+            "export type NonFinite =\n  | \"Infinity\"\n  | \"Nan\"\n  | \"NegativeInfinity\";"
+        ),
+        "{non_finite}"
+    );
 }
 
 #[test]
@@ -188,6 +207,16 @@ fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
         );
         assert!(!definition.contains("kind"), "{definition}");
     }
+}
+
+/// The value under `key` in the frontmatter of `document`, a scalar.
+fn scalar(document: &Document, key: &str) -> ScalarValue {
+    let mapping = &document.frontmatter.as_ref().unwrap().mapping;
+    let found = match &mapping.pairs[key].value {
+        Value::Scalar(scalar) => Some(scalar.value.clone()),
+        Value::Mapping(_) | Value::Sequence(_) => None,
+    };
+    found.unwrap()
 }
 
 /// Empties the `kind` of every node of `document`.

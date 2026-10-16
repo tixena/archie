@@ -156,7 +156,38 @@ Document
       Pair key=exponent
         Scalar Float 500
       Pair key=infinite
-        Scalar Float -inf
+        Scalar NonFinite NegativeInfinity
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_non_finite_float_reads_as_its_name() {
+    check(
+        "\
++++
+up = +inf
+nothing = nan
+signed_nothing = -nan
+huge = 1e999
+below = -1e999
++++
+",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=up
+        Scalar NonFinite Infinity
+      Pair key=nothing
+        Scalar NonFinite Nan
+      Pair key=signed_nothing
+        Scalar NonFinite Nan
+      Pair key=huge
+        Scalar NonFinite Infinity
+      Pair key=below
+        Scalar NonFinite NegativeInfinity
   MarkdownBlock
 ",
     );
