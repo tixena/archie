@@ -204,23 +204,22 @@ fn entry(
 
 /// A pair whose key follows a `?` at column `indent`. Its value follows a
 /// `:` at that column on the next line with content; with none, it is null
-/// at the end of the key.
+/// at the end of the key. Both lines are read as a list entry's `-` line is.
 fn explicit_entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
-    cursor.bump();
-    let key = indicated_value(cursor, indent)?;
+    let key = compact_value(cursor, start - indent, indent, Context::Key(indent))?;
     let key_end = key.span().end;
     let name = explicit_key(cursor, key)?;
     let value = if next_line(cursor) == Some(indent)
         && cursor.peek_at(indent) == Some(b':')
         && separated_at(cursor, indent + 1)
     {
-        cursor.set_pos(cursor.pos() + indent + 1);
-        indicated_value(cursor, indent)?
+        let line_start = cursor.pos();
+        compact_value(cursor, line_start, indent, Context::Key(indent))?
     } else {
         null(key_end)
     };
@@ -243,9 +242,9 @@ fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Result<String, ParseError> {
     Err(ParseError::new("expected a key", span.start..span.start))
 }
 
-/// The value after the `:` of a key at column `indent`, or after a `?`
-/// there, with the cursor right after the indicator: the rest of the line,
-/// what the lines under it hold, or null right after the indicator.
+/// The value after the `:` of a key at column `indent`, with the cursor
+/// right after the `:`: the rest of the line, what the lines under it hold,
+/// or null right after the `:`.
 fn indicated_value(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, ParseError> {
     let after = cursor.pos();
     cursor.skip_spaces();
@@ -265,6 +264,7 @@ fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
         Some(b'!') => tagged_key(cursor, key),
         Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
+            no_indicator(cursor, false, "key")?;
             let line = cursor.rest_of_line();
             let Some(length) = plain_key_length(line) else {
                 return cursor.error("expected `key: value`");
@@ -351,7 +351,12 @@ fn block_sequence(
     let mut entry_line = line_start;
     let mut items = Vec::new();
     loop {
-        items.push(list_entry(cursor, entry_line, indent)?);
+        items.push(compact_value(
+            cursor,
+            entry_line,
+            indent,
+            Context::Entry(indent),
+        )?);
         let Some(found) = next_line(cursor) else {
             break;
         };
@@ -370,29 +375,32 @@ fn block_sequence(
     }))
 }
 
-/// The value of the list entry whose `-` is at column `indent` of the line
-/// starting at `line_start`. A `-` after it starts a list at its own column,
-/// and a `key:` or a `?` there a mapping.
-fn list_entry(
+/// The value after the `-`, `?` or `:` at column `indent` of the line
+/// starting at `line_start`, written in `context`. A `-` after it starts a
+/// list at its own column, and a `key:` or a `?` there a mapping, unless a
+/// tab comes before them: a tab is never indentation.
+fn compact_value(
     cursor: &mut Cursor<'_>,
     line_start: usize,
     indent: usize,
+    context: Context,
 ) -> Result<Value, ParseError> {
     cursor.set_pos(line_start + indent + 1);
-    let after_dash = cursor.pos();
+    let after_indicator = cursor.pos();
     cursor.skip_spaces();
     let column = cursor.pos() - line_start;
     if at_line_end(cursor) {
         end_of_line(cursor)?;
-        return nested(cursor, Context::Entry(indent), after_dash);
+        return nested(cursor, context, after_indicator);
     }
-    if is_dash(cursor, 0) {
+    let indented = !cursor.slice(after_indicator..cursor.pos()).contains('\t');
+    if indented && is_dash(cursor, 0) {
         return block_sequence(cursor, line_start, column);
     }
-    if starts_mapping(cursor) {
+    if indented && starts_mapping(cursor) {
         return Ok(Value::Mapping(entry_mapping(cursor, column)?));
     }
-    let value = inline_value(cursor, Context::Entry(indent))?;
+    let value = inline_value(cursor, context)?;
     end_of_line(cursor)?;
     Ok(value)
 }
@@ -450,8 +458,8 @@ fn flow_sequence(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value
     }))
 }
 
-/// One entry of a flow list: a value, or a key and `:`, which make a mapping
-/// of one pair.
+/// One entry of a flow list: a value, or a pair, which makes a mapping of
+/// one pair.
 fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value, ParseError> {
     if !is_flow_pair(cursor) {
         return inline_value(cursor, Context::Flow(column));
@@ -462,8 +470,12 @@ fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value, Pa
     Ok(Value::Mapping(finish(pairs, start)))
 }
 
-/// Whether the flow entry at the cursor is a key followed by `:`.
+/// Whether the flow entry at the cursor is a pair: an explicit key, an empty
+/// key or a key followed by `:`.
 fn is_flow_pair(cursor: &mut Cursor<'_>) -> bool {
+    if is_flow_explicit_key(cursor) || is_empty_key(cursor) {
+        return true;
+    }
     let start = cursor.pos();
     let is_key = flow_key(cursor).is_ok();
     cursor.skip_spaces();
@@ -516,7 +528,7 @@ fn flow_entry(
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
-    let name = flow_key(cursor)?;
+    let name = flow_pair_key(cursor, column)?;
     let key_end = cursor.pos();
     cursor.skip_spaces();
     let value = if cursor.eat(b':') {
@@ -539,6 +551,35 @@ fn flow_entry(
     Ok(())
 }
 
+/// The key of a flow pair: the key after a `?`, or the empty key when none
+/// follows it or when the pair starts with its `:`.
+fn flow_pair_key(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<String, ParseError> {
+    let explicit = is_flow_explicit_key(cursor);
+    if explicit {
+        cursor.bump();
+        skip_flow_space(cursor, column)?;
+    }
+    if is_empty_key(cursor)
+        || (explicit && matches!(cursor.peek(), None | Some(b',' | b']' | b'}')))
+    {
+        return Ok(String::new());
+    }
+    flow_key(cursor)
+}
+
+/// Whether the cursor is on a `?` that starts an explicit key inside a flow
+/// collection: one followed by a space, a tab, the end of the line, `,`,
+/// `]` or `}`.
+fn is_flow_explicit_key(cursor: &Cursor<'_>) -> bool {
+    cursor.peek() == Some(b'?')
+        && (separated_at(cursor, 1) || matches!(cursor.peek_at(1), Some(b',' | b']' | b'}')))
+}
+
+/// Whether a flow pair starts at the cursor with its `:`, with the empty key.
+fn is_empty_key(cursor: &Cursor<'_>) -> bool {
+    cursor.peek() == Some(b':') && is_indicator(cursor, true)
+}
+
 /// A key inside a flow mapping. A plain key ends at a `:` followed by a
 /// space or a flow indicator, at a flow indicator, or at a comment.
 fn flow_key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
@@ -548,6 +589,7 @@ fn flow_key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
         Some(b'!') => tagged_key(cursor, flow_key),
         Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
+            no_indicator(cursor, true, "key")?;
             let line = cursor.rest_of_line();
             let bytes = line.as_bytes();
             let length = (0..bytes.len())
@@ -603,7 +645,7 @@ fn skip_flow_space(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<(),
 /// runs to its end goes on over the lines below it that are indented more
 /// than its key or `-`.
 fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
-    no_indicator(cursor, context)?;
+    no_indicator(cursor, matches!(context, Context::Flow(_)), "value")?;
     let start = cursor.pos();
     let line = cursor.rest_of_line();
     let bounded = plain_part(line, context);
@@ -624,17 +666,19 @@ fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError>
     }))
 }
 
-/// Refuses a plain scalar that starts with `@`, a backtick, `%`, `,`, `]` or
-/// `}`, or with `?`, `:` or `-` followed by a space, a tab or the end of the
-/// line. Inside a flow collection, `,`, `]` and `}` end the entry instead.
-fn no_indicator(cursor: &Cursor<'_>, context: Context) -> Result<(), ParseError> {
+/// Refuses a plain scalar, the `noun` named in the error, that starts with
+/// `@`, a backtick, `%`, `,`, `]` or `}`, or with a `?`, `:` or `-` that is
+/// an indicator. Inside a flow collection, `,`, `]` and `}` end the entry
+/// instead, and `|` and `>` are refused too.
+fn no_indicator(cursor: &Cursor<'_>, in_flow: bool, noun: &str) -> Result<(), ParseError> {
     let Some(first) = cursor.peek() else {
         return Ok(());
     };
     let refused = match first {
-        b',' | b']' | b'}' => !matches!(context, Context::Flow(_)),
+        b',' | b']' | b'}' => !in_flow,
+        b'|' | b'>' => in_flow,
         b'@' | b'`' | b'%' => true,
-        b'?' | b':' | b'-' => separated_at(cursor, 1),
+        b'?' | b':' | b'-' => is_indicator(cursor, in_flow),
         _ => false,
     };
     if !refused {
@@ -644,7 +688,7 @@ fn no_indicator(cursor: &Cursor<'_>, context: Context) -> Result<(), ParseError>
         matches!(first, b'?' | b':' | b'-') && matches!(cursor.peek_at(1), Some(b' ' | b'\t'));
     let and_space = if spaced { " and a space" } else { "" };
     let message = format!(
-        "a plain value cannot start with `{}`{and_space}; quote it",
+        "a plain {noun} cannot start with `{}`{and_space}; quote it",
         char::from(first)
     );
     let at = cursor.pos();
@@ -1153,13 +1197,18 @@ const fn null(at: usize) -> Value {
     })
 }
 
-/// Whether a list entry starts `offset` bytes after the cursor.
+/// Whether a list entry starts `offset` bytes after the cursor: a `-`
+/// followed by a space, a tab or the end of the line.
 fn is_dash(cursor: &Cursor<'_>, offset: usize) -> bool {
-    cursor.peek_at(offset) == Some(b'-')
-        && matches!(
-            cursor.peek_at(offset + 1),
-            None | Some(b' ' | b'\n' | b'\r')
-        )
+    cursor.peek_at(offset) == Some(b'-') && separated_at(cursor, offset + 1)
+}
+
+/// Whether the `?`, `:` or `-` at the cursor is an indicator rather than the
+/// start of a plain scalar: a space, a tab or the end of the line follows
+/// it, or inside a flow collection one of `,`, `[`, `]`, `{` or `}`.
+fn is_indicator(cursor: &Cursor<'_>, in_flow: bool) -> bool {
+    separated_at(cursor, 1)
+        || (in_flow && matches!(cursor.peek_at(1), Some(b',' | b'[' | b']' | b'{' | b'}')))
 }
 
 /// Whether a space, a tab or the end of the line is `offset` bytes after the

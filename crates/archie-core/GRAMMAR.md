@@ -222,8 +222,9 @@ A value's type comes from how it is written:
 yaml          := mapping? | flow_mapping
 mapping       := entry+
 entry         := key ":" value
-               | "?" value ( ":" value )?
+               | "?" compact ( ":" compact )?
 value         := node | NEWLINE block?
+compact       := node | mapping | sequence | NEWLINE block?
 sequence      := ( "-" ( node | mapping | sequence | NEWLINE indented? ) )+
 node          := TAG? inline NEWLINE
                | TAG? BLOCK_SCALAR
@@ -234,9 +235,11 @@ indented      := INDENT mapping DEDENT
                | INDENT node DEDENT
 inline        := flow_sequence | flow_mapping | double_quoted | single_quoted | PLAIN
 flow_sequence := "[" ( flow_entry ( "," flow_entry )* ","? )? "]"
-flow_entry    := flow_key ":" flow_node? | flow_node
+flow_entry    := flow_key ":" flow_node? | explicit_pair | empty_pair | flow_node
 flow_mapping  := "{" ( flow_pair ( "," flow_pair )* ","? )? "}"
-flow_pair     := flow_key ( ":" flow_node? )?
+flow_pair     := flow_key ( ":" flow_node? )? | explicit_pair | empty_pair
+explicit_pair := "?" flow_key? ( ":" flow_node? )?
+empty_pair    := ":" flow_node?
 flow_node     := TAG? inline
 key           := TAG? ( double_quoted | single_quoted | PLAIN_KEY )
 flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
@@ -263,18 +266,32 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
   explicit key, holds a mapping. Its first key is on the `-` line, and its other keys
   start at that key's column on the lines below. `- !!str k: v` then `  m: n` is
   `[{k: v, m: n}]`.
-- A list entry whose line goes on with `-` and a space, or with a `-` that ends the
-  line, holds a list. Its first entry is on the `-` line, and its other entries
-  start at the second `-`'s column on the lines below. `- - a` then `  - b` then
-  `- c` is `[[a, b], c]`.
+- A list entry whose line goes on with `-` and a space or a tab, or with a `-` that
+  ends the line, holds a list. Its first entry is on the `-` line, and its other
+  entries start at the second `-`'s column on the lines below. `- - a` then `  - b`
+  then `- c` is `[[a, b], c]`.
+- A list entry starts at a `-` followed by a space, a tab or the end of the line. A
+  tab after the `-` separates it from the value as a space does: `-`, a tab and `x`
+  is `[x]`, and `- -`, a tab and `a` is `[[a]]`. A tab is never indentation: after
+  a tab, the rest of a `-`, `?` or `:` line is one value, never a list or a mapping
+  that starts at a column. `-`, a tab and `- a` fails the file with
+  ``a plain value cannot start with `-` and a space; quote it``.
 - An explicit key is written after `?` and a space or a tab, or after a `?` that
-  ends its line, at the column of the mapping's keys. The key is a scalar, plain,
-  quoted or tagged, on the `?` line or on the lines indented under it. A mapping or
-  a list there fails the file with `expected a key`: a key is a string. An optional
-  next line at the `?`'s column that starts with `:` and a space or a tab, or with
-  a `:` that ends the line, gives the pair's value, read as the value after a
-  key's `:` is. With no such line, the value is null. `? k` then `: v` is
-  `{k: v}`, and `? k` alone is `{k: null}`.
+  ends its line, at the column of the mapping's keys. An optional next line at the
+  `?`'s column that starts with `:` and a space or a tab, or with a `:` that ends
+  the line, gives the pair's value. With no such line, the value is null. `? k`
+  then `: v` is `{k: v}`, and `? k` alone is `{k: null}`.
+- The `?` line and the `:` line go on as a list entry's `-` line does: a `-` and a
+  space start a list at that column, and a `key:` or a `?` there starts a mapping
+  at that column. With nothing after it on its line, the `?` or the `:` takes the
+  block under it, as a key's `:` does. `? k` then `: a: 1` is `{k: {a: 1}}`, and
+  `? k` then `: - x` is `{k: [x]}`.
+- The key after `?` is a scalar, plain, quoted or tagged, on the `?` line or on the
+  lines indented under it. A mapping or a list there, on the `?` line too, fails
+  the file with `expected a key`, pointing at its first character: a key is a
+  string. `? - a` then `: v`, and `? a: 1` then `: v`, both fail.
+- A `:` line indented more than its `?` does not give the pair's value: `? k` then
+  `  : v` fails the file with `this line is indented more than the keys above it`.
 - `PLAIN_KEY` runs to the first `:` followed by a space or by the end of the line.
   `FLOW_KEY` runs to the first `:` followed by a space or by one of `, [ ] { }`, or
   to the first of `, [ ] { }`.
@@ -292,6 +309,18 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
   character, or with ``a plain value cannot start with `-` and a space; quote it``
   when a space or a tab follows. `?x`, `:x` and `-x` are text. Inside a flow
   collection, `,`, `]` and `}` end the entry instead.
+- Inside a flow collection, a `PLAIN` cannot start with `|` or `>` either, nor with
+  `?`, `:` or `-` followed by `,`, `[`, `]`, `{` or `}`. `[|x]` fails the file with
+  ``a plain value cannot start with `|`; quote it``, and `[-]` with
+  ``a plain value cannot start with `-`; quote it``. `[-x, ?y, :z]` holds three
+  strings.
+- A plain key is checked as a `PLAIN` is. A `PLAIN_KEY` cannot start with `@`,
+  `` ` ``, `%`, `,`, `]` or `}`, nor with `?`, `:` or `-` followed by a space, a tab
+  or the end of the line. A `FLOW_KEY` cannot start with `@`, `` ` ``, `%`, `|` or
+  `>`, nor with `?`, `:` or `-` followed by a space, a tab, the end of the line or
+  one of `, [ ] { }`. Such a key fails the file with
+  ``a plain key cannot start with `@`; quote it``, naming the character as for a
+  `PLAIN`: `@a: 1`, `` `a: 1 `` and `a: {@y: 1}` all fail.
 - Outside a flow collection, a `PLAIN` whose line has no comment goes on over each
   following line that is indented more than its key or `-`, is not a comment and
   holds no `key:`; blank lines may sit between them, and a comment ends the last
@@ -307,8 +336,17 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
   line of its closing bracket too; a line indented less fails the file with
   `a line of a flow collection must be indented more than its key`. Inside a flow
   mapping that is the whole frontmatter, a line may start at any column.
-- A `flow_entry` of a flow list that is a key followed by `:` is a mapping of one
-  pair: `[a: b, c]` is a list holding `{a: b}` and `c`.
+- Inside a flow collection, a `?` followed by a space, a tab, the end of the line,
+  `,`, `]` or `}` starts an explicit key. Its key is the `flow_key` after it, or
+  `""` when none is written. Its value follows a `:` as a `flow_pair`'s does; with
+  no `:`, it is null. `{? x : 1}` is `{x: 1}`.
+- Inside a flow collection, a `:` with nothing before it, followed by a space, a
+  tab, the end of the line or one of `, [ ] { }`, starts a pair with the empty key
+  `""`. `{: x}` is `{"": x}`.
+- A `flow_entry` of a flow list that is a key followed by `:`, an explicit key or an
+  empty key is a mapping of one pair: `[a: b, c]` is a list holding `{a: b}` and
+  `c`, `[? x]` is `[{x: null}]`, `[: x]` is `[{"": x}]`, and `[?]` is
+  `[{"": null}]`.
 - `double_quoted` reads the escapes `\0 \a \b \t \n \v \f \r \e \" \/ \\`, a
   backslash before a space, `\xXX`, `\uXXXX` and `\UXXXXXXXX`. Inside
   `single_quoted`, `''` is one quote.

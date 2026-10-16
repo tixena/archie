@@ -1605,3 +1605,155 @@ fn an_explicit_key_pair_spans_from_its_question_mark_to_its_value() {
         ],
     );
 }
+
+#[test]
+fn an_explicit_key_or_an_empty_key_inside_a_flow_collection_makes_a_pair() {
+    check(
+        "---\na: [? x]\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+            Pair key=x
+              Scalar Null
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: {? x : 1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: [: x]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+            Pair key=
+              Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\n{: x}\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=
+        Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na: [?]\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+            Pair key=
+              Scalar Null
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_question_mark_a_colon_or_a_dash_before_text_starts_a_plain_value_inside_a_flow_list() {
+    check(
+        "---\na: [-x, ?y, :z]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Scalar String "-x"
+          Scalar String "?y"
+          Scalar String ":z"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_tab_after_a_dash_separates_it_from_its_value() {
+    check(
+        "---\nitems:\n-\tx\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- -\ta\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Scalar String "a"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn the_colon_line_of_an_explicit_key_may_hold_a_mapping_or_a_list() {
+    check(
+        "---\n? k\n: a: 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Mapping
+          Pair key=a
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\n? k\n: - x\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Sequence
+          Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\n? k\n: a: 1\n  b: 2\nc: 3\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Mapping
+          Pair key=a
+            Scalar Integer 1
+          Pair key=b
+            Scalar Integer 2
+      Pair key=c
+        Scalar Integer 3
+  MarkdownBlock
+",
+    );
+}

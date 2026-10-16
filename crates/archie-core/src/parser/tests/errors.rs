@@ -252,7 +252,7 @@ fn a_yaml_flow_collection_left_open_is_refused() {
     let (mapping, _) = failure("---\nowner: {name: Ada\n---\n");
     assert_eq!(mapping, "expected `,` or `}` in the mapping");
 
-    let (no_key, _) = failure("---\nowner: {: Ada}\n---\n");
+    let (no_key, _) = failure("---\nowner: {[a]: Ada}\n---\n");
     assert_eq!(no_key, "expected a key");
 }
 
@@ -340,6 +340,47 @@ fn a_plain_value_cannot_start_with_an_indicator() {
 }
 
 #[test]
+fn a_plain_key_cannot_start_with_an_indicator() {
+    let refused = |character: &str| {
+        named(
+            &format!("a plain key cannot start with `{character}`; quote it"),
+            character,
+        )
+    };
+    assert_eq!(failed("---\n@a: 1\n---\n"), refused("@"));
+    assert_eq!(failed("---\n`a: 1\n---\n"), refused("`"));
+    assert_eq!(failed("---\na: {@y: 1}\n---\n"), refused("@"));
+}
+
+#[test]
+fn a_plain_value_inside_a_flow_collection_cannot_start_with_a_block_indicator_or_a_lone_dash() {
+    let refused = |character: &str| {
+        named(
+            &format!("a plain value cannot start with `{character}`; quote it"),
+            character,
+        )
+    };
+    assert_eq!(failed("---\nt: [|x]\n---\n"), refused("|"));
+    assert_eq!(failed("---\nt: [>x]\n---\n"), refused(">"));
+    assert_eq!(failed("---\na: [-]\n---\n"), refused("-"));
+}
+
+#[test]
+fn a_tab_after_a_dash_does_not_indent_a_list_or_a_mapping_on_its_line() {
+    assert_eq!(
+        refusal("---\nitems:\n-\t- a\n---\n"),
+        (
+            "a plain value cannot start with `-` and a space; quote it".to_owned(),
+            "- a"
+        )
+    );
+    assert_eq!(
+        refusal("---\nitems:\n-\ta: 1\n---\n").0,
+        "a plain value cannot hold `: `; quote it"
+    );
+}
+
+#[test]
 fn a_plain_value_cannot_start_with_a_dash_a_question_mark_or_a_colon_and_a_space() {
     let refused = |character: &str, at: &'static str| {
         (
@@ -365,4 +406,17 @@ fn an_explicit_key_that_is_a_collection_is_refused() {
     assert_eq!(refusal("---\n? [a, b]\n: v\n---\n"), refused("[a, b]"));
     assert_eq!(refusal("---\n?\n  a: 1\n: v\n---\n"), refused("a: 1"));
     assert_eq!(refusal("---\n?\n  - a\n: v\n---\n"), refused("- a"));
+    assert_eq!(refusal("---\n? - a\n: v\n---\n"), refused("- a"));
+    assert_eq!(refusal("---\n? a: 1\n: v\n---\n"), refused("a: 1"));
+}
+
+#[test]
+fn the_colon_line_of_an_explicit_key_indented_more_than_its_question_mark_is_refused() {
+    assert_eq!(
+        refusal("---\n? k\n  : v\n---\n"),
+        (
+            "this line is indented more than the keys above it".to_owned(),
+            "  : v"
+        )
+    );
 }
