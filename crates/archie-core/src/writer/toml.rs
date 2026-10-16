@@ -118,16 +118,15 @@ fn push_scalar(out: &mut String, value: &ScalarValue, path: &[&str]) -> Result<(
             let _: fmt::Result = write!(out, "{date}");
         }
         ScalarValue::DateTime(date_time) => push_date_time(out, date_time),
-        ScalarValue::Float(float) => push_finite(out, *float),
+        ScalarValue::Float(float) => match NonFinite::of(*float) {
+            Some(non_finite) => push_non_finite(out, non_finite),
+            None => push_finite(out, *float),
+        },
         ScalarValue::Integer(integer) => {
             let _: fmt::Result = write!(out, "{integer}");
         }
         ScalarValue::LocalDateTime(date_time) => push_local_date_time(out, date_time),
-        ScalarValue::NonFinite(non_finite) => out.push_str(match non_finite {
-            NonFinite::Infinity => "inf",
-            NonFinite::Nan => "nan",
-            NonFinite::NegativeInfinity => "-inf",
-        }),
+        ScalarValue::NonFinite(non_finite) => push_non_finite(out, *non_finite),
         ScalarValue::Null => {
             let mut key = String::new();
             push_path(&mut key, path);
@@ -142,6 +141,14 @@ fn push_scalar(out: &mut String, value: &ScalarValue, path: &[&str]) -> Result<(
         }
     }
     Ok(())
+}
+
+fn push_non_finite(out: &mut String, non_finite: NonFinite) {
+    out.push_str(match non_finite {
+        NonFinite::Infinity => "inf",
+        NonFinite::Nan => "nan",
+        NonFinite::NegativeInfinity => "-inf",
+    });
 }
 
 /// A bare key when it is one, or else a quoted one.

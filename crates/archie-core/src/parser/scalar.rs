@@ -186,12 +186,9 @@ fn float(text: &str) -> Option<f64> {
 
 /// A `Float`, or an infinity for digits too large for a float to hold.
 const fn finite_or_infinite(float: f64) -> ScalarValue {
-    if float.is_finite() {
-        ScalarValue::Float(float)
-    } else if float.is_sign_negative() {
-        ScalarValue::NonFinite(NonFinite::NegativeInfinity)
-    } else {
-        ScalarValue::NonFinite(NonFinite::Infinity)
+    match NonFinite::of(float) {
+        Some(non_finite) => ScalarValue::NonFinite(non_finite),
+        None => ScalarValue::Float(float),
     }
 }
 

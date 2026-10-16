@@ -5,7 +5,8 @@ use indexmap::IndexMap;
 
 use crate::parser::ast::{
     Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Kind, Line, Mapping,
-    MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Table, Text, Value,
+    MarkdownBlock, NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Table, Text,
+    Value,
 };
 use crate::parser::extension::Markdown;
 use crate::parser::parse;
@@ -722,6 +723,38 @@ fn with_frontmatter(pairs: IndexMap<String, Pair>) -> Document {
     }
 }
 
+/// A document whose frontmatter maps `x` to `value`.
+fn with_frontmatter_value(value: ScalarValue) -> Document {
+    let pair = Pair {
+        repeats: Vec::new(),
+        span: 0..0,
+        value: Value::Scalar(Scalar { span: 0..0, value }),
+    };
+    with_frontmatter(IndexMap::from([("x".to_owned(), pair)]))
+}
+
+fn written_yaml(document: &Document) -> String {
+    write(document, &WriteOptions::default()).unwrap()
+}
+
+fn written_toml(document: &Document) -> String {
+    write(document, &TOML).unwrap()
+}
+
+/// The value `x` reads back as from the YAML and the TOML that `document`
+/// is written as, which must agree.
+fn read_back_value(document: &Document) -> ScalarValue {
+    let [yaml, toml_value] = [written_yaml(document), written_toml(document)].map(|text| {
+        let read = match mapping(&text).pairs.swap_remove("x").unwrap().value {
+            Value::Scalar(scalar) => Some(scalar.value),
+            Value::Mapping(_) | Value::Sequence(_) => None,
+        };
+        read.unwrap()
+    });
+    assert_eq!(yaml, toml_value);
+    yaml
+}
+
 #[test]
 fn toml_frontmatter_is_written_as_yaml_by_default() {
     assert_eq!(
@@ -840,6 +873,35 @@ fn a_non_finite_float_is_written_in_the_syntax_of_each_format() {
         "+++\nup = inf\ndown = -inf\nnothing = nan\n+++\n"
     );
     assert_eq!(mapping(&toml_text), mapping(source));
+}
+
+#[test]
+fn a_hand_built_non_finite_float_is_written_as_its_non_finite_value() {
+    for (float, yaml, toml, read) in [
+        (f64::NAN, ".nan", "nan", NonFinite::Nan),
+        (f64::INFINITY, ".inf", "inf", NonFinite::Infinity),
+        (
+            f64::NEG_INFINITY,
+            "-.inf",
+            "-inf",
+            NonFinite::NegativeInfinity,
+        ),
+    ] {
+        let document = with_frontmatter_value(ScalarValue::Float(float));
+        assert!(written_yaml(&document).contains(&format!("x: {yaml}\n")));
+        assert!(written_toml(&document).contains(&format!("x = {toml}\n")));
+        assert_eq!(read_back_value(&document), ScalarValue::NonFinite(read));
+    }
+}
+
+#[test]
+fn a_hand_built_finite_float_is_written_as_the_shortest_text_that_reads_back_as_it() {
+    for (float, text) in [(1.5_f64, "1.5"), (2.0_f64, "2.0")] {
+        let document = with_frontmatter_value(ScalarValue::Float(float));
+        assert!(written_yaml(&document).contains(&format!("x: {text}\n")));
+        assert!(written_toml(&document).contains(&format!("x = {text}\n")));
+        assert_eq!(read_back_value(&document), ScalarValue::Float(float));
+    }
 }
 
 #[test]

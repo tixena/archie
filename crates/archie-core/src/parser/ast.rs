@@ -165,6 +165,22 @@ pub enum NonFinite {
     NegativeInfinity,
 }
 
+impl NonFinite {
+    /// The non-finite value `float` holds, or `None` when it is finite.
+    #[must_use]
+    pub const fn of(float: f64) -> Option<Self> {
+        if float.is_nan() {
+            Some(Self::Nan)
+        } else if float.is_finite() {
+            None
+        } else if float.is_sign_negative() {
+            Some(Self::NegativeInfinity)
+        } else {
+            Some(Self::Infinity)
+        }
+    }
+}
+
 /// A stretch of markdown read by the same rules: the body, a list item's
 /// content, a table cell's content, a markdown code block's content.
 #[model_schema(default_types(E = Markdown))]

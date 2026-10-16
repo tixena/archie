@@ -123,7 +123,10 @@ fn push_scalar(out: &mut String, value: &ScalarValue, in_flow: bool) {
             out.push_str("!!timestamp ");
             push_date_time(out, date_time);
         }
-        ScalarValue::Float(float) => push_finite(out, *float),
+        ScalarValue::Float(float) => match NonFinite::of(*float) {
+            Some(non_finite) => push_non_finite(out, non_finite),
+            None => push_finite(out, *float),
+        },
         ScalarValue::Integer(integer) => {
             let _: fmt::Result = write!(out, "{integer}");
         }
@@ -131,17 +134,21 @@ fn push_scalar(out: &mut String, value: &ScalarValue, in_flow: bool) {
             out.push_str("!!timestamp ");
             push_local_date_time(out, date_time);
         }
-        ScalarValue::NonFinite(non_finite) => out.push_str(match non_finite {
-            NonFinite::Infinity => ".inf",
-            NonFinite::Nan => ".nan",
-            NonFinite::NegativeInfinity => "-.inf",
-        }),
+        ScalarValue::NonFinite(non_finite) => push_non_finite(out, *non_finite),
         ScalarValue::Null => out.push_str("null"),
         ScalarValue::String(text) => push_text(out, text, in_flow),
         ScalarValue::Time(time) => {
             let _: fmt::Result = write!(out, "\"{time}\"");
         }
     }
+}
+
+fn push_non_finite(out: &mut String, non_finite: NonFinite) {
+    out.push_str(match non_finite {
+        NonFinite::Infinity => ".inf",
+        NonFinite::Nan => ".nan",
+        NonFinite::NegativeInfinity => "-.inf",
+    });
 }
 
 /// `text` plain, or in double quotes with its line breaks, quotes,
