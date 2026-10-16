@@ -99,14 +99,23 @@ open list item: the column where that item's text starts.
       line is not three or more of the same `-`, `*` or `_` with only spaces
       between them: `ITEM_START`. The item's text column is the bullet's column
       plus two. Whatever follows the bullet on that line is classified again by
-      these same rules. Items nest at most 100 deep, the block cap, so that
-      reading, writing, cloning, comparing, printing and dropping nested lists
-      stay within a 2 MB stack in a debug build: inside 100 open items, a bullet
-      opens no item, and it and the text after it are `TEXT`.
+      these same rules. At the block cap, below, a bullet opens no item, and it
+      and the text after it are `TEXT`.
    4. It starts a well-formed table (see [Tables](#tables)): one `TABLE` token
-      holding the whole table. The lexer goes on after the table's last line.
+      holding the whole table. The lexer goes on after the table's last line. At
+      the block cap no table is read, and its lines are read as they would be
+      without it.
    5. Anything else: `TEXT`, ending before any trailing spaces.
 4. At the end of the file every open item is closed.
+
+The block cap, 90, counts list items, markdown blocks and grid cells together, so
+that reading, writing, cloning, comparing, printing and dropping the tree stay
+within a 2 MB stack in a debug build. Each of them puts what it holds one level
+deeper: an item its text, a fenced block whose info string starts with `markdown`
+or `md` its content, and a table its cells, those of a pipe or simple table as well
+as a grid table's. Text 90 levels deep opens none of them and stays as it is
+written: a bullet is text, a grid table is paragraph text, and a `markdown` block is
+a plain code block whose value is its content.
 
 ### Blocks
 

@@ -10,8 +10,10 @@ use crate::parser::html::{self, End};
 use crate::parser::line::{line_at, line_from};
 use crate::parser::table::{self, TableToken};
 
-/// How deep list items nest: at 465, writing the tree overflows a 2 MB debug stack.
-pub const BLOCK_CAP: usize = 100;
+/// How deep list items, markdown blocks and table cells nest, counted
+/// together: 95 grid tables, each in the cell of the one before, around
+/// emphasis 1000 deep, overflow a 2 MB debug stack when the tree is cloned.
+pub const BLOCK_CAP: usize = 90;
 
 /// The marker that starts a list item.
 #[derive(Clone, Copy)]
@@ -94,7 +96,11 @@ pub enum TokenKind {
     },
     ItemEnd,
     ItemStart(Marker),
-    Table(TableToken),
+    /// A table, and how many containers hold it.
+    Table {
+        depth: usize,
+        table: TableToken,
+    },
     Text,
     ThematicBreak,
     /// `===` or `---` under text: the level of the heading it makes.
@@ -131,6 +137,9 @@ struct Lexer<'src> {
     base: usize,
     /// The content column of each open list item, outermost first.
     levels: Vec<usize>,
+    /// How many containers hold the text read: list items, markdown blocks
+    /// and table cells.
+    outer: usize,
     pos: usize,
     source: &'src str,
     tokens: Vec<Token>,
@@ -255,7 +264,8 @@ impl Lexer<'_> {
             Some(Start::Quote) => self.block_quote(at),
             Some(Start::Table { next, span, table }) => {
                 self.pos = next;
-                self.push(TokenKind::Table(table), span);
+                let depth = self.depth();
+                self.push(TokenKind::Table { depth, table }, span);
             }
             Some(Start::Underline(heading_level)) => {
                 self.push(TokenKind::Underline(heading_level), at..end);
@@ -325,6 +335,11 @@ impl Lexer<'_> {
         };
         self.push(kind, at..last);
         true
+    }
+
+    /// How many containers hold the line read now.
+    const fn depth(&self) -> usize {
+        self.outer + self.levels.len()
     }
 
     /// Reads an HTML block whose first line starts at `line_start` and whose
@@ -445,8 +460,8 @@ impl Lexer<'_> {
     /// `line_start`, starts, read on from `next`, tried in the order of
     /// precedence `CommonMark` gives them. `continues` is set when the line
     /// would continue a paragraph, which only some blocks may interrupt. An
-    /// item that would open deeper than `BLOCK_CAP` is not opened, and its
-    /// line is text.
+    /// item or a table whose content would lie deeper than `BLOCK_CAP` is
+    /// not opened, and its line is text.
     fn start(
         &self,
         line_start: usize,
@@ -473,11 +488,15 @@ impl Lexer<'_> {
         if let Some(start) = html::start(rest).filter(|start| !continues || start.interrupts) {
             return Some(Start::Html(start));
         }
+        let opens = self.depth() < BLOCK_CAP;
         if let Some((marker, width)) = list_marker(rest).filter(|&(marker, width)| {
             // An empty item never interrupts a paragraph.
             !continues || (marker.interrupts() && !rest[width..].trim_start_matches(' ').is_empty())
         }) {
-            return (self.levels.len() < BLOCK_CAP).then_some(Start::Item { marker, width });
+            return opens.then_some(Start::Item { marker, width });
+        }
+        if !opens {
+            return None;
         }
         table::read(self.source, line_start, text, next, self.level(), self.base).map(
             |(table, span, after)| Start::Table {
@@ -491,10 +510,12 @@ impl Lexer<'_> {
 
 /// The tokens of `source` from byte `start`, each line read with at most
 /// `base` of its leading spaces left out, so its columns count from `base`.
-pub fn lex_from(source: &str, start: usize, base: usize) -> Vec<Token> {
+/// `outer` containers hold the text.
+pub fn lex_from(source: &str, start: usize, base: usize, outer: usize) -> Vec<Token> {
     let mut lexer = Lexer {
         base,
         levels: Vec::new(),
+        outer,
         pos: start,
         source,
         tokens: Vec::new(),
@@ -596,8 +617,9 @@ fn unquote(line: &str) -> &str {
 
 /// Reads `lines`, ranges of `source`, as consecutive lines of one text, each
 /// with at most `base` of its leading spaces left out, the way `lex_from`
-/// reads a file. Spans count from the start of `source`.
-pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize) -> Vec<Token> {
+/// reads a file, held by `outer` containers. Spans count from the start of
+/// `source`.
+pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize, outer: usize) -> Vec<Token> {
     let mut starts = Vec::with_capacity(lines.len());
     let mut text = String::new();
     for line in lines {
@@ -616,7 +638,7 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize) -> Vec<Token
             .zip(starts.get(index))
             .map_or(at, |(line, &start)| line.start + (at - start))
     };
-    let mut tokens = lex_from(&text, 0, base);
+    let mut tokens = lex_from(&text, 0, base, outer);
     for token in &mut tokens {
         token.span = place(token.span.start)..place(token.span.end);
         match &mut token.kind {
@@ -629,7 +651,7 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize) -> Vec<Token
                 level: _,
                 text: range,
             } => *range = place(range.start)..place(range.end),
-            TokenKind::Table(table) => table.place(&place),
+            TokenKind::Table { depth: _, table } => table.place(&place),
             TokenKind::Blank
             | TokenKind::BlockQuote { value: _ }
             | TokenKind::Definition {
