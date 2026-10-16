@@ -3,6 +3,12 @@
 
 mod inline;
 mod table;
+mod toml;
+mod yaml;
+
+use core::fmt::{self, Write as _};
+
+use chrono::{DateTime, FixedOffset, NaiveDateTime};
 
 use crate::parser::ast::{
     Block, BlockQuote, CodeBlock, Document, FrontmatterFormat, Heading, Kind, Line, List,
@@ -447,20 +453,53 @@ where
     }
 }
 
-/// Writes the body of `document` in archie's form. Its frontmatter is not
-/// written.
+/// Writes `document` in archie's form: its frontmatter, if it has one, in
+/// the syntax `options` picks, then its body.
 ///
 /// # Errors
 ///
-/// Returns no error: `WriteError` is for a frontmatter syntax that cannot
-/// hold a value, and the frontmatter is not written.
-pub fn write<E>(document: &Document<E>, _options: &WriteOptions) -> Result<String, WriteError>
+/// Returns an error naming the key when TOML is picked and the frontmatter
+/// holds a null, which TOML cannot hold.
+pub fn write<E>(document: &Document<E>, options: &WriteOptions) -> Result<String, WriteError>
 where
     E: Extension,
 {
+    let mut text = match (&document.frontmatter, options.frontmatter) {
+        (None, _) => String::new(),
+        (Some(frontmatter), FrontmatterFormat::Toml) => toml::frontmatter(&frontmatter.mapping)?,
+        (Some(frontmatter), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
+    };
     let mut writer = Writer::new();
     writer.node(&document.kind, Construct::Document(document));
-    Ok(writer.finish())
+    text.push_str(&writer.finish());
+    Ok(text)
+}
+
+/// A date and time with no offset, such as `2026-10-10T07:32:00`, with the
+/// fraction of a second when it has one.
+fn push_local_date_time(out: &mut String, date_time: &NaiveDateTime) {
+    let _: fmt::Result = write!(out, "{}T{}", date_time.date(), date_time.time());
+}
+
+/// A date and time with its offset: `Z` for UTC, such as `+02:00` otherwise.
+fn push_date_time(out: &mut String, date_time: &DateTime<FixedOffset>) {
+    push_local_date_time(out, &date_time.naive_local());
+    let offset = date_time.offset();
+    if offset.local_minus_utc() == 0_i32 {
+        out.push('Z');
+    } else {
+        let _: fmt::Result = write!(out, "{offset}");
+    }
+}
+
+/// A finite float as the shortest text that reads back as it, with `.0`
+/// when that text would read as an integer.
+fn push_finite(out: &mut String, float: f64) {
+    let start = out.len();
+    let _: fmt::Result = write!(out, "{float}");
+    if !out[start..].contains('.') {
+        out.push_str(".0");
+    }
 }
 
 /// The length of the longest run of backticks in `text`.

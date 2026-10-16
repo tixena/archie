@@ -15,7 +15,7 @@ mod html;
 pub(crate) mod inline;
 mod lexer;
 mod line;
-mod scalar;
+pub(crate) mod scalar;
 mod table;
 mod toml;
 mod yaml;
