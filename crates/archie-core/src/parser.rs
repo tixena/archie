@@ -84,18 +84,20 @@ where
     T: Extension,
 {
     let (frontmatter, body_start) = frontmatter::parse(source)?;
+    let (body, _, cells) = block::parse(source, body_start);
     let mut document = Document {
-        body: block::parse(source, body_start).0,
+        body,
         frontmatter,
         kind: Kind(None),
         span: 0..source.len(),
     };
     let context = Context {
         column: 0,
+        lines: None,
         source,
         strict: options.on_extension_error == OnExtensionError::Fail,
     };
-    claim::document(&mut document, &context)?;
+    claim::document(&mut document, &context, &cells)?;
     Ok(document)
 }
 

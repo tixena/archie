@@ -573,9 +573,10 @@ fn unquote(line: &str) -> &str {
     rest.strip_prefix(' ').unwrap_or(rest)
 }
 
-/// Reads `lines`, ranges of `source`, as consecutive lines of one text, the
-/// way `lex` reads a file. Spans count from the start of `source`.
-pub fn lex_lines(source: &str, lines: &[Range<usize>]) -> Vec<Token> {
+/// Reads `lines`, ranges of `source`, as consecutive lines of one text, each
+/// with at most `base` of its leading spaces left out, the way `lex_from`
+/// reads a file. Spans count from the start of `source`.
+pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize) -> Vec<Token> {
     let mut starts = Vec::with_capacity(lines.len());
     let mut text = String::new();
     for line in lines {
@@ -594,7 +595,7 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>]) -> Vec<Token> {
             .zip(starts.get(index))
             .map_or(at, |(line, &start)| line.start + (at - start))
     };
-    let mut tokens = lex_from(&text, 0, 0);
+    let mut tokens = lex_from(&text, 0, base);
     for token in &mut tokens {
         token.span = place(token.span.start)..place(token.span.end);
         match &mut token.kind {

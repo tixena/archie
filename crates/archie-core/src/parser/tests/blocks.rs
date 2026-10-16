@@ -1609,7 +1609,7 @@ fn a_link_definition_gives_no_node_and_the_parser_keeps_its_destination() {
   'title'
 ";
     check(source, "Document\n  MarkdownBlock\n");
-    let (_, definitions) = block::parse::<Markdown>(source, 0);
+    let (_, definitions, _) = block::parse::<Markdown>(source, 0);
     let mut found: Vec<(&str, &str)> = definitions
         .iter()
         .map(|(label, target)| (label.as_str(), target.as_str()))
@@ -1655,7 +1655,7 @@ text
           Text "\"t\" more"
 "#,
     );
-    let (_, definitions) = block::parse::<Markdown>(source, 0);
+    let (_, definitions, _) = block::parse::<Markdown>(source, 0);
     assert_eq!(definitions.len(), 1);
     assert_eq!(definitions.get("c").map(String::as_str), Some("/u"));
 }
@@ -1706,7 +1706,7 @@ fn inside_a_list_item_each_construct_counts_columns_from_the_item_text() {
               ThematicBreak
 "#,
     );
-    let (_, definitions) = block::parse::<Markdown>(source, 0);
+    let (_, definitions, _) = block::parse::<Markdown>(source, 0);
     assert_eq!(definitions.get("x").map(String::as_str), Some("/u"));
 }
 

@@ -9,12 +9,15 @@ use std::collections::HashMap;
 
 use crate::parser::ast::{
     Block, BlockQuote, CodeBlock, Heading, Html, Inline, Item, Kind, Line, List, MarkdownBlock,
-    Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak,
+    Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text, ThematicBreak,
 };
 use crate::parser::extension::Extension;
 use crate::parser::inline::line;
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
 use crate::parser::table::{Cell, RowToken, TableToken};
+
+/// Each grid cell's lines, as ranges of the source, by the cell's span.
+pub type Cells = HashMap<Range<usize>, Vec<Range<usize>>>;
 
 /// Where a markdown block has blank lines: between two of its blocks, or at
 /// its end. A list is loose by them.
@@ -35,6 +38,7 @@ where
 }
 
 struct Parser<'src, E> {
+    cells: Cells,
     /// Each link definition's destination, by its folded label.
     definitions: HashMap<String, String>,
     extension: PhantomData<E>,
@@ -59,16 +63,18 @@ where
     E: Extension,
 {
     /// A cell holds the markdown block its lines read as, one after another.
-    fn cell(&self, cell: &Cell) -> TableCell<E> {
+    fn cell(&mut self, cell: &Cell) -> TableCell<E> {
         let span = cell.span();
         let mut parser = Self {
+            cells: Cells::new(),
             definitions: self.definitions.clone(),
             extension: PhantomData,
             pos: 0,
             source: self.source,
-            tokens: lex_lines(self.source, &cell.lines),
+            tokens: lex_lines(self.source, &cell.lines, 0),
         };
         let (body, _) = parser.markdown_block(span.start);
+        self.cells.extend(parser.cells);
         TableCell {
             body,
             kind: Kind(None),
@@ -273,7 +279,7 @@ where
     }
 
     /// A row of `width` cells: a row with fewer gets empty cells at its end.
-    fn row(&self, row: &RowToken, width: usize) -> TableRow<E> {
+    fn row(&mut self, row: &RowToken, width: usize) -> TableRow<E> {
         let blank = Cell::line(row.span.end..row.span.end);
         let missing = width.saturating_sub(row.cells.len());
         TableRow {
@@ -296,8 +302,19 @@ where
             .is_none_or(|token| matches!(token.kind, TokenKind::ItemEnd))
     }
 
-    fn table(&self, table: TableToken, span: Range<usize>) -> Table<E> {
+    /// The table of `table`, keeping each grid cell's lines.
+    fn table(&mut self, table: TableToken, span: Range<usize>) -> Table<E> {
         let width = table.alignments.len();
+        if matches!(table.format, TableFormat::Grid) {
+            for cell in table
+                .head
+                .iter()
+                .chain(&table.rows)
+                .flat_map(|row| &row.cells)
+            {
+                self.cells.insert(cell.span(), cell.lines.clone());
+            }
+        }
         Table {
             alignments: table.alignments,
             format: table.format,
@@ -385,9 +402,9 @@ where
 }
 
 /// The markdown block that starts at byte `start` of `source`, with no node
-/// claimed yet, and its link definitions. It spans everything from `start`
-/// to the end of `source`.
-pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, HashMap<String, String>)
+/// claimed yet, its link definitions and its grid cells' lines. It spans
+/// everything from `start` to the end of `source`.
+pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, HashMap<String, String>, Cells)
 where
     E: Extension,
 {
@@ -395,31 +412,57 @@ where
 }
 
 /// The markdown block that starts at byte `start` of `source`, each line read
-/// with at most `base` of its leading spaces left out, and its link
-/// definitions: each destination by its label, folded.
+/// with at most `base` of its leading spaces left out, its link definitions,
+/// each destination by its label, folded, and its grid cells' lines.
 pub fn parse_from<E>(
     source: &str,
     start: usize,
     base: usize,
-) -> (MarkdownBlock<E>, HashMap<String, String>)
+) -> (MarkdownBlock<E>, HashMap<String, String>, Cells)
 where
     E: Extension,
 {
-    let tokens = lex_from(source, start, base);
+    read(source, lex_from(source, start, base), start..source.len())
+}
+
+/// The markdown block written on `lines`, ranges of `source` read as
+/// consecutive lines, each with at most `base` of its leading spaces left
+/// out, with its link definitions and its grid cells' lines. It spans `span`.
+pub fn parse_lines<E>(
+    source: &str,
+    lines: &[Range<usize>],
+    base: usize,
+    span: Range<usize>,
+) -> (MarkdownBlock<E>, HashMap<String, String>, Cells)
+where
+    E: Extension,
+{
+    read(source, lex_lines(source, lines, base), span)
+}
+
+fn read<E>(
+    source: &str,
+    tokens: Vec<Token>,
+    span: Range<usize>,
+) -> (MarkdownBlock<E>, HashMap<String, String>, Cells)
+where
+    E: Extension,
+{
     let mut parser = Parser {
+        cells: Cells::new(),
         definitions: definitions(&tokens),
         extension: PhantomData,
         pos: 0,
         source,
         tokens,
     };
-    let (body, _) = parser.markdown_block(start);
+    let (body, _) = parser.markdown_block(span.start);
     let block = MarkdownBlock {
         kind: Kind(None),
         sections: body.sections,
-        span: start..source.len(),
+        span,
     };
-    (block, parser.definitions)
+    (block, parser.definitions, parser.cells)
 }
 
 /// The link definitions among `tokens`, each destination by its label

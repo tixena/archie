@@ -60,12 +60,17 @@ where
 }
 
 /// What an extension reads a construct with: where the construct starts on
-/// its line, the source text, and whether the parse is strict.
+/// its line, the lines of the grid cell it lies in, the source text, and
+/// whether the parse is strict.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Context<'text> {
-    /// The column the offered construct's first line starts at.
+    /// The column the offered construct's first line starts at, counted
+    /// from the start of its cell's line in a grid cell.
     pub column: usize,
+    /// The lines of the grid cell the offered construct lies in, as ranges
+    /// of the source, or `None` outside grid cells.
+    pub lines: Option<&'text [Range<usize>]>,
     pub source: &'text str,
     pub strict: bool,
 }
@@ -73,7 +78,8 @@ pub struct Context<'text> {
 impl Context<'_> {
     /// Reads `range` of the source as a markdown block, with the extensions
     /// `T`, each line with at most `column` of its leading spaces left out.
-    /// Spans count from the start of the source.
+    /// In a grid cell, only the parts of `range` on the cell's lines are
+    /// read, one after another. Spans count from the start of the source.
     ///
     /// # Errors
     ///
@@ -83,8 +89,13 @@ impl Context<'_> {
     where
         T: Extension,
     {
-        let (mut read, _) = block::parse_from(&self.source[..range.end], range.start, self.column);
-        claim::markdown_block(&mut read, self)?;
+        let (mut read, _, cells) = match self.lines {
+            Some(lines) => {
+                block::parse_lines(self.source, &within(lines, &range), self.column, range)
+            }
+            None => block::parse_from(&self.source[..range.end], range.start, self.column),
+        };
+        claim::markdown_block(&mut read, self, &cells)?;
         Ok(read)
     }
 }
@@ -173,3 +184,12 @@ where
 /// The extension set archie parses with: its own markdown extension first,
 /// then the consumer's.
 pub type With<E> = (Markdown, E);
+
+/// The part of `range` on each of `lines` that it reaches.
+fn within(lines: &[Range<usize>], range: &Range<usize>) -> Vec<Range<usize>> {
+    lines
+        .iter()
+        .filter(|line| line.start <= range.end && range.start <= line.end)
+        .map(|line| line.start.max(range.start)..line.end.min(range.end))
+        .collect()
+}
