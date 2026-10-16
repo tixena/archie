@@ -15,7 +15,7 @@ Document
               Scalar String "Grace Hopper"
             Pair key=role
               Scalar String "reviewer"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Weekly sync"

@@ -53,7 +53,7 @@ pub struct Document<E = Plain>
 where
     E: Extension,
 {
-    pub body: Body<E>,
+    pub body: MarkdownBlock<E>,
     pub frontmatter: Option<Frontmatter>,
     pub span: Range<usize>,
 }
@@ -176,14 +176,15 @@ pub struct DateTime {
     pub time: Time,
 }
 
-/// Everything after the frontmatter.
+/// A stretch of markdown read by the same rules: the body, a list item's
+/// content, a table cell's content.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Body<E = Plain>
+pub struct MarkdownBlock<E = Plain>
 where
     E: Extension,
 {
-    pub children: Vec<Block<E>>,
+    pub sections: Vec<Section<E>>,
     pub span: Range<usize>,
 }
 
@@ -197,7 +198,6 @@ where
     CodeBlock(CodeBlock<E>),
     List(List<E>),
     Paragraph(Paragraph),
-    Section(Section<E>),
     Table(Table<E>),
 }
 
@@ -212,27 +212,27 @@ where
             Self::CodeBlock(code_block) => &code_block.span,
             Self::List(list) => &list.span,
             Self::Paragraph(paragraph) => &paragraph.span,
-            Self::Section(section) => &section.span,
             Self::Table(table) => &table.span,
         }
     }
 }
 
-/// A heading and everything under it, up to the next heading of the same
-/// or a higher level.
+/// A heading, the blocks under it, then its subsections. Its level is its
+/// depth in the `MarkdownBlock`. An empty heading has no children.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Section<E = Plain>
 where
     E: Extension,
 {
-    pub children: Vec<Block<E>>,
+    pub blocks: Vec<Block<E>>,
     pub heading: Heading,
-    pub level: u8,
     pub span: Range<usize>,
+    pub subsections: Vec<Self>,
 }
 
-/// A heading line, such as `# Ship parser`.
+/// A heading line, such as `# Ship parser`. An empty heading has no children
+/// and an empty span at the start of its section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Heading {
@@ -240,10 +240,18 @@ pub struct Heading {
     pub span: Range<usize>,
 }
 
-/// A run of text lines.
+/// A set of lines, ended by a blank line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Paragraph {
+    pub lines: Vec<Line>,
+    pub span: Range<usize>,
+}
+
+/// One line of a paragraph and the inline nodes written on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Line {
     pub children: Vec<Inline>,
     pub span: Range<usize>,
 }
@@ -266,7 +274,7 @@ pub struct Item<E = Plain>
 where
     E: Extension,
 {
-    pub children: Vec<Block<E>>,
+    pub body: MarkdownBlock<E>,
     pub span: Range<usize>,
 }
 
@@ -318,7 +326,7 @@ pub struct TableCell<E = Plain>
 where
     E: Extension,
 {
-    pub children: Vec<Block<E>>,
+    pub body: MarkdownBlock<E>,
     pub span: Range<usize>,
 }
 
@@ -367,7 +375,7 @@ impl Inline {
     }
 }
 
-/// Plain text. A line break inside a paragraph is a `\n` in `value`.
+/// Plain text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Text {

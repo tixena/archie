@@ -1,10 +1,24 @@
 Document
-  Body
-    Paragraph
-      Text "Markdown began as a way to write for the web without writing HTML. It was never\ngiven a grammar, only a description and a script, and every tool since has had\nto decide for itself what the description meant."
-    Paragraph
-      Text "That is *why* two tools can disagree about the same file. One reads an indented\nline as code; another reads it as the end of a list. Neither is wrong, because\nnothing says which is right."
-    Paragraph
-      Text "> A format with no grammar is a format with as many grammars as it has readers."
-    Paragraph
-      Text "The rest of this essay is about living with that."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Markdown began as a way to write for the web without writing HTML. It was never"
+        Line
+          Text "given a grammar, only a description and a script, and every tool since has had"
+        Line
+          Text "to decide for itself what the description meant."
+      Paragraph
+        Line
+          Text "That is *why* two tools can disagree about the same file. One reads an indented"
+        Line
+          Text "line as code; another reads it as the end of a list. Neither is wrong, because"
+        Line
+          Text "nothing says which is right."
+      Paragraph
+        Line
+          Text "> A format with no grammar is a format with as many grammars as it has readers."
+      Paragraph
+        Line
+          Text "The rest of this essay is about living with that."

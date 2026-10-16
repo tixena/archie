@@ -5,9 +5,12 @@ fn a_file_with_no_delimiter_on_its_first_line_has_no_frontmatter() {
     check(
         "Just text.\n",
         r#"Document
-  Body
-    Paragraph
-      Text "Just text."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Just text."
 "#,
     );
 }
@@ -22,11 +25,17 @@ title: x
 No closing line.
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "---\ntitle: x"
-    Paragraph
-      Text "No closing line."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "---"
+        Line
+          Text "title: x"
+      Paragraph
+        Line
+          Text "No closing line."
 "#,
     );
 }
@@ -42,9 +51,12 @@ Body.
         r#"Document
   Frontmatter format=Toml
     Mapping
-  Body
-    Paragraph
-      Text "Body."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Body."
 "#,
     );
 }
@@ -60,13 +72,18 @@ Text.
 More.
 ",
         r#"Document
-  Body
-    Paragraph
-      Text "Text."
-    Paragraph
-      Text "---"
-    Paragraph
-      Text "More."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Text."
+      Paragraph
+        Line
+          Text "---"
+      Paragraph
+        Line
+          Text "More."
 "#,
     );
 }
@@ -85,7 +102,7 @@ Document
     Mapping
       Pair key=a
         Scalar Integer 1
-  Body
+  MarkdownBlock
 ",
     );
 }
@@ -99,14 +116,20 @@ fn windows_line_endings_read_the_same() {
     Mapping
       Pair key=title
         Scalar String "x"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "H"
       List
         Item
-          Paragraph
-            Text "a\nb"
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+                Line
+                  Text "b"
 "#,
     );
 }
@@ -121,7 +144,7 @@ Document
     Mapping
       Pair key=a
         Scalar Integer 1
-  Body
+  MarkdownBlock
 ",
     );
 }
@@ -136,15 +159,22 @@ Document
     Mapping
       Pair key=a
         Scalar Integer 1
-  Body
+  MarkdownBlock
 ",
     );
     check(
         " ---\na: 1\n---\n",
         r#"Document
-  Body
-    Paragraph
-      Text "---\na: 1\n---"
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "---"
+        Line
+          Text "a: 1"
+        Line
+          Text "---"
 "#,
     );
 }

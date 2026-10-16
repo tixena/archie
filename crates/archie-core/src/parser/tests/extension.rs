@@ -87,11 +87,12 @@ fn comment(block: &FencedCode<'_>) -> Result<Comment, ParseError> {
 fn code_blocks(document: &Document<Comments>) -> Vec<&CodeBlock<Comments>> {
     document
         .body
-        .children
+        .sections
         .iter()
+        .flat_map(|section| &section.blocks)
         .filter_map(|block| match block {
             Block::CodeBlock(code_block) => Some(code_block),
-            Block::List(_) | Block::Paragraph(_) | Block::Section(_) | Block::Table(_) => None,
+            Block::List(_) | Block::Paragraph(_) | Block::Table(_) => None,
         })
         .collect()
 }

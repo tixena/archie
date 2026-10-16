@@ -1,85 +1,151 @@
 Document
-  Body
-    Paragraph
-      Text "<p align=\"center\">\n<img src=\"logo.svg\" width=\"120\" alt=\"logo\">\n</p>"
-    Section level=1
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "<p align=\"center\">"
+        Line
+          Text "<img src=\"logo.svg\" width=\"120\" alt=\"logo\">"
+        Line
+          Text "</p>"
+    Section
       Heading
         Text "quill"
       Paragraph
-        Link form=Markdown target="https://example.com/ci"
-          Image form=Markdown target="https://img.shields.io/badge/build-passing-green.svg" alt="build"
-        Text "\n"
-        Link form=Markdown target="https://example.com/docs"
-          Image form=Markdown target="https://img.shields.io/badge/docs-online-blue.svg" alt="docs"
+        Line
+          Link form=Markdown target="https://example.com/ci"
+            Image form=Markdown target="https://img.shields.io/badge/build-passing-green.svg" alt="build"
+        Line
+          Link form=Markdown target="https://example.com/docs"
+            Image form=Markdown target="https://img.shields.io/badge/docs-online-blue.svg" alt="docs"
       Paragraph
-        Text "quill reads markdown files into a **typed tree**."
-      Section level=2
+        Line
+          Text "quill reads markdown files into a **typed tree**."
+      Section
         Heading
           Text "Install"
         CodeBlock info="console" value="$ cargo install quill"
-      Section level=2
+      Section
         Heading
           Text "Features"
         List
           Item
-            Paragraph
-              Text "Frontmatter in two syntaxes"
-            List
-              Item
+            MarkdownBlock
+              Section
+                Heading
                 Paragraph
-                  Text "TOML between "
-                  Code "+++"
-                  Text " lines"
-              Item
+                  Line
+                    Text "Frontmatter in two syntaxes"
+                List
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "TOML between "
+                            Code "+++"
+                            Text " lines"
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "YAML between "
+                            Code "---"
+                            Text " lines"
+          Item
+            MarkdownBlock
+              Section
+                Heading
                 Paragraph
-                  Text "YAML between "
-                  Code "---"
-                  Text " lines"
+                  Line
+                    Text "A body grammar that is context-free"
           Item
-            Paragraph
-              Text "A body grammar that is context-free"
-          Item
-            Paragraph
-              Text "Byte ranges on every node"
-      Section level=2
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Byte ranges on every node"
+      Section
         Heading
           Text "Comparison"
         Table format=Pipe alignments=Default,Default,Default
           TableRow head
             TableCell
-              Paragraph
-                Text "Tool"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "Tool"
             TableCell
-              Paragraph
-                Text "Frontmatter"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "Frontmatter"
             TableCell
-              Paragraph
-                Text "Tree"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "Tree"
           TableRow
             TableCell
-              Paragraph
-                Text "quill"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "quill"
             TableCell
-              Paragraph
-                Text "TOML, YAML"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "TOML, YAML"
             TableCell
-              Paragraph
-                Text "yes"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "yes"
           TableRow
             TableCell
-              Paragraph
-                Text "other"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "other"
             TableCell
-              Paragraph
-                Text "YAML"
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "YAML"
             TableCell
-              Paragraph
-                Text "no"
-      Section level=2
+              MarkdownBlock
+                Section
+                  Heading
+                  Paragraph
+                    Line
+                      Text "no"
+      Section
         Heading
           Text "Contributing"
         Paragraph
-          Text "Open an issue first. See "
-          Link form=Markdown target="CONTRIBUTING.md"
-            Text "CONTRIBUTING"
-          Text "."
+          Line
+            Text "Open an issue first. See "
+            Link form=Markdown target="CONTRIBUTING.md"
+              Text "CONTRIBUTING"
+            Text "."

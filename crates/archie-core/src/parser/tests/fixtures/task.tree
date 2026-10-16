@@ -25,39 +25,65 @@ Document
           Scalar String "grace"
       Pair key=blocked_by
         Sequence
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Write the body lexer"
       Paragraph
-        Text "Turn body lines into tokens. Depends on "
-        Link form=Wiki target="tree"
-        Text "."
-      Section level=2
+        Line
+          Text "Turn body lines into tokens. Depends on "
+          Link form=Wiki target="tree"
+          Text "."
+      Section
         Heading
           Text "Checklist"
         List
           Item
-            Paragraph
-              Text "[x] Blank and text lines"
-          Item
-            Paragraph
-              Text "[x] Headings"
-          Item
-            Paragraph
-              Text "[ ] List items"
-            List
-              Item
+            MarkdownBlock
+              Section
+                Heading
                 Paragraph
-                  Text "[ ] nested items"
-              Item
-                Paragraph
-                  Text "[ ] continuation lines"
+                  Line
+                    Text "[x] Blank and text lines"
           Item
-            Paragraph
-              Text "[ ] Fenced code blocks"
-      Section level=2
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[x] Headings"
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[ ] List items"
+                List
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "[ ] nested items"
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "[ ] continuation lines"
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "[ ] Fenced code blocks"
+      Section
         Heading
           Text "Notes"
         Paragraph
-          Text "Indentation is counted in spaces only."
+          Line
+            Text "Indentation is counted in spaces only."

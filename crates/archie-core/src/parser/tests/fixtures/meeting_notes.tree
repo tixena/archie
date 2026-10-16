@@ -22,36 +22,63 @@ Document
         Scalar Null
       Pair key=follow_up
         Scalar DateTime 2026-10-09T10:00:00-04:00
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Weekly sync"
-      Section level=2
+      Section
         Heading
           Text "Agenda"
         List
           Item
-            Paragraph
-              Text "Parser status\nThe lexer is done."
-            Paragraph
-              Text "The grammar document is next."
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Parser status"
+                  Line
+                    Text "The lexer is done."
+                Paragraph
+                  Line
+                    Text "The grammar document is next."
           Item
-            Paragraph
-              Text "Open questions"
-            List
-              Item
+            MarkdownBlock
+              Section
+                Heading
                 Paragraph
-                  Text "Which YAML features to read?"
-              Item
-                Paragraph
-                  Text "Where do findings go?"
-      Section level=2
+                  Line
+                    Text "Open questions"
+                List
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "Which YAML features to read?"
+                  Item
+                    MarkdownBlock
+                      Section
+                        Heading
+                        Paragraph
+                          Line
+                            Text "Where do findings go?"
+      Section
         Heading
           Text "Action items"
         List
           Item
-            Paragraph
-              Text "Ada: write the grammar document"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Ada: write the grammar document"
           Item
-            Paragraph
-              Text "Grace: review the tree"
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Grace: review the tree"

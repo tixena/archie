@@ -9,9 +9,10 @@ Document
           Scalar String "Grace Hopper"
       Pair key=abstract
         Scalar String "Markdown has no grammar.\nThis paper gives it one.\n"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Introduction"
       Paragraph
-        Text "Markdown has no grammar."
+        Line
+          Text "Markdown has no grammar."

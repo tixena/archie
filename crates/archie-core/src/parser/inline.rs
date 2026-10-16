@@ -3,7 +3,7 @@
 use core::mem;
 use core::ops::Range;
 
-use crate::parser::ast::{Code, Image, Inline, Link, LinkForm, Text};
+use crate::parser::ast::{Code, Image, Inline, Line, Link, LinkForm, Text};
 
 /// Where the parts of a `[text](destination)` are.
 struct Bracketed {
@@ -183,19 +183,14 @@ impl<'src> Scanner<'src> {
     }
 }
 
-/// The inline nodes of consecutive text lines. A line break between two
-/// lines is a `\n` in the text.
-pub fn inlines(source: &str, lines: &[Range<usize>]) -> Vec<Inline> {
+/// The inline nodes written on one line.
+pub fn line(source: &str, range: Range<usize>) -> Line {
     let mut scanner = Scanner::new(source, true);
-    let mut previous_end: Option<usize> = None;
-    for line in lines {
-        if let Some(end) = previous_end {
-            scanner.push_text(end..line.start, "\n");
-        }
-        scanner.line(line.clone());
-        previous_end = Some(line.end);
+    scanner.line(range.clone());
+    Line {
+        children: scanner.finish(),
+        span: range,
     }
-    scanner.finish()
 }
 
 /// `[[target]]` or `[[target|alias]]` starting at `at`. Neither part holds a

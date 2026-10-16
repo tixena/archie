@@ -52,8 +52,8 @@ aliases: [Parser, "The parser"]
         Sequence
           Scalar String "Parser"
           Scalar String "The parser"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Title"
 "#,
@@ -97,7 +97,7 @@ nothing:
           Scalar String "third"
       Pair key=nothing
         Scalar Null
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -114,7 +114,7 @@ text: "tab\there \"quoted\" A"
     Mapping
       Pair key=text
         Scalar String "tab\there \"quoted\" A"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -153,7 +153,7 @@ leading_dot: .5
         Scalar Boolean true
       Pair key=leading_dot
         Scalar String ".5"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -199,7 +199,7 @@ reactions:
                   Scalar String "ada"
                 Pair key=ts
                   Scalar DateTime 2026-10-01T10:00:00Z
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -228,7 +228,7 @@ fn a_key_written_twice_holds_a_list_of_both_values() {
         Sequence
           Scalar String "Draft"
           Scalar String "Final"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -257,7 +257,7 @@ labels: draft
           Scalar String "review"
           Scalar String "parser"
           Scalar String "draft"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -306,7 +306,7 @@ people:
           Mapping
             Pair key=name
               Scalar String "Linus"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -324,7 +324,7 @@ Document
           Scalar Integer 1
           Scalar Integer 2
           Scalar Integer 3
-  Body
+  MarkdownBlock
 ",
     );
 }
@@ -348,7 +348,7 @@ owner:
             Sequence
               Scalar String "Ada"
               Scalar String "Grace"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -366,7 +366,7 @@ fn a_key_written_again_keeps_its_first_place() {
           Scalar String "B"
       Pair key=other
         Scalar Integer 1
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -432,7 +432,7 @@ last: 1
         Scalar String "\n"
       Pair key=last
         Scalar Integer 1
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -456,7 +456,7 @@ text: >
     Mapping
       Pair key=text
         Scalar String "Folded into one line.\nA new paragraph,\n  kept as written,\nand folded again.\n"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -486,7 +486,7 @@ steps:
               Scalar String "x"
             Pair key=run
               Scalar String "a b"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -564,7 +564,7 @@ quoted: {"a b": 1, 'c': "d"}
             Scalar Integer 1
           Pair key=c
             Scalar String "d"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -616,7 +616,7 @@ listed: [!!str 1, !!int "2"]
           Scalar Integer 2
       Pair key=tagged key
         Scalar String ""
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -658,7 +658,7 @@ after: 1
         Scalar String "line\n"
       Pair key=after
         Scalar Integer 1
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -691,7 +691,7 @@ at: 2026-02-30T10:00:00Z
         Scalar Date 2000-02-29
       Pair key=at
         Scalar String "2026-02-30T10:00:00Z"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -727,8 +727,8 @@ due: 2026-02-30
         Scalar String "12"
       Pair key=due
         Scalar String "2026-02-30"
-  Body
-    Section level=1
+  MarkdownBlock
+    Section
       Heading
         Text "Notes"
 "#,
@@ -765,7 +765,7 @@ host: {name: Grace, role: host}
               Scalar String "Grace"
             Pair key=role
               Scalar String "host"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -783,7 +783,7 @@ fn a_key_written_twice_in_a_flow_mapping_holds_a_list() {
             Sequence
               Scalar String "Ada"
               Scalar String "Grace"
-  Body
+  MarkdownBlock
 "#,
     );
 }
@@ -812,7 +812,7 @@ fn a_block_scalar_spans_from_its_indicator_to_its_last_text() {
             ("Scalar Integer 1", "1"),
             ("Pair key=tag", "tag: !!str x"),
             (r#"Scalar String "x""#, "x"),
-            ("Body", ""),
+            ("MarkdownBlock", ""),
         ],
     );
 }

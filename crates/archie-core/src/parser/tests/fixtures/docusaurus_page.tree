@@ -15,18 +15,34 @@ Document
         Sequence
           Scalar String "markdown"
           Scalar String "parser"
-  Body
-    Paragraph
-      Text "import Tabs from '@theme/Tabs';"
-    Section level=1
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "import Tabs from '@theme/Tabs';"
+    Section
       Heading
         Text "Introduction"
       Paragraph
-        Text ":::note\nAdmonitions are not read; these lines stay text.\n:::"
+        Line
+          Text ":::note"
+        Line
+          Text "Admonitions are not read; these lines stay text."
+        Line
+          Text ":::"
       Paragraph
-        Text "<Tabs>\n<TabItem value=\"toml\" label=\"TOML\">TOML frontmatter</TabItem>\n<TabItem value=\"yaml\" label=\"YAML\">YAML frontmatter</TabItem>\n</Tabs>"
+        Line
+          Text "<Tabs>"
+        Line
+          Text "<TabItem value=\"toml\" label=\"TOML\">TOML frontmatter</TabItem>"
+        Line
+          Text "<TabItem value=\"yaml\" label=\"YAML\">YAML frontmatter</TabItem>"
+        Line
+          Text "</Tabs>"
       Paragraph
-        Text "Read the "
-        Link form=Markdown target="./install.md"
-          Text "next page"
-        Text "."
+        Line
+          Text "Read the "
+          Link form=Markdown target="./install.md"
+            Text "next page"
+          Text "."
