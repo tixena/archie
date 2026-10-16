@@ -8,33 +8,53 @@ use core::ops::Range;
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use tixschema::model_schema;
 
-use crate::parser::extension::{Extension, Markdown};
+use crate::parser::extension::{Extension, Markdown, markdown_schema};
 
 /// The type an extension gave a node, or `None`. Boxed, because a markdown
 /// block can hold a markdown block.
+///
+/// JSON leaves it out: the claim pass builds it again from the plain node
+/// under it. Editing it leaves that plain node as it was, so a store writes
+/// each claimed node back into its plain node before it writes the tree.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Kind<E>(pub Option<Box<E::Node<E>>>)
 where
     E: Extension;
 
+impl<E> Default for Kind<E>
+where
+    E: Extension,
+{
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
 /// A whole markdown file.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Document<E = Markdown>
 where
     E: Extension,
 {
     pub body: MarkdownBlock<E>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frontmatter: Option<Frontmatter>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// The metadata block at the top of a file: TOML between `+++` lines or
 /// YAML between `---` lines.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Frontmatter {
     pub format: FrontmatterFormat,
@@ -43,7 +63,8 @@ pub struct Frontmatter {
 }
 
 /// The syntax a frontmatter block is written in.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[model_schema()]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum FrontmatterFormat {
     Toml,
@@ -52,7 +73,8 @@ pub enum FrontmatterFormat {
 }
 
 /// Keys and their values, in the order they were written. A key appears once.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Mapping {
     pub pairs: IndexMap<String, Pair>,
@@ -62,7 +84,8 @@ pub struct Mapping {
 /// The value under one key of a mapping. Its span runs from the key to the
 /// end of the value, at the key's first occurrence. `repeats` holds the span
 /// of each later occurrence of the same key, in file order.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Pair {
     pub repeats: Vec<Range<usize>>,
@@ -71,7 +94,8 @@ pub struct Pair {
 }
 
 /// What a key maps to, or what a sequence holds.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Value {
     Mapping(Mapping),
@@ -92,7 +116,8 @@ impl Value {
 }
 
 /// An ordered list of values, such as `["parser", "design"]`.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Sequence {
     pub items: Vec<Value>,
@@ -100,7 +125,8 @@ pub struct Sequence {
 }
 
 /// A single value, such as `2` or `"task"`.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Scalar {
     pub span: Range<usize>,
@@ -108,7 +134,8 @@ pub struct Scalar {
 }
 
 /// The typed content of a scalar.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ScalarValue {
     Boolean(bool),
@@ -127,19 +154,24 @@ pub enum ScalarValue {
 
 /// A stretch of markdown read by the same rules: the body, a list item's
 /// content, a table cell's content, a markdown code block's content.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct MarkdownBlock<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub sections: Vec<Section<E>>,
     pub span: Range<usize>,
 }
 
 /// A node that stands on its own lines.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub enum Block<E = Markdown>
 where
@@ -174,12 +206,15 @@ where
 }
 
 /// Quoted text, without its `>` marks. Nothing inside it is read.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct BlockQuote<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
@@ -187,32 +222,40 @@ where
 
 /// Raw HTML, as written: a block, or an inline node such as `<span>`. A
 /// block's `continues` is always `Continues::Neither`.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Html<E = Markdown>
 where
     E: Extension,
 {
     pub continues: Continues,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
 }
 
 /// A line of three or more `-`, `*` or `_`, such as `---`.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct ThematicBreak<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// A heading, the blocks under it, then its subsections. Its level is its
 /// depth in the `MarkdownBlock`. An empty heading has no children.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Section<E = Markdown>
 where
@@ -220,6 +263,7 @@ where
 {
     pub blocks: Vec<Block<E>>,
     pub heading: Heading<E>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub subsections: Vec<Self>,
@@ -227,37 +271,46 @@ where
 
 /// A heading line, such as `# Ship parser`. An empty heading has no children
 /// and an empty span at the start of its section.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Heading<E = Markdown>
 where
     E: Extension,
 {
     pub children: Vec<Inline<E>>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// A set of lines, ended by a blank line.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Paragraph<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub lines: Vec<Line<E>>,
     pub span: Range<usize>,
 }
 
 /// One line of a paragraph and the inline nodes written on it.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Line<E = Markdown>
 where
     E: Extension,
 {
     pub children: Vec<Inline<E>>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
@@ -268,27 +321,34 @@ where
 /// their number. `start` is an ordered list's first number, `None` for a
 /// bullet list. `loose` is set when a blank line separates two items, or two
 /// blocks of one item.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct List<E = Markdown>
 where
     E: Extension,
 {
     pub items: Vec<Item<E>>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub loose: bool,
     pub span: Range<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<u64>,
 }
 
 /// One entry of a list.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Item<E = Markdown>
 where
     E: Extension,
 {
     pub body: MarkdownBlock<E>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
@@ -299,7 +359,9 @@ where
 /// `content` is the range of those lines in the source, `info` the text after
 /// the opening fence, empty for an indented block, and `value` the lines as
 /// the block holds them.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct CodeBlock<E = Markdown>
 where
@@ -307,6 +369,7 @@ where
 {
     pub content: Range<usize>,
     pub info: String,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
@@ -314,7 +377,9 @@ where
 
 /// A table read from pipe, grid or simple table syntax. `head` holds the
 /// header rows, `rows` the rest.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Table<E = Markdown>
 where
@@ -323,37 +388,45 @@ where
     pub alignments: Vec<Alignment>,
     pub format: TableFormat,
     pub head: Vec<TableRow<E>>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub rows: Vec<TableRow<E>>,
     pub span: Range<usize>,
 }
 
 /// One row of a table.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct TableRow<E = Markdown>
 where
     E: Extension,
 {
     pub cells: Vec<TableCell<E>>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// One cell of a table row.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct TableCell<E = Markdown>
 where
     E: Extension,
 {
     pub body: MarkdownBlock<E>,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// How a column's cells are aligned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[model_schema()]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Alignment {
     Center,
@@ -363,7 +436,8 @@ pub enum Alignment {
 }
 
 /// The syntax a table is written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[model_schema()]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum TableFormat {
     /// `+---+` borders and `|` walls.
@@ -375,7 +449,9 @@ pub enum TableFormat {
 }
 
 /// A node inside a line of text.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub enum Inline<E = Markdown>
 where
@@ -414,7 +490,8 @@ where
 /// Whether an inline node goes on from the line before or into the line
 /// after. A node written across lines of a paragraph is cut into one piece
 /// per line.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[model_schema()]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Continues {
     /// A middle piece: it goes on from the line before and into the line after.
@@ -429,19 +506,24 @@ pub enum Continues {
 }
 
 /// Plain text.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Text<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
 }
 
 /// Text between `*` or `_`, such as `*a*`.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Emphasis<E = Markdown>
 where
@@ -449,12 +531,15 @@ where
 {
     pub children: Vec<Inline<E>>,
     pub continues: Continues,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// Text between `**` or `__`, such as `**b**`.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Strong<E = Markdown>
 where
@@ -462,18 +547,22 @@ where
 {
     pub children: Vec<Inline<E>>,
     pub continues: Continues,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// A hard line break: the two or more spaces, or the backslash, that end a
 /// line followed by another line of its paragraph.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct LineBreak<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
 }
@@ -484,7 +573,9 @@ where
 /// `children` are the text shown, and are empty for `[[target]]`. A
 /// reference link takes its target and title from its label's definition.
 /// `target` and `title` hold their escapes and references resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Link<E = Markdown>
 where
@@ -493,14 +584,17 @@ where
     pub children: Vec<Inline<E>>,
     pub continues: Continues,
     pub form: LinkForm,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
 /// How a link or an image is written.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[model_schema()]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum LinkForm {
     /// `[text](target)`, or `![alt](target)` for an image.
@@ -513,7 +607,9 @@ pub enum LinkForm {
 ///
 /// `alt` is empty when none is written. `target` and `title` hold their
 /// escapes and references resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Image<E = Markdown>
 where
@@ -522,20 +618,25 @@ where
     pub alt: String,
     pub continues: Continues,
     pub form: LinkForm,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
 /// Text between backticks, such as `` `archie check` ``.
-#[derive(Debug, Clone, PartialEq)]
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
 #[non_exhaustive]
 pub struct Code<E = Markdown>
 where
     E: Extension,
 {
     pub continues: Continues,
+    #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,

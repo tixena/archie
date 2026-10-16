@@ -10,6 +10,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["zod", "jsonschema"]
+# Feature flags mirrored from tixschema so its proc macro expands
+# cfg(feature = "...") checks successfully in this crate's scope.
+zod = []
+jsonschema = []
+
 [dependencies]
 # Error handling
 thiserror.workspace = true
@@ -25,3 +32,10 @@ unicase.workspace = true
 
 # Unicode general categories, for emphasis delimiter runs
 unicode-properties.workspace = true
+
+# Serialization of the tree, to JSON and back
+serde.workspace = true
+serde_json.workspace = true
+
+# TypeScript type + Zod schema generation from Rust models
+tixschema.workspace = true

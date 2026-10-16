@@ -8,6 +8,7 @@ mod example;
 mod extension;
 mod frontmatter;
 mod inlines;
+mod json;
 mod spans;
 mod tables;
 mod toml;

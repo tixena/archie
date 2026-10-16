@@ -5,6 +5,8 @@ use core::convert::Infallible;
 use core::fmt::Debug;
 use core::ops::Range;
 
+use tixschema::model_schema;
+
 use crate::parser::ast::{
     BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Item, Line, LineBreak,
     Link, List, MarkdownBlock, Paragraph, Section, Strong, Table, TableCell, TableRow, Text,
@@ -141,6 +143,7 @@ impl Extension for Plain {
 
 /// archie's own extension: a fenced block whose info string starts with the
 /// word `markdown` or `md`, in any case, holds a `MarkdownBlock`.
+#[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Markdown;

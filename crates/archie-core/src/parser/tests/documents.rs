@@ -1,16 +1,20 @@
 //! Whole documents. Each is a file under `fixtures/`, with the outline of
-//! the tree it parses into beside it in a `.tree` file.
+//! the tree it parses into beside it in a `.tree` file. Each reads back from
+//! JSON as that tree, every `kind` empty.
 
 use super::check;
+use super::json::reads_back_from_json;
 
 macro_rules! document {
     ($name:ident) => {
         #[test]
         fn $name() {
+            let source = include_str!(concat!("fixtures/", stringify!($name), ".md"));
             check(
-                include_str!(concat!("fixtures/", stringify!($name), ".md")),
+                source,
                 include_str!(concat!("fixtures/", stringify!($name), ".tree")),
             );
+            reads_back_from_json(source);
         }
     };
 }

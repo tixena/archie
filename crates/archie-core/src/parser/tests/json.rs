@@ -1,0 +1,229 @@
+//! The tree written to JSON and read back, and the TypeScript its types
+//! publish. The JSON holds the markdown's own tree: no node writes its
+//! `kind`, and the claim pass builds it again.
+
+use std::collections::HashMap;
+
+use crate::parser::ast::{
+    Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, Heading, Html, Image,
+    Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock, Pair, Paragraph,
+    Scalar, Section, Sequence, Strong, Table, TableCell, TableRow, Text, ThematicBreak,
+};
+use crate::parser::claim;
+use crate::parser::extension::Context;
+use crate::parser::parse;
+
+/// Parses `source`, writes the tree to JSON and reads it back: the same
+/// tree, every `kind` empty.
+pub(super) fn reads_back_from_json(source: &str) {
+    let mut parsed = parse(source).unwrap();
+    let json = serde_json::to_string(&parsed).unwrap();
+    let back: Document = serde_json::from_str(&json).unwrap();
+    unclaim(&mut parsed);
+    assert_eq!(back, parsed);
+}
+
+#[test]
+fn the_sample_document_reads_back_from_json() {
+    let document = parse("---\ntitle: Notes\n---\n# A\ntext\n").unwrap();
+    let json = serde_json::to_string(&document).unwrap();
+    assert_eq!(
+        json,
+        concat!(
+            r#"{"body":{"sections":[{"blocks":[{"Paragraph":{"lines":[{"children":[{"Text":"#,
+            r#"{"span":{"start":25,"end":29},"value":"text"}}],"span":{"start":25,"end":29}}],"#,
+            r#""span":{"start":25,"end":29}}}],"heading":{"children":[{"Text":"#,
+            r#"{"span":{"start":23,"end":24},"value":"A"}}],"span":{"start":21,"end":24}},"#,
+            r#""span":{"start":21,"end":29},"subsections":[]}],"span":{"start":21,"end":30}},"#,
+            r#""frontmatter":{"format":"Yaml","mapping":{"pairs":{"title":{"repeats":[],"#,
+            r#""span":{"start":4,"end":16},"value":{"Scalar":{"span":{"start":11,"end":16},"#,
+            r#""value":{"String":"Notes"}}}}},"span":{"start":4,"end":16}},"#,
+            r#""span":{"start":0,"end":20}},"span":{"start":0,"end":30}}"#,
+        )
+    );
+    let back: Document = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, document);
+}
+
+#[test]
+fn a_span_is_written_as_its_start_and_its_end() {
+    let text: Text = Text {
+        kind: Kind(None),
+        span: 2..6,
+        value: "text".to_owned(),
+    };
+    assert_eq!(
+        serde_json::to_string(&text).unwrap(),
+        r#"{"span":{"start":2,"end":6},"value":"text"}"#
+    );
+}
+
+#[test]
+fn the_claim_pass_builds_a_claimed_block_again_from_json() {
+    let source = "```markdown\n# Inner\n```\n";
+    let parsed = parse(source).unwrap();
+    let mut back: Document =
+        serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+    let claimed = |document: &Document| {
+        matches!(
+            &document.body.sections[0].blocks[0],
+            Block::CodeBlock(block) if block.kind.0.is_some()
+        )
+    };
+    assert!(claimed(&parsed));
+    assert!(!claimed(&back));
+    let context = Context {
+        column: 0,
+        lines: None,
+        source,
+        strict: false,
+    };
+    claim::document(&mut back, &context, &HashMap::new()).unwrap();
+    assert_eq!(back, parsed);
+}
+
+#[test]
+fn a_non_finite_float_is_written_as_null_and_does_not_read_back() {
+    for source in [
+        "---\nx: .nan\n---\n",
+        "---\nx: .inf\n---\n",
+        "---\nx: -.inf\n---\n",
+    ] {
+        let json = serde_json::to_string(&parse(source).unwrap()).unwrap();
+        assert!(json.contains(r#""value":{"Float":null}"#), "{json}");
+        let error = serde_json::from_str::<Document>(&json).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("invalid type: null, expected f64"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn the_typescript_of_a_document_names_its_nodes() {
+    let document = <Document>::ts_definition();
+    let block = <MarkdownBlock>::ts_definition();
+    eprintln!("{document}\n{block}");
+    assert!(document.contains("body: MarkdownBlock<E>;"), "{document}");
+    assert!(
+        document.contains("span: { start: number; end: number };"),
+        "{document}"
+    );
+    assert!(block.contains("sections: Array<Section<E>>;"), "{block}");
+}
+
+#[test]
+fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
+    let definitions = [
+        <Document>::ts_definition(),
+        Frontmatter::ts_definition(),
+        Mapping::ts_definition(),
+        Pair::ts_definition(),
+        Sequence::ts_definition(),
+        Scalar::ts_definition(),
+        <MarkdownBlock>::ts_definition(),
+        <BlockQuote>::ts_definition(),
+        <Html>::ts_definition(),
+        <ThematicBreak>::ts_definition(),
+        <Section>::ts_definition(),
+        <Heading>::ts_definition(),
+        <Paragraph>::ts_definition(),
+        <Line>::ts_definition(),
+        <List>::ts_definition(),
+        <Item>::ts_definition(),
+        <CodeBlock>::ts_definition(),
+        <Table>::ts_definition(),
+        <TableRow>::ts_definition(),
+        <TableCell>::ts_definition(),
+        <Text>::ts_definition(),
+        <Emphasis>::ts_definition(),
+        <Strong>::ts_definition(),
+        <LineBreak>::ts_definition(),
+        <Link>::ts_definition(),
+        <Image>::ts_definition(),
+        <Code>::ts_definition(),
+    ];
+    for definition in definitions {
+        assert!(
+            definition.contains("  span: { start: number; end: number };"),
+            "{definition}"
+        );
+        assert!(!definition.contains("kind"), "{definition}");
+    }
+}
+
+/// Empties the `kind` of every node of `document`.
+fn unclaim(document: &mut Document) {
+    document.kind = Kind(None);
+    unclaim_markdown_block(&mut document.body);
+}
+
+fn unclaim_markdown_block(block: &mut MarkdownBlock) {
+    block.kind = Kind(None);
+    block.sections.iter_mut().for_each(unclaim_section);
+}
+
+fn unclaim_section(section: &mut Section) {
+    section.kind = Kind(None);
+    section.heading.kind = Kind(None);
+    unclaim_inlines(&mut section.heading.children);
+    for block in &mut section.blocks {
+        match block {
+            Block::BlockQuote(block_quote) => block_quote.kind = Kind(None),
+            Block::CodeBlock(code_block) => code_block.kind = Kind(None),
+            Block::Html(html) => html.kind = Kind(None),
+            Block::List(list) => {
+                list.kind = Kind(None);
+                for item in &mut list.items {
+                    item.kind = Kind(None);
+                    unclaim_markdown_block(&mut item.body);
+                }
+            }
+            Block::Paragraph(paragraph) => {
+                paragraph.kind = Kind(None);
+                for line in &mut paragraph.lines {
+                    line.kind = Kind(None);
+                    unclaim_inlines(&mut line.children);
+                }
+            }
+            Block::Table(table) => {
+                table.kind = Kind(None);
+                for row in table.head.iter_mut().chain(&mut table.rows) {
+                    row.kind = Kind(None);
+                    for cell in &mut row.cells {
+                        cell.kind = Kind(None);
+                        unclaim_markdown_block(&mut cell.body);
+                    }
+                }
+            }
+            Block::ThematicBreak(thematic_break) => thematic_break.kind = Kind(None),
+        }
+    }
+    section.subsections.iter_mut().for_each(unclaim_section);
+}
+
+fn unclaim_inlines(inlines: &mut [Inline]) {
+    for inline in inlines {
+        match inline {
+            Inline::Code(code) => code.kind = Kind(None),
+            Inline::Emphasis(emphasis) => {
+                emphasis.kind = Kind(None);
+                unclaim_inlines(&mut emphasis.children);
+            }
+            Inline::Html(html) => html.kind = Kind(None),
+            Inline::Image(image) => image.kind = Kind(None),
+            Inline::LineBreak(line_break) => line_break.kind = Kind(None),
+            Inline::Link(link) => {
+                link.kind = Kind(None);
+                unclaim_inlines(&mut link.children);
+            }
+            Inline::Strong(strong) => {
+                strong.kind = Kind(None);
+                unclaim_inlines(&mut strong.children);
+            }
+            Inline::Text(text) => text.kind = Kind(None),
+        }
+    }
+}
