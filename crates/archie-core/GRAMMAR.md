@@ -99,7 +99,10 @@ open list item: the column where that item's text starts.
       line is not three or more of the same `-`, `*` or `_` with only spaces
       between them: `ITEM_START`. The item's text column is the bullet's column
       plus two. Whatever follows the bullet on that line is classified again by
-      these same rules.
+      these same rules. Items nest at most 100 deep, the block cap, so that
+      reading, writing, cloning, comparing, printing and dropping nested lists
+      stay within a 2 MB stack in a debug build: inside 100 open items, a bullet
+      opens no item, and it and the text after it are `TEXT`.
    4. It starts a well-formed table (see [Tables](#tables)): one `TABLE` token
       holding the whole table. The lexer goes on after the table's last line.
    5. Anything else: `TEXT`, ending before any trailing spaces.
@@ -177,6 +180,11 @@ text        := any other characters
 - `PUNCTUATION` is any ASCII punctuation character. The backslash is dropped and
   the character becomes text.
 - An inline node starts and ends on one line.
+- Emphasis, strong emphasis and links nest at most 1000 deep, the inline cap, so
+  that reading, writing, cloning, comparing, printing and dropping them stay
+  within a 2 MB stack in a debug build. CommonMark section 6.3 permits such a
+  limit. An emphasis, a strong emphasis or a link that would nest deeper is not
+  formed: its `*`, `_` or brackets are text.
 - Brackets or backticks that complete none of these rules are text.
 
 Neighbouring `text` and `escape` pieces become one `Text` node. Between two lines

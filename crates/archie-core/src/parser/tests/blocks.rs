@@ -1,6 +1,10 @@
-use super::check;
+use super::{check, on_two_megabytes};
+use crate::parser::ast::{Block, Document, Inline, MarkdownBlock};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
+use crate::parser::lexer::BLOCK_CAP;
+use crate::parser::parse;
+use crate::writer::{WriteOptions, write};
 
 #[test]
 fn a_paragraph_is_a_set_of_lines_and_a_blank_line_ends_it() {
@@ -1890,4 +1894,99 @@ fn a_definition_title_over_a_line_end_keeps_the_spaces_before_it() {
             Text "a"
 "#,
     );
+}
+
+/// How deep lists of one item nest from `body` down, and the body of the
+/// innermost item.
+fn list_depth(body: &MarkdownBlock) -> (usize, &MarkdownBlock) {
+    let mut inner = body;
+    let mut depth = 0_usize;
+    while let [section] = inner.sections.as_slice()
+        && let [Block::List(list)] = section.blocks.as_slice()
+        && let [item] = list.items.as_slice()
+    {
+        depth += 1;
+        inner = &item.body;
+    }
+    (depth, inner)
+}
+
+/// Checks that `document` holds lists nested `BLOCK_CAP` deep, the
+/// innermost item holding one line of the text `rest`.
+fn assert_block_capped(document: &Document, rest: &str) {
+    let (depth, innermost) = list_depth(&document.body);
+    assert_eq!(depth, BLOCK_CAP);
+    let lines = match innermost.sections.as_slice() {
+        [section] => match section.blocks.as_slice() {
+            [Block::Paragraph(paragraph)] => paragraph.lines.as_slice(),
+            _ => &[],
+        },
+        _ => &[],
+    };
+    assert!(matches!(lines, [line]
+        if matches!(line.children.as_slice(), [Inline::Text(text)] if text.value == rest)));
+}
+
+#[test]
+fn lists_nest_the_block_cap_deep_and_the_markers_past_it_stay_text() {
+    on_two_megabytes(|| {
+        let document = parse(&format!("{}a\n", "- ".repeat(10_000))).unwrap();
+        let rest = format!("{}a", "- ".repeat(10_000 - BLOCK_CAP));
+        assert_block_capped(&document, &rest);
+        let written = write(&document, &WriteOptions::default()).unwrap();
+        assert_eq!(written, format!("{}\\{rest}\n", "- ".repeat(BLOCK_CAP)));
+        assert_block_capped(&parse(&written).unwrap(), &rest);
+        let copy = document.clone();
+        assert_eq!(copy, document);
+        let printed = format!("{document:?}");
+        assert_eq!(printed.matches("List(").count(), BLOCK_CAP);
+        drop(copy);
+        drop(document);
+    });
+}
+
+#[test]
+fn lists_at_the_block_cap_read_back_from_their_written_text_to_the_same_tree() {
+    on_two_megabytes(|| {
+        let source = format!("{}a\n", "- ".repeat(BLOCK_CAP));
+        let document = parse(&source).unwrap();
+        assert_eq!(list_depth(&document.body).0, BLOCK_CAP);
+        let written = write(&document, &WriteOptions::default()).unwrap();
+        assert_eq!(written, source);
+        assert_eq!(parse(&written).unwrap(), document);
+    });
+}
+
+#[test]
+fn an_item_past_the_block_cap_on_its_own_line_continues_the_innermost_paragraph() {
+    on_two_megabytes(|| {
+        let mut source = String::new();
+        for depth in 0..=BLOCK_CAP {
+            source.push_str(&"  ".repeat(depth));
+            source.push_str("- a\n");
+        }
+        let document = parse(&source).unwrap();
+        let mut blocks = document.body.sections[0].blocks.as_slice();
+        let mut depth = 0_usize;
+        while let Some(Block::List(list)) = blocks.last()
+            && let [item] = list.items.as_slice()
+            && let [section] = item.body.sections.as_slice()
+        {
+            depth += 1;
+            blocks = &section.blocks;
+        }
+        assert_eq!(depth, BLOCK_CAP);
+        let lines = match blocks {
+            [Block::Paragraph(paragraph)] => paragraph.lines.as_slice(),
+            _ => &[],
+        };
+        let values: Vec<&str> = lines
+            .iter()
+            .map(|line| match line.children.as_slice() {
+                [Inline::Text(text)] => text.value.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert_eq!(values, ["a", "- a"]);
+    });
 }

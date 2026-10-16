@@ -16,6 +16,7 @@ mod unrecognized;
 mod yaml;
 
 use core::ops::Range;
+use std::thread;
 
 use chrono::{
     DateTime, Datelike as _, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike as _,
@@ -291,6 +292,19 @@ fn check_spans(source: &str, expected: &[(&str, &str)]) {
         .map(|row| (row.label.as_str(), &source[row.span.clone()]))
         .collect();
     assert_eq!(actual, expected);
+}
+
+/// Runs `test` on a thread with a 2 MB stack, the stack a test thread gets.
+fn on_two_megabytes<F>(test: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(test)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// One line per node, indented two spaces under its parent.

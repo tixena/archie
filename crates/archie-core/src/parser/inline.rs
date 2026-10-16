@@ -14,6 +14,9 @@ use crate::parser::definition::{self, Definitions, Target, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::{entity, html};
 
+/// How deep inline nodes nest: at 1270, the tree's derived Clone overflows a 2 MB debug stack.
+pub const INLINE_CAP: usize = 1_000;
+
 /// The children of a node being cut at line ends: their pieces cut so far
 /// on each line the node lies on, from the first, and those still to cut,
 /// the next one last.
@@ -78,13 +81,13 @@ struct Layout<'src> {
     text: String,
 }
 
-/// What the scanner has read: a node, or a run of `*` or `_` not yet
-/// paired, by its place in the scanner's runs.
+/// What the scanner has read: a node and how deep it nests, or a run of
+/// `*` or `_` not yet paired, by its place in the scanner's runs.
 enum Piece<E>
 where
     E: Extension,
 {
-    Node(Inline<E>),
+    Node(Inline<E>, usize),
     Run(usize),
 }
 
@@ -627,7 +630,7 @@ where
         match self.layout.node_at(at, end) {
             Some(Found::Autolink { close, target }) => {
                 let shown = at + 1..close - 1;
-                self.push(Inline::Link(Link {
+                let link = Inline::Link(Link {
                     children: vec![Inline::Text(Text {
                         kind: Kind(None),
                         value: source[shown.clone()].to_owned(),
@@ -639,16 +642,18 @@ where
                     span: at..*close,
                     target: target.clone(),
                     title: None,
-                }));
+                });
+                self.push(link, 1);
                 *close
             }
             Some(&Found::Html(close)) => {
-                self.push(Inline::Html(Html {
+                let html = Inline::Html(Html {
                     continues: Continues::Neither,
                     kind: Kind(None),
                     span: at..close,
                     value: source[at..close].to_owned(),
-                }));
+                });
+                self.push(html, 0);
                 close
             }
             Some(
@@ -669,7 +674,7 @@ where
     /// An image, or a `!` that starts none.
     fn bang(&mut self, at: usize, end: usize) -> usize {
         if let Some((image, close)) = image_at(self.layout, at, end) {
-            self.push(Inline::Image(image));
+            self.push(Inline::Image(image), 0);
             return close;
         }
         self.push_text(at..at + 1, "!");
@@ -693,12 +698,13 @@ where
             self.push_text(at..at + ticks, &source[at..at + ticks]);
             return at + ticks;
         };
-        self.push(Inline::Code(Code {
+        let code = Inline::Code(Code {
             continues: Continues::Neither,
             kind: Kind(None),
             span: at..close,
             value: unpad(&source[at + ticks..close - ticks]).to_owned(),
-        }));
+        });
+        self.push(code, 0);
         close
     }
 
@@ -747,10 +753,11 @@ where
     /// line end.
     fn end_line(&mut self, at: usize) -> usize {
         if matches!(self.layout.ending(at), Ending::Spaces(_)) {
-            self.push(Inline::LineBreak(LineBreak {
+            let line_break = Inline::LineBreak(LineBreak {
                 kind: Kind(None),
                 span: at..at,
-            }));
+            });
+            self.push(line_break, 0);
         } else {
             self.flush();
         }
@@ -776,10 +783,11 @@ where
         let bytes = source.as_bytes();
         if bytes.get(at + 1) == Some(&b'\n') && matches!(self.layout.ending(at), Ending::Backslash)
         {
-            self.push(Inline::LineBreak(LineBreak {
+            let line_break = Inline::LineBreak(LineBreak {
                 kind: Kind(None),
                 span: at..at + 1,
-            }));
+            });
+            self.push(line_break, 0);
             return at + 1;
         }
         let escaped = at + 1 < end && bytes[at + 1].is_ascii_punctuation();
@@ -792,24 +800,27 @@ where
         to
     }
 
-    /// The nodes read, with their runs paired into emphasis.
-    fn finish(mut self) -> Vec<Inline<E>> {
+    /// The nodes read, with their runs paired into emphasis, and how deep
+    /// the deepest of them nests.
+    fn finish(mut self) -> (Vec<Inline<E>>, usize) {
         self.flush();
         emphasize(self.pieces, self.runs)
     }
 
     fn flush(&mut self) {
         if let Some(start) = self.text_start.take() {
-            self.pieces.push(Piece::Node(Inline::Text(Text {
+            let text = Inline::Text(Text {
                 kind: Kind(None),
                 span: start..self.text_end,
                 value: mem::take(&mut self.text),
-            })));
+            });
+            self.pieces.push(Piece::Node(text, 0));
         }
     }
 
     /// A wiki link, or a link the bracket pass read: `[text](destination
-    /// "title")` or a reference link.
+    /// "title")` or a reference link. A link that would nest deeper than
+    /// `INLINE_CAP` is none.
     fn link(&mut self, at: usize, end: usize) -> Option<usize> {
         let source = self.layout.text.as_str();
         if let Some(wiki) = self.layout.wiki(at, end) {
@@ -820,7 +831,7 @@ where
                     span: alias,
                 })]
             });
-            self.push(Inline::Link(Link {
+            let link = Inline::Link(Link {
                 children,
                 continues: Continues::Neither,
                 form: LinkForm::Wiki,
@@ -828,7 +839,8 @@ where
                 span: at..wiki.close,
                 target: source[wiki.target].to_owned(),
                 title: None,
-            }));
+            });
+            self.push(link, 1);
             return Some(wiki.close);
         }
         let Some(Found::Link {
@@ -841,15 +853,20 @@ where
         };
         let mut inner = Self::new(self.layout);
         inner.scan(at + 1..*text_close);
-        self.push(Inline::Link(Link {
-            children: inner.finish(),
+        let (children, depth) = inner.finish();
+        if depth >= INLINE_CAP {
+            return None;
+        }
+        let link = Inline::Link(Link {
+            children,
             continues: Continues::Neither,
             form: LinkForm::Markdown,
             kind: Kind(None),
             span: at..*close,
             target: target.destination.clone(),
             title: target.title.clone(),
-        }));
+        });
+        self.push(link, depth + 1);
         Some(*close)
     }
 
@@ -888,10 +905,11 @@ where
         next
     }
 
-    /// Ends the text read so far and adds `node` after it.
-    fn push(&mut self, node: Inline<E>) {
+    /// Ends the text read so far and adds `node`, which nests `depth` deep,
+    /// after it.
+    fn push(&mut self, node: Inline<E>, depth: usize) {
         self.flush();
-        self.pieces.push(Piece::Node(node));
+        self.pieces.push(Piece::Node(node, depth));
     }
 
     fn push_text(&mut self, range: Range<usize>, value: &str) {
@@ -932,14 +950,16 @@ where
     let mut layout = Layout::new(source, ranges, definitions);
     let mut scanner = Scanner::new(&layout);
     scanner.scan(0..layout.text.len());
-    let nodes = scanner.finish();
+    let (nodes, _) = scanner.finish();
     layout.hold(&nodes);
     layout.lines(nodes)
 }
 
 /// Pairs the runs among `pieces` into emphasis and strong emphasis, by
-/// `CommonMark`'s procedure for processing emphasis, and gives the nodes.
-fn emphasize<E>(mut pieces: Vec<Piece<E>>, mut runs: Vec<Run>) -> Vec<Inline<E>>
+/// `CommonMark`'s procedure for processing emphasis, and gives the nodes and
+/// how deep the deepest of them nests. A pair that would nest deeper than
+/// `INLINE_CAP` is not made, as if its closer found no opener.
+fn emphasize<E>(mut pieces: Vec<Piece<E>>, mut runs: Vec<Run>) -> (Vec<Inline<E>>, usize)
 where
     E: Extension,
 {
@@ -949,7 +969,7 @@ where
     while let Some(piece) = pieces.get(current) {
         let closer = match piece {
             Piece::Run(closer) if runs[*closer].can_close => *closer,
-            Piece::Node(_) | Piece::Run(_) => {
+            Piece::Node(_, _) | Piece::Run(_) => {
                 current += 1;
                 continue;
             }
@@ -961,32 +981,51 @@ where
             .rev()
             .filter_map(|(index, candidate)| match candidate {
                 Piece::Run(run) => Some((index, *run)),
-                Piece::Node(_) => None,
+                Piece::Node(_, _) => None,
             })
             .take_while(|&(_, run)| run >= bottoms[key])
-            .find(|&(_, run)| runs[run].opens(&runs[closer]));
-        if let Some(open) = opener {
-            current = pair(&mut pieces, &mut runs, open, (current, closer));
+            .find(|&(_, run)| runs[run].opens(&runs[closer]))
+            .map(|(index, run)| ((index, run), deepest(&pieces[index + 1..current]) + 1))
+            .filter(|&(_, depth)| depth <= INLINE_CAP);
+        if let Some((open, depth)) = opener {
+            current = pair(&mut pieces, &mut runs, open, (current, closer), depth);
         } else {
             bottoms[key] = closer;
             if !runs[closer].can_open {
-                pieces[current] = Piece::Node(runs[closer].text());
+                pieces[current] = Piece::Node(runs[closer].text(), 0);
             }
             current += 1;
         }
     }
-    nodes(pieces, &runs)
+    let depth = deepest(&pieces);
+    (nodes(pieces, &runs), depth)
+}
+
+/// How deep the deepest of `pieces` nests.
+fn deepest<E>(pieces: &[Piece<E>]) -> usize
+where
+    E: Extension,
+{
+    pieces
+        .iter()
+        .map(|piece| match piece {
+            Piece::Node(_, depth) => *depth,
+            Piece::Run(_) => 0,
+        })
+        .max()
+        .unwrap_or_default()
 }
 
 /// Makes emphasis, or strong emphasis when both runs have two characters
-/// left, of the pieces between the opening and the closing run, each given
-/// by its place among `pieces` and among `runs`. Gives where the closer, or
-/// what follows it, now is.
+/// left, nesting `depth` deep, of the pieces between the opening and the
+/// closing run, each given by its place among `pieces` and among `runs`.
+/// Gives where the closer, or what follows it, now is.
 fn pair<E>(
     pieces: &mut Vec<Piece<E>>,
     runs: &mut [Run],
     (open, opener): (usize, usize),
     (close, closer): (usize, usize),
+    depth: usize,
 ) -> usize
 where
     E: Extension,
@@ -1017,7 +1056,7 @@ where
             span,
         })
     };
-    pieces.insert(open + 1, Piece::Node(node));
+    pieces.insert(open + 1, Piece::Node(node, depth));
     let mut after = open + 2;
     if runs[opener].count == 0 {
         pieces.remove(open);
@@ -1040,7 +1079,7 @@ where
     let mut nodes: Vec<Inline<E>> = Vec::new();
     for piece in pieces {
         let node = match piece {
-            Piece::Node(node) => node,
+            Piece::Node(node, _) => node,
             Piece::Run(run) => runs[run].text(),
         };
         match (nodes.last_mut(), node) {
