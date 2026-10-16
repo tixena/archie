@@ -1,5 +1,5 @@
 use super::check_spans;
-use crate::parser::ast::Heading;
+use crate::parser::ast::{Heading, Kind};
 use crate::parser::parse;
 
 #[test]
@@ -68,6 +68,7 @@ fn an_empty_heading_has_an_empty_span_at_the_start_of_its_section() {
             section.heading,
             Heading {
                 children: Vec::new(),
+                kind: Kind(None),
                 span: start..start,
             }
         );

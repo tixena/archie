@@ -6,7 +6,7 @@ use core::ops::Range;
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Block, Date, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Line, Link,
+    Block, Date, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line, Link,
     LinkForm, List, Mapping, MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section,
     Sequence, Text, Value,
 };
@@ -57,6 +57,7 @@ fn string(range: Range<usize>, value: &str) -> Value {
 
 fn text(start: usize, value: &str) -> Inline {
     Inline::Text(Text {
+        kind: Kind(None),
         span: span(start, value),
         value: value.to_owned(),
     })
@@ -64,8 +65,10 @@ fn text(start: usize, value: &str) -> Inline {
 
 fn paragraph(start: usize, value: &str) -> Block {
     Block::Paragraph(Paragraph {
+        kind: Kind(None),
         lines: vec![Line {
             children: vec![text(start, value)],
+            kind: Kind(None),
             span: span(start, value),
         }],
         span: span(start, value),
@@ -76,12 +79,15 @@ fn paragraph(start: usize, value: &str) -> Block {
 /// `blocks`.
 fn content(start: usize, covered: &str, blocks: Vec<Block>) -> MarkdownBlock {
     MarkdownBlock {
+        kind: Kind(None),
         sections: vec![Section {
             blocks,
             heading: Heading {
                 children: Vec::new(),
+                kind: Kind(None),
                 span: start..start,
             },
+            kind: Kind(None),
             span: span(start, covered),
             subsections: Vec::new(),
         }],
@@ -143,12 +149,14 @@ fn frontmatter() -> Frontmatter {
 fn dependencies() -> Block {
     let written = "Depends on [[grammar]] and the [spec](spec.md).";
     Block::Paragraph(Paragraph {
+        kind: Kind(None),
         lines: vec![Line {
             children: vec![
                 text(121, "Depends on "),
                 Inline::Link(Link {
                     children: Vec::new(),
                     form: LinkForm::Wiki,
+                    kind: Kind(None),
                     span: span(132, "[[grammar]]"),
                     target: "grammar".to_owned(),
                 }),
@@ -156,11 +164,13 @@ fn dependencies() -> Block {
                 Inline::Link(Link {
                     children: vec![text(153, "spec")],
                     form: LinkForm::Markdown,
+                    kind: Kind(None),
                     span: span(152, "[spec](spec.md)"),
                     target: "spec.md".to_owned(),
                 }),
                 text(167, "."),
             ],
+            kind: Kind(None),
             span: span(121, written),
         }],
         span: span(121, written),
@@ -179,19 +189,24 @@ fn steps() -> Block {
                         Block::List(List {
                             items: vec![Item {
                                 body: content(188, "spans", vec![paragraph(188, "spans")]),
+                                kind: Kind(None),
                                 span: span(186, "- spans"),
                             }],
+                            kind: Kind(None),
                             span: span(186, "- spans"),
                         }),
                     ],
                 ),
+                kind: Kind(None),
                 span: span(170, "- define tree\n  - spans"),
             },
             Item {
                 body: content(196, "write rules", vec![paragraph(196, "write rules")]),
+                kind: Kind(None),
                 span: span(194, "- write rules"),
             },
         ],
+        kind: Kind(None),
         span: span(170, "- define tree\n  - spans\n- write rules"),
     })
 }
@@ -202,17 +217,21 @@ fn the_example_parses_into_the_tree_written_by_hand() {
         blocks: vec![dependencies(), steps()],
         heading: Heading {
             children: vec![text(108, "Ship parser")],
+            kind: Kind(None),
             span: span(106, "# Ship parser"),
         },
+        kind: Kind(None),
         span: span(106, SOURCE[106..].trim_end()),
         subsections: Vec::new(),
     };
     let document = Document {
         body: MarkdownBlock {
+            kind: Kind(None),
             sections: vec![section],
             span: span(106, &SOURCE[106..]),
         },
         frontmatter: Some(frontmatter()),
+        kind: Kind(None),
         span: span(0, SOURCE),
     };
 

@@ -3,7 +3,8 @@
 use core::mem;
 use core::ops::Range;
 
-use crate::parser::ast::{Code, Image, Inline, Line, Link, LinkForm, Text};
+use crate::parser::ast::{Code, Image, Inline, Kind, Line, Link, LinkForm, Text};
+use crate::parser::extension::{Extension, Plain};
 
 /// Where the parts of a `[text](destination)` are.
 struct Bracketed {
@@ -19,17 +20,23 @@ struct Wiki {
     target: Range<usize>,
 }
 
-struct Scanner<'src> {
+struct Scanner<'src, E>
+where
+    E: Extension,
+{
     /// Off inside the text of a link, where another link cannot start.
     links: bool,
-    nodes: Vec<Inline>,
+    nodes: Vec<Inline<E>>,
     source: &'src str,
     text: String,
     text_end: usize,
     text_start: Option<usize>,
 }
 
-impl<'src> Scanner<'src> {
+impl<'src, E> Scanner<'src, E>
+where
+    E: Extension,
+{
     /// An image, or a `!` that starts none.
     fn bang(&mut self, at: usize, end: usize) -> usize {
         if let Some((image, close)) = image_at(self.source, at, end) {
@@ -67,6 +74,7 @@ impl<'src> Scanner<'src> {
             if found == ticks {
                 self.flush();
                 self.nodes.push(Inline::Code(Code {
+                    kind: Kind(None),
                     span: at..close + ticks,
                     value: self.source[content..close].to_owned(),
                 }));
@@ -92,7 +100,7 @@ impl<'src> Scanner<'src> {
         to
     }
 
-    fn finish(mut self) -> Vec<Inline> {
+    fn finish(mut self) -> Vec<Inline<E>> {
         self.flush();
         self.nodes
     }
@@ -100,6 +108,7 @@ impl<'src> Scanner<'src> {
     fn flush(&mut self) {
         if let Some(start) = self.text_start.take() {
             self.nodes.push(Inline::Text(Text {
+                kind: Kind(None),
                 span: start..self.text_end,
                 value: mem::take(&mut self.text),
             }));
@@ -125,6 +134,7 @@ impl<'src> Scanner<'src> {
         if let Some(wiki) = wiki_at(source, at, end) {
             let children = wiki.alias.map_or_else(Vec::new, |alias| {
                 vec![Inline::Text(Text {
+                    kind: Kind(None),
                     value: source[alias.clone()].to_owned(),
                     span: alias,
                 })]
@@ -133,6 +143,7 @@ impl<'src> Scanner<'src> {
             self.nodes.push(Inline::Link(Link {
                 children,
                 form: LinkForm::Wiki,
+                kind: Kind(None),
                 span: at..wiki.close,
                 target: source[wiki.target].to_owned(),
             }));
@@ -145,6 +156,7 @@ impl<'src> Scanner<'src> {
         self.nodes.push(Inline::Link(Link {
             children: inner.finish(),
             form: LinkForm::Markdown,
+            kind: Kind(None),
             span: at..bracketed.close,
             target: source[bracketed.destination].to_owned(),
         }));
@@ -184,11 +196,15 @@ impl<'src> Scanner<'src> {
 }
 
 /// The inline nodes written on one line.
-pub fn line(source: &str, range: Range<usize>) -> Line {
+pub fn line<E>(source: &str, range: Range<usize>) -> Line<E>
+where
+    E: Extension,
+{
     let mut scanner = Scanner::new(source, true);
     scanner.line(range.clone());
     Line {
         children: scanner.finish(),
+        kind: Kind(None),
         span: range,
     }
 }
@@ -226,7 +242,9 @@ fn bracketed_at(source: &str, at: usize, end: usize) -> Option<Bracketed> {
     while text_end < end && bytes[text_end] != b']' {
         text_end = match bytes[text_end] {
             b'\\' => text_end + 2,
-            b'!' => image_at(source, text_end, end).map_or(text_end + 1, |(_, close)| close),
+            b'!' => {
+                image_at::<Plain>(source, text_end, end).map_or(text_end + 1, |(_, close)| close)
+            }
             b'[' => return None,
             _ => text_end + 1,
         };
@@ -248,7 +266,10 @@ fn bracketed_at(source: &str, at: usize, end: usize) -> Option<Bracketed> {
 }
 
 /// An image starting at the `!` at `at`, and where it ends.
-fn image_at(source: &str, at: usize, end: usize) -> Option<(Image, usize)> {
+fn image_at<E>(source: &str, at: usize, end: usize) -> Option<(Image<E>, usize)>
+where
+    E: Extension,
+{
     let open = at + 1;
     if let Some(wiki) = wiki_at(source, open, end) {
         let image = Image {
@@ -256,6 +277,7 @@ fn image_at(source: &str, at: usize, end: usize) -> Option<(Image, usize)> {
                 .alias
                 .map_or_else(String::new, |alias| source[alias].to_owned()),
             form: LinkForm::Wiki,
+            kind: Kind(None),
             span: at..wiki.close,
             target: source[wiki.target].to_owned(),
         };
@@ -265,6 +287,7 @@ fn image_at(source: &str, at: usize, end: usize) -> Option<(Image, usize)> {
     let image = Image {
         alt: source[bracketed.text].to_owned(),
         form: LinkForm::Markdown,
+        kind: Kind(None),
         span: at..bracketed.close,
         target: source[bracketed.destination].to_owned(),
     };

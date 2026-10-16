@@ -20,6 +20,7 @@ use crate::parser::ast::{
     Block, Date, DateTime, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Time,
     Value,
 };
+use crate::parser::extension::Extension;
 use crate::parser::parse;
 
 /// One node of a parsed tree: how deep it sits, how it reads, what it covers.
@@ -35,11 +36,19 @@ struct Rows {
 }
 
 impl Rows {
-    fn block(&mut self, depth: usize, block: &Block) {
+    fn block<E>(&mut self, depth: usize, block: &Block<E>)
+    where
+        E: Extension,
+    {
         match block {
             Block::CodeBlock(code_block) => {
+                let claimed = if code_block.kind.0.is_some() {
+                    " claimed"
+                } else {
+                    ""
+                };
                 let label = format!(
-                    "CodeBlock info={:?} value={:?}",
+                    "CodeBlock info={:?} value={:?}{claimed}",
                     code_block.info, code_block.value
                 );
                 self.push(depth, label, &code_block.span);
@@ -83,7 +92,10 @@ impl Rows {
         }
     }
 
-    fn document(&mut self, document: &Document) {
+    fn document<E>(&mut self, document: &Document<E>)
+    where
+        E: Extension,
+    {
         self.push(0, "Document".to_owned(), &document.span);
         if let Some(frontmatter) = &document.frontmatter {
             let label = format!("Frontmatter format={:?}", frontmatter.format);
@@ -93,7 +105,10 @@ impl Rows {
         self.markdown_block(1, &document.body);
     }
 
-    fn inlines(&mut self, depth: usize, inlines: &[Inline]) {
+    fn inlines<E>(&mut self, depth: usize, inlines: &[Inline<E>])
+    where
+        E: Extension,
+    {
         for inline in inlines {
             match inline {
                 Inline::Code(code) => {
@@ -129,7 +144,10 @@ impl Rows {
         }
     }
 
-    fn markdown_block(&mut self, depth: usize, block: &MarkdownBlock) {
+    fn markdown_block<E>(&mut self, depth: usize, block: &MarkdownBlock<E>)
+    where
+        E: Extension,
+    {
         self.push(depth, "MarkdownBlock".to_owned(), &block.span);
         for section in &block.sections {
             self.section(depth + 1, section);
@@ -144,7 +162,10 @@ impl Rows {
         });
     }
 
-    fn section(&mut self, depth: usize, section: &Section) {
+    fn section<E>(&mut self, depth: usize, section: &Section<E>)
+    where
+        E: Extension,
+    {
         self.push(depth, "Section".to_owned(), &section.span);
         self.push(depth + 1, "Heading".to_owned(), &section.heading.span);
         self.inlines(depth + 2, &section.heading.children);
