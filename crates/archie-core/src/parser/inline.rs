@@ -1,7 +1,7 @@
 //! Inline nodes inside the text lines of a paragraph or a heading.
 
-use core::mem;
 use core::ops::{Range, RangeInclusive};
+use core::{iter, mem};
 use std::collections::HashMap;
 
 use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
@@ -81,13 +81,26 @@ struct Layout<'src> {
     text: String,
 }
 
+/// The order of the pieces being paired, as links by their places among
+/// them. The pieces a pair takes out of the order keep their links to each
+/// other.
+struct Links {
+    first: Option<usize>,
+    next: Vec<Option<usize>>,
+    previous: Vec<Option<usize>>,
+}
+
 /// What the scanner has read: a node and how deep it nests, or a run of
-/// `*` or `_` not yet paired, by its place in the scanner's runs.
+/// `*` or `_` not yet paired, by its place in the scanner's runs. A pair of
+/// runs is an emphasis or a strong emphasis, how deep it nests, and the
+/// place of the first of its pieces, which its children are built from once
+/// pairing ends.
 enum Piece<E>
 where
     E: Extension,
 {
     Node(Inline<E>, usize),
+    Pair(Inline<E>, usize, Option<usize>),
     Run(usize),
 }
 
@@ -313,6 +326,7 @@ impl<'src> Layout<'src> {
         // `active` in it opens no link.
         let mut open: Vec<(usize, bool)> = Vec::new();
         let mut active = 0;
+        let mut searches = html::Searches::default();
         let mut at = 0;
         while at < end {
             at = match bytes[at] {
@@ -365,7 +379,7 @@ impl<'src> Layout<'src> {
                 }
                 b'<' => autolink_at(source, at, end)
                     .map(|(target, close)| Found::Autolink { close, target })
-                    .or_else(|| html::inline_end(source, at).map(Found::Html))
+                    .or_else(|| html::inline_end(source, at, &mut searches).map(Found::Html))
                     .map_or(at + 1, |node| keep(&mut found, at, node)),
                 _ => at + 1,
             };
@@ -585,6 +599,78 @@ impl<'src> Layout<'src> {
             close: close + 2,
             target,
         })
+    }
+}
+
+impl Links {
+    /// The pieces before `at`, the nearest first.
+    fn before(&self, at: usize) -> impl Iterator<Item = usize> {
+        iter::successors(self.previous[at], |&place| self.previous[place])
+    }
+
+    /// The pieces between `open` and `close`, in order.
+    fn between(&self, open: usize, close: usize) -> impl Iterator<Item = usize> {
+        self.onward(self.next[open])
+            .take_while(move |&place| place != close)
+    }
+
+    /// Puts a new piece, at the next place, between `open` and `close` in
+    /// place of the pieces between them, and gives the first of those.
+    fn enclose(&mut self, open: usize, close: usize) -> Option<usize> {
+        let inside = self.next[open].filter(|&first| first != close);
+        if let Some(first) = inside {
+            self.previous[first] = None;
+            if let Some(last) = self.previous[close] {
+                self.next[last] = None;
+            }
+        }
+        let added = self.next.len();
+        self.next[open] = Some(added);
+        self.previous[close] = Some(added);
+        self.next.push(Some(close));
+        self.previous.push(Some(open));
+        inside
+    }
+
+    /// `count` pieces in the order of their places.
+    fn new(count: usize) -> Self {
+        Self {
+            first: (count > 0).then_some(0),
+            next: (1..=count)
+                .map(|place| (place < count).then_some(place))
+                .collect(),
+            previous: (0..count).map(|place| place.checked_sub(1)).collect(),
+        }
+    }
+
+    /// The pieces in order from `start`.
+    fn onward(&self, start: Option<usize>) -> impl Iterator<Item = usize> {
+        iter::successors(start, |&place| self.next[place])
+    }
+
+    /// Takes the piece at `at` out of the order.
+    fn remove(&mut self, at: usize) {
+        let (before, after) = (self.previous[at], self.next[at]);
+        match before {
+            Some(earlier) => self.next[earlier] = after,
+            None => self.first = after,
+        }
+        if let Some(later) = after {
+            self.previous[later] = before;
+        }
+    }
+}
+
+impl<E> Piece<E>
+where
+    E: Extension,
+{
+    /// How deep the piece nests.
+    const fn depth(&self) -> usize {
+        match self {
+            Self::Node(_, depth) | Self::Pair(_, depth, _) => *depth,
+            Self::Run(_) => 0,
+        }
     }
 }
 
@@ -963,55 +1049,62 @@ fn emphasize<E>(mut pieces: Vec<Piece<E>>, mut runs: Vec<Run>) -> (Vec<Inline<E>
 where
     E: Extension,
 {
+    let mut links = Links::new(pieces.len());
     // For each key of closer, the first run that may still open for it.
     let mut bottoms = [0_usize; 12];
-    let mut current = 0;
-    while let Some(piece) = pieces.get(current) {
-        let closer = match piece {
-            Piece::Run(closer) if runs[*closer].can_close => *closer,
-            Piece::Node(_, _) | Piece::Run(_) => {
-                current += 1;
+    let mut at = links.first;
+    while let Some(current) = at {
+        let closer = match pieces[current] {
+            Piece::Run(closer) if runs[closer].can_close => closer,
+            Piece::Node(_, _) | Piece::Pair(_, _, _) | Piece::Run(_) => {
+                at = links.next[current];
                 continue;
             }
         };
         let key = runs[closer].key();
-        let opener = pieces[..current]
-            .iter()
-            .enumerate()
-            .rev()
-            .filter_map(|(index, candidate)| match candidate {
-                Piece::Run(run) => Some((index, *run)),
-                Piece::Node(_, _) => None,
+        let opener = links
+            .before(current)
+            .filter_map(|place| match pieces[place] {
+                Piece::Run(run) => Some((place, run)),
+                Piece::Node(_, _) | Piece::Pair(_, _, _) => None,
             })
             .take_while(|&(_, run)| run >= bottoms[key])
             .find(|&(_, run)| runs[run].opens(&runs[closer]))
-            .map(|(index, run)| ((index, run), deepest(&pieces[index + 1..current]) + 1))
+            .map(|(place, run)| {
+                let inside = deepest(&pieces, links.between(place, current));
+                ((place, run), inside + 1)
+            })
             .filter(|&(_, depth)| depth <= INLINE_CAP);
         if let Some((open, depth)) = opener {
-            current = pair(&mut pieces, &mut runs, open, (current, closer), depth);
+            at = pair(
+                &mut pieces,
+                &mut links,
+                &mut runs,
+                open,
+                (current, closer),
+                depth,
+            );
         } else {
             bottoms[key] = closer;
             if !runs[closer].can_open {
                 pieces[current] = Piece::Node(runs[closer].text(), 0);
             }
-            current += 1;
+            at = links.next[current];
         }
     }
-    let depth = deepest(&pieces);
-    (nodes(pieces, &runs), depth)
+    let depth = deepest(&pieces, links.onward(links.first));
+    (nodes(pieces, &links, &runs), depth)
 }
 
-/// How deep the deepest of `pieces` nests.
-fn deepest<E>(pieces: &[Piece<E>]) -> usize
+/// How deep the deepest of `pieces` at `places` nests.
+fn deepest<E, I>(pieces: &[Piece<E>], places: I) -> usize
 where
     E: Extension,
+    I: IntoIterator<Item = usize>,
 {
-    pieces
-        .iter()
-        .map(|piece| match piece {
-            Piece::Node(_, depth) => *depth,
-            Piece::Run(_) => 0,
-        })
+    places
+        .into_iter()
+        .map(|place| pieces[place].depth())
         .max()
         .unwrap_or_default()
 }
@@ -1022,11 +1115,12 @@ where
 /// Gives where the closer, or what follows it, now is.
 fn pair<E>(
     pieces: &mut Vec<Piece<E>>,
+    links: &mut Links,
     runs: &mut [Run],
     (open, opener): (usize, usize),
     (close, closer): (usize, usize),
     depth: usize,
-) -> usize
+) -> Option<usize>
 where
     E: Extension,
 {
@@ -1039,58 +1133,87 @@ where
     runs[opener].span.end -= used;
     runs[closer].count -= used;
     runs[closer].span.start += used;
-    let children = nodes(pieces.drain(open + 1..close), runs);
     let span = runs[opener].span.end..runs[closer].span.start;
     let node = if used == 2 {
         Inline::Strong(Strong {
-            children,
+            children: Vec::new(),
             continues: Continues::Neither,
             kind: Kind(None),
             span,
         })
     } else {
         Inline::Emphasis(Emphasis {
-            children,
+            children: Vec::new(),
             continues: Continues::Neither,
             kind: Kind(None),
             span,
         })
     };
-    pieces.insert(open + 1, Piece::Node(node, depth));
-    let mut after = open + 2;
+    let first = links.enclose(open, close);
+    pieces.push(Piece::Pair(node, depth, first));
     if runs[opener].count == 0 {
-        pieces.remove(open);
-        after -= 1;
+        links.remove(open);
     }
     if runs[closer].count == 0 {
-        pieces.remove(after);
+        let after = links.next[close];
+        links.remove(close);
+        return after;
     }
-    after
+    Some(close)
 }
 
-/// `pieces` as nodes: each run as the text of its characters not paired,
-/// and texts that touch joined into one. A line end lies between the texts
-/// of two lines.
-fn nodes<E, I>(pieces: I, runs: &[Run]) -> Vec<Inline<E>>
+/// `pieces` as nodes, in the order of `links`: each run as the text of its
+/// characters not paired, each pair with its children, and texts that touch
+/// joined into one. A pair waits on a stack while its children are built,
+/// so nesting takes no call depth.
+fn nodes<E>(pieces: Vec<Piece<E>>, links: &Links, runs: &[Run]) -> Vec<Inline<E>>
 where
     E: Extension,
-    I: IntoIterator<Item = Piece<E>>,
 {
-    let mut nodes: Vec<Inline<E>> = Vec::new();
-    for piece in pieces {
-        let node = match piece {
-            Piece::Node(node, _) => node,
-            Piece::Run(run) => runs[run].text(),
-        };
-        match (nodes.last_mut(), node) {
-            (Some(Inline::Text(last)), Inline::Text(text)) if last.span.end == text.span.start => {
-                last.value.push_str(&text.value);
-                last.span.end = text.span.end;
+    let mut slots: Vec<Option<Piece<E>>> = pieces.into_iter().map(Some).collect();
+    // Each pair waiting for its children, with its siblings built before it
+    // and the place of the piece after it.
+    let mut waiting = Vec::new();
+    let mut built = Vec::new();
+    let mut at = links.first;
+    loop {
+        if let Some(place) = at {
+            at = links.next[place];
+            match slots[place].take() {
+                Some(Piece::Node(node, _)) => join(&mut built, node),
+                Some(Piece::Pair(node, _, first)) => {
+                    waiting.push((node, mem::take(&mut built), at));
+                    at = first;
+                }
+                Some(Piece::Run(run)) => join(&mut built, runs[run].text()),
+                None => {}
             }
-            (_, other) => nodes.push(other),
+        } else if let Some((mut node, siblings, after)) = waiting.pop() {
+            let children = mem::replace(&mut built, siblings);
+            if let Some(slot) = children_mut(&mut node) {
+                *slot = children;
+            }
+            built.push(node);
+            at = after;
+        } else {
+            return built;
         }
     }
-    nodes
+}
+
+/// Adds `node` after `nodes`, joined into the last of them when both are
+/// texts that touch. A line end lies between the texts of two lines.
+fn join<E>(nodes: &mut Vec<Inline<E>>, node: Inline<E>)
+where
+    E: Extension,
+{
+    match (nodes.last_mut(), node) {
+        (Some(Inline::Text(last)), Inline::Text(text)) if last.span.end == text.span.start => {
+            last.value.push_str(&text.value);
+            last.span.end = text.span.end;
+        }
+        (_, other) => nodes.push(other),
+    }
 }
 
 /// The children of an emphasis, a link or a strong emphasis.
