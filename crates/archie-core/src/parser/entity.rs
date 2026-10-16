@@ -1,5 +1,5 @@
-//! Backslash escapes and character references, resolved in link
-//! destinations and titles as `CommonMark` resolves them.
+//! Backslash escapes and character references, resolved in text and in
+//! link destinations and titles as `CommonMark` resolves them.
 
 /// The HTML5 named character references, without their `&` and `;`, sorted
 /// by name.
@@ -2164,7 +2164,7 @@ pub fn resolve(text: &str) -> String {
 /// reference's length: `&name;` with a name of the HTML5 list, `&#` and one
 /// to seven digits then `;`, or `&#x` and one to six hexadecimal digits
 /// then `;`. A code point that is zero or names no character gives U+FFFD.
-fn reference(text: &str) -> Option<(String, usize)> {
+pub fn reference(text: &str) -> Option<(String, usize)> {
     let body = text.strip_prefix('&')?;
     let name = &body[..body.find(';')?];
     let length = name.len() + 2;

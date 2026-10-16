@@ -1,4 +1,4 @@
-use super::check;
+use super::{check, check_spans};
 
 #[test]
 fn a_wiki_link_has_a_target_and_may_have_an_alias() {
@@ -160,7 +160,7 @@ Document
 }
 
 #[test]
-fn a_link_may_cross_a_line_end_and_link_text_holds_no_brackets() {
+fn a_link_may_cross_a_line_end_and_link_text_may_hold_balanced_brackets() {
     check(
         "\
 [text
@@ -177,7 +177,9 @@ more](dest) and [a [b] c](d)
         Line
           Link form=Markdown target="dest" continues=previous
             Text "more"
-          Text " and [a [b] c](d)"
+          Text " and "
+          Link form=Markdown target="d"
+            Text "a [b] c"
 "#,
     );
 }
@@ -1088,6 +1090,267 @@ fn a_code_span_does_not_cross_a_blank_line() {
       Paragraph
         Line
           Text "b`"
+"#,
+    );
+}
+
+#[test]
+fn a_reference_image_takes_its_target_and_title_from_the_definition_of_its_label() {
+    check(
+        "![a][1]\n\n[1]: /u\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Image form=Markdown target="/u" alt="a"
+"#,
+    );
+    check(
+        "![a][]\n\n[a]: /u \"T\"\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Image form=Markdown target="/u" title="T" alt="a"
+"#,
+    );
+    check(
+        "![a]\n\n[a]: /u\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Image form=Markdown target="/u" alt="a"
+"#,
+    );
+}
+
+#[test]
+fn a_reference_image_whose_label_has_no_definition_stays_text() {
+    check(
+        "![a][9]\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "![a][9]"
+"#,
+    );
+}
+
+#[test]
+fn entity_and_numeric_character_references_in_text_are_resolved() {
+    let line = "a &amp; b &copy; &#35; &#x22; &foo; &#0;";
+    let whole = "a &amp; b &copy; &#35; &#x22; &foo; &#0;\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", line),
+            ("Heading", ""),
+            ("Paragraph", line),
+            ("Line", line),
+            ("Text \"a & b \u{a9} # \\\" &foo; \u{fffd}\"", line),
+        ],
+    );
+}
+
+#[test]
+fn a_reference_stays_as_written_in_a_code_span_an_autolink_and_inline_html() {
+    check(
+        "`&amp;` <https://x?a&amp;b> <b title=\"&amp;\">\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Code "&amp;"
+          Text " "
+          Link form=Markdown target="https://x?a&amp;b"
+            Text "https://x?a&amp;b"
+          Text " "
+          Html "<b title=\"&amp;\">"
+"#,
+    );
+}
+
+#[test]
+fn a_reference_in_a_heading_is_resolved() {
+    check(
+        "# A &amp; B\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "A & B"
+"#,
+    );
+}
+
+#[test]
+fn link_text_and_image_text_may_hold_balanced_brackets() {
+    check(
+        "[a [b] c](d)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="d"
+            Text "a [b] c"
+"#,
+    );
+    check(
+        "![a [b] c](d)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Image form=Markdown target="d" alt="a [b] c"
+"#,
+    );
+    check(
+        "[a [b] c][x]\n\n[x]: /u\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="/u"
+            Text "a [b] c"
+"#,
+    );
+}
+
+#[test]
+fn a_link_inside_link_text_leaves_the_outer_brackets_text() {
+    check(
+        "[a [b](c) d](e)\n\n[a [b c](d)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[a "
+          Link form=Markdown target="c"
+            Text "b"
+          Text " d](e)"
+      Paragraph
+        Line
+          Text "[a "
+          Link form=Markdown target="d"
+            Text "b c"
+"#,
+    );
+}
+
+#[test]
+fn a_code_span_loses_one_space_at_each_end_when_both_ends_are_spaces() {
+    let whole = "` a ` and `  b  ` and ` ` and `` `a` ``\n";
+    let line = "` a ` and `  b  ` and ` ` and `` `a` ``";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", line),
+            ("Heading", ""),
+            ("Paragraph", line),
+            ("Line", line),
+            (r#"Code "a""#, "` a `"),
+            (r#"Text " and ""#, " and "),
+            (r#"Code " b ""#, "`  b  `"),
+            (r#"Text " and ""#, " and "),
+            (r#"Code " ""#, "` `"),
+            (r#"Text " and ""#, " and "),
+            (r#"Code "`a`""#, "`` `a` ``"),
+        ],
+    );
+}
+
+#[test]
+fn a_code_span_across_a_line_end_keeps_the_spaces_before_it() {
+    let whole = "`foo   bar \nbaz`\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "`foo   bar \nbaz`"),
+            ("Heading", ""),
+            ("Paragraph", "`foo   bar \nbaz`"),
+            ("Line", "`foo   bar "),
+            (r#"Code "foo   bar " continues=next"#, "`foo   bar "),
+            ("Line", "baz`"),
+            (r#"Code "baz" continues=previous"#, "baz`"),
+        ],
+    );
+}
+
+#[test]
+fn two_spaces_before_a_line_end_inside_a_code_span_are_code_and_no_line_break() {
+    let whole = "`a  \nb`\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "`a  \nb`"),
+            ("Heading", ""),
+            ("Paragraph", "`a  \nb`"),
+            ("Line", "`a  "),
+            (r#"Code "a  " continues=next"#, "`a  "),
+            ("Line", "b`"),
+            (r#"Code "b" continues=previous"#, "b`"),
+        ],
+    );
+}
+
+#[test]
+fn an_underlined_heading_joins_a_code_span_with_the_spaces_before_its_line_end() {
+    check(
+        "x `foo   bar \nbaz`\n===\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "x "
+        Code "foo   bar  baz"
+"#,
+    );
+}
+
+#[test]
+fn a_paragraph_reads_reference_images_references_brackets_and_code_span_ends() {
+    check(
+        "![logo][l] &amp; [a [b] c](d) ` x `\n\n[l]: /logo.svg \"Logo\"\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Image form=Markdown target="/logo.svg" title="Logo" alt="logo"
+          Text " & "
+          Link form=Markdown target="d"
+            Text "a [b] c"
+          Text " "
+          Code "x"
 "#,
     );
 }

@@ -2,6 +2,7 @@
 
 use core::mem;
 use core::ops::{Range, RangeInclusive};
+use std::collections::HashSet;
 
 use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
 
@@ -10,14 +11,17 @@ use crate::parser::ast::{
     Text,
 };
 use crate::parser::definition::{self, Definitions, Target, fold_label};
-use crate::parser::extension::{Extension, Plain};
-use crate::parser::html;
+use crate::parser::extension::Extension;
+use crate::parser::{entity, html};
 
 /// What ends a line of a paragraph before the line after it.
 #[derive(Clone, Copy)]
 enum Ending {
     /// A backslash that ends the line is a hard line break.
     Backslash,
+    /// A code span goes on into the next line: the spaces and tabs before
+    /// the line ending, up to this place in the source, belong to it.
+    Code(usize),
     /// No hard line break can end the line.
     Soft,
     /// Two or more spaces, up to this place in the source, are a hard line
@@ -25,13 +29,14 @@ enum Ending {
     Spaces(usize),
 }
 
-/// The lines of a paragraph, `ranges` of the source, joined by `\n` into
+/// The lines of a paragraph, `ranges` of `source`, joined by `\n` into
 /// `text`, which the scanner reads: where each line sits in `text`, and how
 /// it ends.
 struct Layout<'src> {
     endings: Vec<Ending>,
     places: Vec<Range<usize>>,
     ranges: &'src [Range<usize>],
+    source: &'src str,
     text: String,
 }
 
@@ -70,9 +75,11 @@ where
     E: Extension,
 {
     definitions: &'defs Definitions,
+    /// The `[` of each text found to hold a link, which starts no link.
+    holders: HashSet<usize>,
     layout: &'lay Layout<'lay>,
-    /// Off inside the text of a link, where another link cannot start.
-    links: bool,
+    /// Whether a link has been read: the text of a link holds none.
+    linked: bool,
     pieces: Vec<Piece<E>>,
     runs: Vec<Run>,
     text: String,
@@ -85,25 +92,52 @@ impl Ending {
     /// line of its paragraph `follows`, a backslash or two or more spaces
     /// that end it make a hard line break.
     fn of(source: &str, end: usize, follows: bool) -> Self {
-        let trailing = source[end..]
-            .bytes()
-            .take_while(|&byte| matches!(byte, b' ' | b'\t'))
-            .count();
-        let close = end + trailing;
-        let breaks = follows && matches!(source.as_bytes().get(close), None | Some(b'\n' | b'\r'));
-        if !breaks {
-            Self::Soft
-        } else if trailing == 0 {
-            Self::Backslash
-        } else if source[end..close].ends_with("  ") {
-            Self::Spaces(close)
-        } else {
-            Self::Soft
+        match line_end(source, end).filter(|_| follows) {
+            Some(close) if close == end => Self::Backslash,
+            Some(close) if source[end..close].ends_with("  ") => Self::Spaces(close),
+            Some(_) | None => Self::Soft,
         }
     }
 }
 
 impl<'src> Layout<'src> {
+    /// The content of a code span, at `range` of `text`, with the spaces and
+    /// tabs before each line ending it crosses.
+    fn code(&self, range: Range<usize>) -> String {
+        let first = self.line(range.start);
+        let mut value = String::new();
+        for (index, part) in self.text[range].split('\n').enumerate() {
+            if index > 0 {
+                value.push_str(&self.source[self.trailing(first + index - 1)]);
+                value.push('\n');
+            }
+            value.push_str(part);
+        }
+        value
+    }
+
+    /// Ends each line that a code span among `nodes` goes on from past the
+    /// spaces and tabs before its line ending, which the code span holds.
+    fn code_ends<E>(&mut self, nodes: &[Inline<E>])
+    where
+        E: Extension,
+    {
+        for node in nodes {
+            match node {
+                Inline::Code(code) => {
+                    let lines = self.lines_of(&code.span);
+                    for line in *lines.start()..*lines.end() {
+                        self.endings[line] = Ending::Code(self.trailing(line).end);
+                    }
+                }
+                Inline::Emphasis(emphasis) => self.code_ends(&emphasis.children),
+                Inline::Link(link) => self.code_ends(&link.children),
+                Inline::Strong(strong) => self.code_ends(&strong.children),
+                Inline::Html(_) | Inline::Image(_) | Inline::LineBreak(_) | Inline::Text(_) => {}
+            }
+        }
+    }
+
     /// The pieces of `node`, read from `text`, one for each line it lies
     /// on, by that line, with their spans in the source.
     fn cut<E>(&self, node: Inline<E>) -> Vec<(usize, Inline<E>)>
@@ -202,10 +236,11 @@ impl<'src> Layout<'src> {
     }
 
     /// Where the `Line` of `line` ends in the source: past the spaces of a
-    /// hard line break that ends it, or at the end of its text.
+    /// hard line break that ends it, or of a code span that goes on from it,
+    /// or at the end of its text.
     fn end(&self, line: usize) -> usize {
         match self.endings[line] {
-            Ending::Spaces(end) => end,
+            Ending::Code(end) | Ending::Spaces(end) => end,
             Ending::Backslash | Ending::Soft => self.ranges[line].end,
         }
     }
@@ -245,7 +280,7 @@ impl<'src> Layout<'src> {
         self.line(span.start)..=self.line(last)
     }
 
-    fn new(source: &str, ranges: &'src [Range<usize>]) -> Self {
+    fn new(source: &'src str, ranges: &'src [Range<usize>]) -> Self {
         let mut text = String::new();
         let mut places = Vec::with_capacity(ranges.len());
         let mut endings = Vec::with_capacity(ranges.len());
@@ -262,6 +297,7 @@ impl<'src> Layout<'src> {
             endings,
             places,
             ranges,
+            source,
             text,
         }
     }
@@ -325,6 +361,13 @@ impl<'src> Layout<'src> {
             }
         }
         spread.into_iter()
+    }
+
+    /// The spaces and tabs between the text of `line` and its line ending,
+    /// in the source: none when something else follows them.
+    fn trailing(&self, line: usize) -> Range<usize> {
+        let end = self.ranges[line].end;
+        end..line_end(self.source, end).unwrap_or(end)
     }
 }
 
@@ -399,7 +442,7 @@ where
 
     /// An image, or a `!` that starts none.
     fn bang(&mut self, at: usize, end: usize) -> usize {
-        if let Some((image, close)) = image_at(&self.layout.text, at, end) {
+        if let Some((image, close)) = image_at(&self.layout.text, self.definitions, at, end) {
             self.push(Inline::Image(image));
             return close;
         }
@@ -424,11 +467,12 @@ where
             self.push_text(at..at + ticks, &source[at..at + ticks]);
             return at + ticks;
         };
+        let content = self.layout.code(at + ticks..close - ticks);
         self.push(Inline::Code(Code {
             continues: Continues::Neither,
             kind: Kind(None),
             span: at..close,
-            value: source[at + ticks..close - ticks].to_owned(),
+            value: unpad(&content).to_owned(),
         }));
         close
     }
@@ -488,6 +532,18 @@ where
         at + 1
     }
 
+    /// An entity or numeric character reference, as the characters it
+    /// names, or a `&` that starts none.
+    fn entity(&mut self, at: usize, end: usize) -> usize {
+        let source = self.layout.text.as_str();
+        if let Some((characters, length)) = entity::reference(&source[at..end]) {
+            self.push_text(at..at + length, &characters);
+            return at + length;
+        }
+        self.push_text(at..at + 1, "&");
+        at + 1
+    }
+
     /// A backslash before ASCII punctuation makes that character plain text.
     /// A backslash that ends a line followed by another is a hard line break.
     fn escape(&mut self, at: usize, end: usize) -> usize {
@@ -527,12 +583,14 @@ where
         }
     }
 
-    /// A scanner for the text of a link.
-    const fn inner(&self) -> Self {
+    /// A scanner for the text of a link, which takes over the holders found
+    /// so far.
+    fn inner(&mut self) -> Self {
         Self {
             definitions: self.definitions,
+            holders: mem::take(&mut self.holders),
             layout: self.layout,
-            links: false,
+            linked: false,
             pieces: Vec::new(),
             runs: Vec::new(),
             text: String::new(),
@@ -542,7 +600,11 @@ where
     }
 
     /// A wiki link, `[text](destination "title")`, or a reference link.
+    /// Brackets whose text holds a link make none.
     fn link(&mut self, at: usize, end: usize) -> Option<usize> {
+        if self.holders.contains(&at) {
+            return None;
+        }
         let source = self.layout.text.as_str();
         if let Some(wiki) = wiki_at(source, at, end) {
             let children = wiki.alias.map_or_else(Vec::new, |alias| {
@@ -552,6 +614,7 @@ where
                     span: alias,
                 })]
             });
+            self.linked = true;
             self.push(Inline::Link(Link {
                 children,
                 continues: Continues::Neither,
@@ -565,9 +628,15 @@ where
         }
         let text_close = text_end(source, at, end)?;
         let (target, close) = definition::inline(&source[..end], text_close + 1)
-            .or_else(|| self.reference(at, text_close, end))?;
+            .or_else(|| reference(source, self.definitions, at, text_close, end))?;
         let mut inner = self.inner();
         inner.scan(at + 1..text_close);
+        self.holders = mem::take(&mut inner.holders);
+        if inner.linked {
+            self.holders.insert(at);
+            return None;
+        }
+        self.linked = true;
         self.push(Inline::Link(Link {
             children: inner.finish(),
             continues: Continues::Neither,
@@ -580,11 +649,12 @@ where
         Some(close)
     }
 
-    const fn new(layout: &'lay Layout<'lay>, definitions: &'defs Definitions) -> Self {
+    fn new(layout: &'lay Layout<'lay>, definitions: &'defs Definitions) -> Self {
         Self {
             definitions,
+            holders: HashSet::new(),
             layout,
-            links: true,
+            linked: false,
             pieces: Vec::new(),
             runs: Vec::new(),
             text: String::new(),
@@ -602,7 +672,7 @@ where
         while next < end
             && !matches!(
                 bytes[next],
-                b'\n' | b'\\' | b'`' | b'[' | b'!' | b'<' | b'*' | b'_'
+                b'\n' | b'\\' | b'`' | b'[' | b'!' | b'&' | b'<' | b'*' | b'_'
             )
         {
             next += 1;
@@ -625,27 +695,6 @@ where
         self.text.push_str(value);
     }
 
-    /// The target of the reference link whose text runs from the `[` at
-    /// `open` to the `]` at `close`, and where the link ends:
-    /// `[text][label]`, `[label][]` or `[label]`. A label with no
-    /// definition gives none.
-    fn reference(&self, open: usize, close: usize, end: usize) -> Option<(Target, usize)> {
-        let text = &self.layout.text[..end];
-        let after = close + 1;
-        if let Some(label_close) = definition::label_at(text, after) {
-            let target = self.target(&text[after + 1..label_close])?;
-            return Some((target, label_close + 1));
-        }
-        let label_close = definition::label_at(text, open).filter(|&found| found == close)?;
-        let target = self.target(&text[open + 1..label_close])?;
-        let link_end = if text[after..].starts_with("[]") {
-            after + 2
-        } else {
-            after
-        };
-        Some((target, link_end))
-    }
-
     fn scan(&mut self, range: Range<usize>) {
         let bytes = self.layout.text.as_bytes();
         let mut at = range.start;
@@ -655,17 +704,13 @@ where
                 b'\\' => self.escape(at, range.end),
                 b'`' => self.code(at, range.end),
                 b'!' => self.bang(at, range.end),
+                b'&' => self.entity(at, range.end),
                 b'<' => self.angle(at, range.end),
                 b'*' | b'_' => self.delimiters(at, range.end),
-                b'[' if self.links => self.bracket(at, range.end),
+                b'[' => self.bracket(at, range.end),
                 _ => self.plain(at, range.end),
             };
         }
-    }
-
-    /// The definition `label` names.
-    fn target(&self, label: &str) -> Option<Target> {
-        self.definitions.get(&fold_label(label)).cloned()
     }
 }
 
@@ -677,10 +722,11 @@ pub fn lines<E>(source: &str, ranges: &[Range<usize>], definitions: &Definitions
 where
     E: Extension,
 {
-    let layout = Layout::new(source, ranges);
+    let mut layout = Layout::new(source, ranges);
     let mut scanner = Scanner::new(&layout, definitions);
     scanner.scan(0..layout.text.len());
     let nodes = scanner.finish();
+    layout.code_ends(&nodes);
     layout.lines(nodes)
 }
 
@@ -887,33 +933,58 @@ fn wiki_at(source: &str, at: usize, end: usize) -> Option<Wiki> {
 }
 
 /// The `]` that ends the text of a link or an image whose `[` is at
-/// `open`. The text holds no bracket except inside an image, a code span,
-/// an autolink or inline HTML, or after a backslash.
+/// `open`: the first that closes every bracket opened after it. A bracket
+/// after a backslash, or inside a code span, an autolink, inline HTML, a
+/// wiki embed or the destination and title of an image, does not count.
 fn text_end(source: &str, open: usize, end: usize) -> Option<usize> {
     let bytes = source.as_bytes();
     if bytes.get(open) != Some(&b'[') {
         return None;
     }
+    // Whether each bracket still open opens an image.
+    let mut brackets = Vec::new();
     let mut at = open + 1;
     while at < end {
         at = match bytes[at] {
-            b']' => return Some(at),
-            b'[' => return None,
+            b']' => match brackets.pop() {
+                None => return Some(at),
+                Some(true) => {
+                    definition::inline(&source[..end], at + 1).map_or(at + 1, |(_, close)| close)
+                }
+                Some(false) => at + 1,
+            },
+            b'[' => {
+                brackets.push(false);
+                at + 1
+            }
+            b'!' if bytes.get(at + 1) == Some(&b'[') => wiki_at(source, at + 1, end).map_or_else(
+                || {
+                    brackets.push(true);
+                    at + 2
+                },
+                |wiki| wiki.close,
+            ),
             b'\\' if at + 1 < end && bytes[at + 1].is_ascii_punctuation() => at + 2,
             b'`' => code_end(bytes, at, end).unwrap_or_else(|| at + run(bytes, at, end)),
             b'<' => autolink_at(source, at, end)
                 .map(|(_, close)| close)
                 .or_else(|| html::inline_end(&source[..end], at))
                 .unwrap_or(at + 1),
-            b'!' => image_at::<Plain>(source, at, end).map_or(at + 1, |(_, close)| close),
             _ => at + 1,
         };
     }
     None
 }
 
-/// An image starting at the `!` at `at`, and where it ends.
-fn image_at<E>(source: &str, at: usize, end: usize) -> Option<(Image<E>, usize)>
+/// An image starting at the `!` at `at`, and where it ends: a wiki embed,
+/// `![alt](destination "title")`, or a reference image, which takes the
+/// target of the definition its label names.
+fn image_at<E>(
+    source: &str,
+    definitions: &Definitions,
+    at: usize,
+    end: usize,
+) -> Option<(Image<E>, usize)>
 where
     E: Extension,
 {
@@ -933,7 +1004,8 @@ where
         return Some((image, wiki.close));
     }
     let text_close = text_end(source, open, end)?;
-    let (target, close) = definition::inline(&source[..end], text_close + 1)?;
+    let (target, close) = definition::inline(&source[..end], text_close + 1)
+        .or_else(|| reference(source, definitions, open, text_close, end))?;
     let image = Image {
         alt: source[open + 1..text_close].to_owned(),
         continues: Continues::Neither,
@@ -944,6 +1016,57 @@ where
         title: target.title,
     };
     Some((image, close))
+}
+
+/// The target of the reference link or image whose text runs from the `[`
+/// at `open` to the `]` at `close` in `source`, read up to `end`, and where
+/// it ends: `[text][label]`, `[label][]` or `[label]`. A label with no
+/// definition gives none.
+fn reference(
+    source: &str,
+    definitions: &Definitions,
+    open: usize,
+    close: usize,
+    end: usize,
+) -> Option<(Target, usize)> {
+    let text = &source[..end];
+    let named = |label: &str| definitions.get(&fold_label(label)).cloned();
+    let after = close + 1;
+    if let Some(label_close) = definition::label_at(text, after) {
+        let target = named(&text[after + 1..label_close])?;
+        return Some((target, label_close + 1));
+    }
+    let label_close = definition::label_at(text, open).filter(|&found| found == close)?;
+    let target = named(&text[open + 1..label_close])?;
+    let link_end = if text[after..].starts_with("[]") {
+        after + 2
+    } else {
+        after
+    };
+    Some((target, link_end))
+}
+
+/// The content of a code span without one space at each end, when both
+/// ends are spaces and it is not all spaces, a line ending counting as one.
+fn unpad(content: &str) -> &str {
+    if content.bytes().all(|byte| matches!(byte, b' ' | b'\n')) {
+        return content;
+    }
+    content
+        .strip_prefix(' ')
+        .and_then(|rest| rest.strip_suffix(' '))
+        .unwrap_or(content)
+}
+
+/// Past the spaces and tabs at `end` in `source`, when a line ending, or
+/// the end of `source`, follows them.
+fn line_end(source: &str, end: usize) -> Option<usize> {
+    let close = end
+        + source[end..]
+            .bytes()
+            .take_while(|&byte| matches!(byte, b' ' | b'\t'))
+            .count();
+    matches!(source.as_bytes().get(close), None | Some(b'\n' | b'\r')).then_some(close)
 }
 
 /// Where the code span whose opening backticks are at `at` ends, past its

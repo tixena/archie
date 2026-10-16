@@ -987,3 +987,122 @@ fn a_grid_cell_spans_from_its_first_line_to_its_last() {
         ],
     );
 }
+
+#[test]
+fn a_definition_in_a_pipe_cell_is_a_definition_of_the_file() {
+    check(
+        "| a | b |\n|---|---|\n| [x]: /u | [x] |\n\n[x]\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Pipe alignments=Default,Default
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "a"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "b"
+        TableRow
+          TableCell
+            MarkdownBlock
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Link form=Markdown target="/u"
+                      Text "x"
+      Paragraph
+        Line
+          Link form=Markdown target="/u"
+            Text "x"
+"#,
+    );
+}
+
+#[test]
+fn a_definition_in_a_grid_cell_is_a_definition_of_the_file() {
+    check(
+        "\
++---------+-----+
+| [x]: /u | [x] |
++---------+-----+
+
+[x]
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Grid alignments=Default,Default
+        TableRow
+          TableCell
+            MarkdownBlock
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Link form=Markdown target="/u"
+                      Text "x"
+      Paragraph
+        Line
+          Link form=Markdown target="/u"
+            Text "x"
+"#,
+    );
+}
+
+#[test]
+fn a_definition_in_a_table_inside_a_grid_cell_is_a_definition_of_the_file() {
+    check(
+        "\
++---------------+
+| | h |         |
+| |---|         |
+| | [y]: /v |   |
++---------------+
+
+[y]
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Grid alignments=Default
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Table format=Pipe alignments=Default
+                  TableRow head
+                    TableCell
+                      MarkdownBlock
+                        Section
+                          Heading
+                          Paragraph
+                            Line
+                              Text "h"
+                  TableRow
+                    TableCell
+                      MarkdownBlock
+      Paragraph
+        Line
+          Link form=Markdown target="/v"
+            Text "y"
+"#,
+    );
+}

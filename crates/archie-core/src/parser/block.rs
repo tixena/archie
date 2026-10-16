@@ -452,7 +452,7 @@ where
 {
     let mut parser = Parser {
         cells: Cells::new(),
-        definitions: definitions(&tokens),
+        definitions: definitions(source, &tokens),
         extension: PhantomData,
         pos: 0,
         source,
@@ -467,18 +467,30 @@ where
     (block, parser.definitions, parser.cells)
 }
 
-/// The link definitions among `tokens`, each target by its folded label.
-/// The first definition of a label wins.
-fn definitions(tokens: &[Token]) -> Definitions {
-    let mut definitions = Definitions::new();
+/// The link definitions among `tokens` and in the cells of their tables,
+/// each target by its folded label. The first definition of a label wins.
+fn definitions(source: &str, tokens: &[Token]) -> Definitions {
+    let mut found = Definitions::new();
     for token in tokens {
         if let TokenKind::Definition { label, target } = &token.kind {
-            definitions
+            found
                 .entry(fold_label(label))
                 .or_insert_with(|| target.clone());
         }
+        if let TokenKind::Table(table) = &token.kind {
+            let cells = table
+                .head
+                .iter()
+                .chain(&table.rows)
+                .flat_map(|row| &row.cells);
+            for cell in cells {
+                for (label, target) in definitions(source, &lex_lines(source, &cell.lines, 0)) {
+                    found.entry(label).or_insert(target);
+                }
+            }
+        }
     }
-    definitions
+    found
 }
 
 /// The inline nodes of `lines` as those of one line, with a space where
