@@ -1,12 +1,15 @@
 //! Each sample is a tree written back to markdown: read from a source, or
 //! built, then written, then read again.
 
+use indexmap::IndexMap;
+
 use crate::parser::ast::{
-    Block, Document, Heading, Inline, Kind, Line, MarkdownBlock, Paragraph, Section, Table, Text,
+    Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Kind, Line, Mapping,
+    MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Table, Text, Value,
 };
 use crate::parser::extension::Markdown;
 use crate::parser::parse;
-use crate::writer::{WriteOptions, write};
+use crate::writer::{WriteError, WriteOptions, write};
 
 /// Every file under `parser/tests/fixtures/`.
 const FIXTURES: [(&str, &str); 21] = [
@@ -83,6 +86,36 @@ const FIXTURES: [(&str, &str); 21] = [
         include_str!("../parser/tests/fixtures/zola_page.md"),
     ),
 ];
+
+/// The owner's sample of archie's written form.
+const OWNERS_SAMPLE: &str = "---
+title: 'Notes'
+tags: [a, b]
+---
+Notes
+=====
+
+Some __bold__ and _em_ text.
+
+* one
+*   two
+    continued
+
+~~~python
+print(1)
+~~~
+
+___
+";
+
+/// TOML frontmatter with a table, then a heading.
+const TOML_SAMPLE: &str =
+    "+++\ntitle = \"Notes\"\ndue = 2026-10-10\n[params]\nauthor = \"Ada\"\n+++\n# Notes\n";
+
+/// Frontmatter written in TOML.
+const TOML: WriteOptions = WriteOptions {
+    frontmatter: FrontmatterFormat::Toml,
+};
 
 fn written(source: &str) -> String {
     write(&parse(source).unwrap(), &WriteOptions::default()).unwrap()
@@ -312,7 +345,9 @@ fn every_fixture_reads_back_to_the_same_body_and_writes_the_same_text_again() {
     for (name, source) in FIXTURES {
         let text = written(source);
         assert_eq!(body(&text), body(source), "{name}: {text}");
-        assert_eq!(written(&text), text, "{name}");
+        // A time of day reads back from YAML as text, which needs no quotes.
+        let again = text.replace("standup_at: \"09:30:00\"", "standup_at: 09:30:00");
+        assert_eq!(written(&text), again, "{name}");
     }
 }
 
@@ -540,4 +575,400 @@ fn blocks_are_separated_by_one_blank_line_and_the_text_ends_with_one_newline() {
         "# A\n\ntext\n\n- x\n\n> q\n\nlast\n"
     );
     assert_eq!(round_trip(""), "");
+}
+
+fn toml(source: &str) -> String {
+    write(&parse(source).unwrap(), &TOML).unwrap()
+}
+
+fn toml_error(source: &str) -> WriteError {
+    write(&parse(source).unwrap(), &TOML).unwrap_err()
+}
+
+/// The frontmatter mapping `source` reads as, every span emptied.
+fn mapping(source: &str) -> Mapping {
+    let mut read = parse(source).unwrap().frontmatter.unwrap().mapping;
+    clear_mapping(&mut read);
+    read
+}
+
+fn clear_mapping(mapping: &mut Mapping) {
+    mapping.span = 0..0;
+    for pair in mapping.pairs.values_mut() {
+        pair.repeats.clear();
+        pair.span = 0..0;
+        clear_value(&mut pair.value);
+    }
+}
+
+fn clear_value(value: &mut Value) {
+    match value {
+        Value::Mapping(mapping) => clear_mapping(mapping),
+        Value::Scalar(scalar) => scalar.span = 0..0,
+        Value::Sequence(sequence) => {
+            sequence.span = 0..0;
+            for item in &mut sequence.items {
+                clear_value(item);
+            }
+        }
+    }
+}
+
+/// `mapping` with each time of day turned into the text it is written as
+/// in YAML.
+fn times_as_text(mapping: &mut Mapping) {
+    for pair in mapping.pairs.values_mut() {
+        time_as_text(&mut pair.value);
+    }
+}
+
+fn time_as_text(value: &mut Value) {
+    match value {
+        Value::Mapping(mapping) => times_as_text(mapping),
+        Value::Scalar(scalar) => {
+            if let ScalarValue::Time(time) = scalar.value {
+                scalar.value = ScalarValue::String(time.to_string());
+            }
+        }
+        Value::Sequence(sequence) => {
+            for item in &mut sequence.items {
+                time_as_text(item);
+            }
+        }
+    }
+}
+
+fn null_error(key: &str) -> WriteError {
+    WriteError {
+        key: key.to_owned(),
+        message: "TOML cannot hold a null".to_owned(),
+    }
+}
+
+fn text(value: &str) -> Value {
+    Value::Scalar(Scalar {
+        span: 0..0,
+        value: ScalarValue::String(value.to_owned()),
+    })
+}
+
+/// A document whose frontmatter holds `pairs` and whose body is empty.
+fn with_frontmatter(pairs: IndexMap<String, Pair>) -> Document {
+    Document {
+        frontmatter: Some(Frontmatter {
+            format: FrontmatterFormat::Yaml,
+            mapping: Mapping { pairs, span: 0..0 },
+            span: 0..0,
+        }),
+        ..document(Vec::new())
+    }
+}
+
+#[test]
+fn toml_frontmatter_is_written_as_yaml_by_default() {
+    assert_eq!(
+        written(TOML_SAMPLE),
+        "---\ntitle: Notes\ndue: !!timestamp 2026-10-10\nparams:\n  author: Ada\n---\n# Notes\n"
+    );
+}
+
+#[test]
+fn toml_frontmatter_is_written_between_plus_lines_when_picked() {
+    assert_eq!(
+        toml(TOML_SAMPLE),
+        "+++\ntitle = \"Notes\"\ndue = 2026-10-10\n\n[params]\nauthor = \"Ada\"\n+++\n# Notes\n"
+    );
+}
+
+#[test]
+fn keys_keep_the_order_they_were_read_and_a_key_read_twice_is_written_once() {
+    let source = "---\nz: 1\nt: A\na: 2\nt: B\n---\n";
+    assert_eq!(written(source), "---\nz: 1\nt: [A, B]\na: 2\n---\n");
+    assert_eq!(toml(source), "+++\nz = 1\nt = [\"A\", \"B\"]\na = 2\n+++\n");
+}
+
+#[test]
+fn yaml_is_written_in_block_form_with_text_quoted_only_when_needed() {
+    let source = "---
+title: 'Notes'
+owner:
+  name: Ada
+  team:
+    lead: Grace
+tags: [a, b]
+people:
+  - name: Ada
+    role: host
+  - Grace
+nested: [[a], []]
+none: {}
+empty: ''
+a: \"yes\"
+b: \"2026-10-10\"
+c: \"12\"
+pair: \"a: b\"
+comment: \"a #b\"
+dash: \"- a\"
+lines: \"one\\ntwo\"
+nothing: null
+due: 2026-10-10
+at: 2026-10-10T07:32:00Z
+local: 2026-10-10T07:32:00.5
+---
+";
+    let text = written(source);
+    assert_eq!(
+        text,
+        "---
+title: Notes
+owner:
+  name: Ada
+  team:
+    lead: Grace
+tags: [a, b]
+people:
+  - name: Ada
+    role: host
+  - Grace
+nested: [[a], []]
+none: {}
+empty: \"\"
+a: yes
+b: \"2026-10-10\"
+c: \"12\"
+pair: \"a: b\"
+comment: \"a #b\"
+dash: \"- a\"
+lines: \"one\\ntwo\"
+nothing: null
+due: !!timestamp 2026-10-10
+at: !!timestamp 2026-10-10T07:32:00Z
+local: !!timestamp 2026-10-10T07:32:00.500
+---
+"
+    );
+    assert_eq!(mapping(&text), mapping(source));
+}
+
+#[test]
+fn a_list_of_mappings_is_written_in_block_form_inside_a_list_too() {
+    assert_eq!(
+        written("---\np:\n  - name: Ada\n---\n"),
+        "---\np:\n  - name: Ada\n---\n"
+    );
+    let source = "---\np: [[{name: Ada}, b], c]\n---\n";
+    let text = written(source);
+    assert_eq!(text, "---\np:\n  - - name: Ada\n    - b\n  - c\n---\n");
+    assert_eq!(mapping(&text), mapping(source));
+}
+
+#[test]
+fn a_time_of_day_is_written_into_yaml_as_quoted_text() {
+    assert_eq!(
+        written("+++\nat = 07:32:00\n+++\n"),
+        "---\nat: \"07:32:00\"\n---\n"
+    );
+}
+
+#[test]
+fn toml_quotes_all_text_and_puts_tables_after_the_plain_keys() {
+    let source = "---
+title: Notes
+owner: [Ada, {name: Grace}]
+params:
+  author: Ada
+  extra:
+    toc: true
+  tags: [a, b]
+count: 3
+people:
+  - name: Ada
+  - name: Grace
+ratio: 0.5
+whole: 2.0
+done: false
+due: 2026-10-10
+at: 2026-10-10T07:32:00-04:00
+local: 2026-10-10T07:32:00
+none: {}
+quote: 'say \"hi\" \\ now'
+lines: \"one\\ntwo\"
+---
+";
+    let text = toml(source);
+    assert_eq!(
+        text,
+        "+++
+title = \"Notes\"
+owner = [\"Ada\", { name = \"Grace\" }]
+count = 3
+ratio = 0.5
+whole = 2.0
+done = false
+due = 2026-10-10
+at = 2026-10-10T07:32:00-04:00
+local = 2026-10-10T07:32:00
+quote = \"say \\\"hi\\\" \\\\ now\"
+lines = \"one\\ntwo\"
+
+[params]
+author = \"Ada\"
+tags = [\"a\", \"b\"]
+
+[params.extra]
+toc = true
+
+[[people]]
+name = \"Ada\"
+
+[[people]]
+name = \"Grace\"
+
+[none]
++++
+"
+    );
+    assert_eq!(mapping(&text), mapping(source));
+    assert_eq!(
+        toml("+++\nat = 07:32:00\n+++\n"),
+        "+++\nat = 07:32:00\n+++\n"
+    );
+}
+
+#[test]
+fn a_null_cannot_be_written_into_toml() {
+    assert_eq!(toml_error("---\na: null\n---\n"), null_error("a"));
+    assert_eq!(
+        toml_error("---\nowner:\n  name: Ada\n  email: null\n---\n"),
+        null_error("owner.email")
+    );
+    assert_eq!(
+        toml_error("---\nowner: [Ada, {email: ~}]\n---\n"),
+        null_error("owner.email")
+    );
+    assert_eq!(
+        toml_error("---\np:\n  - name:\n---\n"),
+        null_error("p.name")
+    );
+    assert_eq!(toml_error("---\na.b: null\n---\n"), null_error("\"a.b\""));
+}
+
+#[test]
+fn every_fixture_frontmatter_reads_back_to_the_same_mapping_in_yaml_and_in_toml() {
+    let mut with_frontmatter_count = 0_usize;
+    for (name, source) in FIXTURES {
+        if parse(source).unwrap().frontmatter.is_none() {
+            continue;
+        }
+        with_frontmatter_count += 1;
+        let mut expected = mapping(source);
+        match name {
+            "meeting_notes" => assert_eq!(toml_error(source), null_error("recording")),
+            "recipe" => assert_eq!(toml_error(source), null_error("source")),
+            _ => assert_eq!(mapping(&toml(source)), expected, "{name}"),
+        }
+        times_as_text(&mut expected);
+        assert_eq!(mapping(&written(source)), expected, "{name}");
+    }
+    assert_eq!(with_frontmatter_count, 15);
+}
+
+#[test]
+fn the_owners_sample_frontmatter_is_written_with_its_quotes_dropped() {
+    let text = written(OWNERS_SAMPLE);
+    assert!(
+        text.starts_with("---\ntitle: Notes\ntags: [a, b]\n---\n# Notes\n"),
+        "{text}"
+    );
+}
+
+#[test]
+fn text_reads_back_as_the_same_text_whether_it_is_quoted_or_not() {
+    let texts = [
+        "",
+        " a",
+        "a ",
+        "a: b",
+        "a:",
+        "a:b",
+        "a #b",
+        "a#b",
+        "#a",
+        "- a",
+        "-a",
+        "? a",
+        ":a",
+        "[a]",
+        "{a}",
+        "a,b",
+        "a]b",
+        "'a'",
+        "\"a\"",
+        "!a",
+        "&a",
+        "*a",
+        "|a",
+        ">a",
+        "%a",
+        "@a",
+        "`a`",
+        "one\ntwo",
+        "tab\there",
+        "null",
+        "~",
+        "true",
+        "False",
+        "12",
+        "-5",
+        "1.5",
+        "1e5",
+        ".inf",
+        "0x1F",
+        "2026-10-10",
+        "2026-02-30",
+        "2026-10-10T07:32:00Z",
+        "yes",
+        "07:32:00",
+        "a b",
+        "back\\slash",
+        "say \"hi\"",
+        "https://x.org/a#b",
+        "\u{1}",
+        "\u{7f}",
+        "\u{85}",
+        "\u{e9}t\u{e9}",
+        "---",
+        "...",
+        "+++",
+    ];
+    let mut pairs: IndexMap<String, Pair> = texts
+        .iter()
+        .map(|value| {
+            let pair = Pair {
+                repeats: Vec::new(),
+                span: 0..0,
+                value: text(value),
+            };
+            ((*value).to_owned(), pair)
+        })
+        .collect();
+    let list = Value::Sequence(Sequence {
+        items: texts.iter().map(|value| text(value)).collect(),
+        span: 0..0,
+    });
+    pairs.insert(
+        "list".to_owned(),
+        Pair {
+            repeats: Vec::new(),
+            span: 0..0,
+            value: list,
+        },
+    );
+    let built = with_frontmatter(pairs);
+    let mut expected = built.frontmatter.clone().unwrap().mapping;
+    clear_mapping(&mut expected);
+    for frontmatter in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
+        let written_text = write(&built, &WriteOptions { frontmatter }).unwrap();
+        assert_eq!(mapping(&written_text), expected, "{written_text}");
+    }
 }
