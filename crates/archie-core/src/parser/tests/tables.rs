@@ -765,6 +765,42 @@ fn a_grid_cell_holds_a_markdown_block_over_its_lines() {
 }
 
 #[test]
+fn a_fence_of_tildes_in_a_grid_cell_is_a_code_block_as_one_of_backticks_is() {
+    for fence in ["```", "~~~"] {
+        check(
+            &format!(
+                "\
++---------+---+
+| {fence}text | x |
+| code    |   |
+| {fence}     |   |
++---------+---+
+"
+            ),
+            r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Table format=Grid alignments=Default,Default
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                CodeBlock info="text" value="code"
+          TableCell
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "x"
+"#,
+        );
+    }
+}
+
+#[test]
 fn a_simple_table_takes_each_alignment_from_where_its_header_sits() {
     check(SIMPLE_TABLE, SIMPLE_TABLE_TREE);
 }

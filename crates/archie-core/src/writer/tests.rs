@@ -353,10 +353,39 @@ fn every_fixture_reads_back_to_the_same_body_and_writes_the_same_text_again() {
 
 #[test]
 fn the_owners_sample_is_written_in_archies_form() {
-    let source = "Notes\n=====\n\nSome __bold__ and _em_ text.\n\n* one\n*   two\n    continued\n";
+    let source = "\
+Notes
+=====
+
+Some __bold__ and _em_ text.
+
+* one
+*   two
+    continued
+
+~~~python
+print(1)
+~~~
+
+___
+";
     assert_eq!(
         round_trip(source),
-        "# Notes\n\nSome **bold** and *em* text.\n\n- one\n- two\n  continued\n"
+        "\
+# Notes
+
+Some **bold** and *em* text.
+
+- one
+- two
+  continued
+
+```python
+print(1)
+```
+
+---
+"
     );
 }
 

@@ -101,7 +101,10 @@ pub enum TokenKind {
 /// The block a line starts, other than a paragraph.
 enum Start {
     Break,
-    Fence(usize),
+    Fence {
+        length: usize,
+        mark: char,
+    },
     Heading {
         level: u8,
         text_at: usize,
@@ -164,11 +167,12 @@ impl Lexer<'_> {
         }
     }
 
-    /// Reads the lines after an opening fence, up to the closing fence, the
-    /// end of the enclosing list item, or the end of the file.
-    fn code_block(&mut self, column: usize, at: usize, end: usize, ticks: usize) {
+    /// Reads the lines after an opening fence of `length` `mark`s, up to the
+    /// closing fence, the end of the enclosing list item, or the end of the
+    /// file.
+    fn code_block(&mut self, column: usize, at: usize, end: usize, length: usize, mark: char) {
         let source = self.source;
-        let info = source[at + ticks..end].trim().to_owned();
+        let info = source[at + length..end].trim().to_owned();
         let level = self.level();
         let mut lines: Vec<&str> = Vec::new();
         let mut block_end = end;
@@ -184,7 +188,7 @@ impl Lexer<'_> {
                 break;
             }
             self.pos = line.next;
-            if trimmed.len() >= ticks && trimmed.bytes().all(|byte| byte == b'`') {
+            if trimmed.len() >= length && trimmed.chars().all(|character| character == mark) {
                 block_end = line.start + indent + trimmed.len();
                 break;
             }
@@ -220,7 +224,7 @@ impl Lexer<'_> {
         }
         match self.start(line_start, at..end, self.pos, continues) {
             Some(Start::Break) => self.push(TokenKind::ThematicBreak, at..end),
-            Some(Start::Fence(ticks)) => self.code_block(column, at, end, ticks),
+            Some(Start::Fence { length, mark }) => self.code_block(column, at, end, length, mark),
             Some(Start::Heading {
                 level: heading_level,
                 text_at,
@@ -447,8 +451,8 @@ impl Lexer<'_> {
         if continues && let Some(level) = underline(rest) {
             return Some(Start::Underline(level));
         }
-        if let Some(ticks) = fence(rest) {
-            return Some(Start::Fence(ticks));
+        if let Some((mark, length)) = fence(rest) {
+            return Some(Start::Fence { length, mark });
         }
         if is_thematic_break(rest) {
             return Some(Start::Break);
@@ -508,11 +512,16 @@ fn heading(rest: &str) -> Option<(u8, usize)> {
     Some((level, rest.len() - title.len()))
 }
 
-/// The number of backticks of an opening fence.
-fn fence(rest: &str) -> Option<usize> {
-    let info = rest.trim_start_matches('`');
-    let ticks = rest.len() - info.len();
-    (ticks >= 3 && !info.contains('`')).then_some(ticks)
+/// The character and the length of an opening fence: three or more
+/// backticks, whose info string holds no backtick, or three or more tildes.
+fn fence(rest: &str) -> Option<(char, usize)> {
+    let mark = rest
+        .chars()
+        .next()
+        .filter(|mark| matches!(mark, '`' | '~'))?;
+    let info = rest.trim_start_matches(mark);
+    let length = rest.len() - info.len();
+    (length >= 3 && (mark == '~' || !info.contains('`'))).then_some((mark, length))
 }
 
 /// The list marker `rest` starts with, and its width: a bullet, or one to
