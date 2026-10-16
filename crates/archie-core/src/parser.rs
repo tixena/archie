@@ -22,6 +22,9 @@ mod yaml;
 
 use core::ops::Range;
 
+use serde::ser::Error as _;
+use serde::{Deserialize as _, Serialize as _};
+
 use crate::parser::ast::{Document, Kind, Mapping};
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Context, Extension, Markdown, With};
@@ -81,7 +84,8 @@ where
 }
 
 /// Builds the extension nodes of `document` again, for a document read from
-/// storage that keeps only the plain tree, such as JSON.
+/// storage that keeps only the plain tree, such as the JSON `to_json` writes
+/// and `from_json` reads.
 ///
 /// The plain tree is written in archie's form and parsed again with `E`, so
 /// the spans of the document returned count from that written text.
@@ -98,6 +102,39 @@ where
 {
     let text = writer::write_for_rebuild(document);
     parse_with::<E>(&text, options)
+}
+
+/// Reads a document from the JSON `to_json` writes, at any depth archie reads.
+///
+/// # Errors
+///
+/// Returns `serde_json`'s error when the text is not such a document.
+pub fn from_json<E>(text: &str) -> Result<Document<E>, serde_json::Error>
+where
+    E: Extension,
+{
+    let mut reader = serde_json::Deserializer::from_str(text);
+    reader.disable_recursion_limit();
+    let document = Document::deserialize(serde_stacker::Deserializer::new(&mut reader))?;
+    reader.end()?;
+    Ok(document)
+}
+
+/// Writes `document` as JSON, at any depth archie reads. No node writes its
+/// `kind`; `rebuild_with` builds it again.
+///
+/// # Errors
+///
+/// Returns `serde_json`'s error when a value cannot be written as JSON.
+pub fn to_json<E>(document: &Document<E>) -> Result<String, serde_json::Error>
+where
+    E: Extension,
+{
+    let mut text = Vec::new();
+    document.serialize(serde_stacker::Serializer::new(
+        &mut serde_json::Serializer::new(&mut text),
+    ))?;
+    String::from_utf8(text).map_err(serde_json::Error::custom)
 }
 
 /// Builds the tree, then offers every node to the extensions `T`.

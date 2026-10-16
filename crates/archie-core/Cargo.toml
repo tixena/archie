@@ -33,9 +33,10 @@ unicase.workspace = true
 # Unicode general categories, for emphasis delimiter runs
 unicode-properties.workspace = true
 
-# Serialization of the tree, to JSON and back
+# Serialization of the tree, to JSON and back, at any depth
 serde.workspace = true
 serde_json.workspace = true
+serde_stacker.workspace = true
 
 # TypeScript type + Zod schema generation from Rust models
 tixschema.workspace = true

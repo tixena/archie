@@ -3,6 +3,7 @@
 //! `kind`, and `rebuild_with` builds it again.
 
 use super::extension::Comments;
+use super::on_two_megabytes;
 use crate::parser::ast::{
     Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
     Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock,
@@ -10,15 +11,14 @@ use crate::parser::ast::{
     TableRow, Text, ThematicBreak, Value,
 };
 use crate::parser::extension::{Plain, With};
-use crate::parser::{ParseOptions, parse, parse_with, rebuild_with};
+use crate::parser::{ParseOptions, from_json, parse, parse_with, rebuild_with, to_json};
 use crate::writer::{WriteOptions, write};
 
 /// Parses `source`, writes the tree to JSON and reads it back: the same
 /// tree, every `kind` empty.
 pub(super) fn reads_back_from_json(source: &str) {
     let mut parsed = parse(source).unwrap();
-    let json = serde_json::to_string(&parsed).unwrap();
-    let back: Document = serde_json::from_str(&json).unwrap();
+    let back: Document = from_json(&to_json(&parsed).unwrap()).unwrap();
     unclaim(&mut parsed);
     assert_eq!(back, parsed);
 }
@@ -29,8 +29,7 @@ pub(super) fn reads_back_from_json(source: &str) {
 pub(super) fn rebuilds_from_json(source: &str) {
     let options = ParseOptions::default();
     let parsed = parse_with::<Comments>(source, &options).unwrap();
-    let json = serde_json::to_string(&parsed).unwrap();
-    let back: Document<With<Comments>> = serde_json::from_str(&json).unwrap();
+    let back: Document<With<Comments>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let own = WriteOptions {
         frontmatter: parsed
             .frontmatter
@@ -44,7 +43,7 @@ pub(super) fn rebuilds_from_json(source: &str) {
 #[test]
 fn the_sample_document_reads_back_from_json() {
     let document = parse("---\ntitle: Notes\n---\n# A\ntext\n").unwrap();
-    let json = serde_json::to_string(&document).unwrap();
+    let json = to_json(&document).unwrap();
     assert_eq!(
         json,
         concat!(
@@ -59,20 +58,37 @@ fn the_sample_document_reads_back_from_json() {
             r#""span":{"start":0,"end":20}},"span":{"start":0,"end":30}}"#,
         )
     );
-    let back: Document = serde_json::from_str(&json).unwrap();
+    let back: Document = from_json(&json).unwrap();
     assert_eq!(back, document);
 }
 
 #[test]
+fn a_tree_at_the_caps_reads_back_from_json() {
+    on_two_megabytes(|| {
+        for source in [
+            format!("{}a{}\n", "*".repeat(2_000), "*".repeat(2_000)),
+            format!("{}a\n", "- ".repeat(100)),
+        ] {
+            let document = parse(&source).unwrap();
+            let back: Document = from_json(&to_json(&document).unwrap()).unwrap();
+            assert_eq!(back, document);
+        }
+    });
+}
+
+#[test]
+fn json_that_is_not_a_document_does_not_read() {
+    let read: Result<Document, _> = from_json("{}");
+    let error = read.unwrap_err().to_string();
+    assert!(error.starts_with("missing field `body`"), "{error}");
+}
+
+#[test]
 fn a_span_is_written_as_its_start_and_its_end() {
-    let text: Text = Text {
-        kind: Kind(None),
-        span: 2..6,
-        value: "text".to_owned(),
-    };
-    assert_eq!(
-        serde_json::to_string(&text).unwrap(),
-        r#"{"span":{"start":2,"end":6},"value":"text"}"#
+    let json = to_json(&parse("  text\n").unwrap()).unwrap();
+    assert!(
+        json.contains(r#"{"Text":{"span":{"start":2,"end":6},"value":"text"}}"#),
+        "{json}"
     );
 }
 
@@ -81,8 +97,7 @@ fn the_claim_pass_builds_a_claimed_block_again_from_json() {
     let source = "```markdown\n# Inner\n```\n";
     let options = ParseOptions::default();
     let parsed = parse_with::<Plain>(source, &options).unwrap();
-    let back: Document<With<Plain>> =
-        serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+    let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let claimed = |document: &Document<With<Plain>>| {
         matches!(
             &document.body.sections[0].blocks[0],
@@ -104,8 +119,7 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
         span: 0..0,
         value: ScalarValue::Null,
     });
-    let back: Document<With<Plain>> =
-        serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+    let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options).unwrap();
     let yaml = WriteOptions {
         frontmatter: FrontmatterFormat::Yaml,
@@ -127,8 +141,7 @@ fn a_non_finite_float_reads_back_from_json() {
         ("+++\nx = nan\n+++\n", NonFinite::Nan),
     ] {
         let document = parse(source).unwrap();
-        let json = serde_json::to_string(&document).unwrap();
-        let back: Document = serde_json::from_str(&json).unwrap();
+        let back: Document = from_json(&to_json(&document).unwrap()).unwrap();
         assert_eq!(back, document);
         assert_eq!(scalar(&back, "x"), ScalarValue::NonFinite(value));
     }
@@ -136,7 +149,7 @@ fn a_non_finite_float_reads_back_from_json() {
 
 #[test]
 fn a_non_finite_float_is_written_as_its_name() {
-    let json = serde_json::to_string(&parse("---\nx: .nan\n---\n").unwrap()).unwrap();
+    let json = to_json(&parse("---\nx: .nan\n---\n").unwrap()).unwrap();
     assert!(json.contains(r#""value":{"NonFinite":"Nan"}"#), "{json}");
 }
 
