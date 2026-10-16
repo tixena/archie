@@ -1,6 +1,7 @@
 //! Body tokens into blocks: sections, paragraphs, lists, tables and code
 //! blocks.
 
+use core::iter;
 use core::marker::PhantomData;
 use core::mem;
 use core::ops::Range;
@@ -11,8 +12,8 @@ use crate::parser::ast::{
 };
 use crate::parser::extension::Extension;
 use crate::parser::inline::line;
-use crate::parser::lexer::{Marker, Token, TokenKind, lex};
-use crate::parser::table::{RowToken, TableToken};
+use crate::parser::lexer::{Marker, Token, TokenKind, lex, lex_lines};
+use crate::parser::table::{Cell, RowToken, TableToken};
 
 /// Where a markdown block has blank lines: between two of its blocks, or at
 /// its end. A list is loose by them.
@@ -44,25 +45,20 @@ impl<E> Parser<'_, E>
 where
     E: Extension,
 {
-    /// A cell holds one section, with an empty heading, holding a paragraph
-    /// of one line, or nothing when empty.
-    fn cell(&self, range: Range<usize>) -> TableCell<E> {
-        let mut sections = Sections::new();
-        if !range.is_empty() {
-            sections.block(Block::Paragraph(Paragraph {
-                kind: Kind(None),
-                lines: vec![line(self.source, range.clone())],
-                span: range.clone(),
-            }));
-        }
+    /// A cell holds the markdown block its lines read as, one after another.
+    fn cell(&self, cell: &Cell) -> TableCell<E> {
+        let span = cell.span();
+        let mut parser = Self {
+            extension: PhantomData,
+            pos: 0,
+            source: self.source,
+            tokens: lex_lines(self.source, &cell.lines),
+        };
+        let (body, _) = parser.markdown_block(span.start);
         TableCell {
-            body: MarkdownBlock {
-                kind: Kind(None),
-                sections: sections.finish(),
-                span: range.clone(),
-            },
+            body,
             kind: Kind(None),
-            span: range,
+            span,
         }
     }
 
@@ -224,11 +220,19 @@ where
         }
     }
 
-    fn row(&self, row: RowToken) -> TableRow<E> {
+    /// A row of `width` cells: a row with fewer gets empty cells at its end.
+    fn row(&self, row: &RowToken, width: usize) -> TableRow<E> {
+        let blank = Cell::line(row.span.end..row.span.end);
+        let missing = width.saturating_sub(row.cells.len());
         TableRow {
-            cells: row.cells.into_iter().map(|cell| self.cell(cell)).collect(),
+            cells: row
+                .cells
+                .iter()
+                .chain(iter::repeat_n(&blank, missing))
+                .map(|cell| self.cell(cell))
+                .collect(),
             kind: Kind(None),
-            span: row.span,
+            span: row.span.clone(),
         }
     }
 
@@ -241,12 +245,13 @@ where
     }
 
     fn table(&self, table: TableToken, span: Range<usize>) -> Table<E> {
+        let width = table.alignments.len();
         Table {
             alignments: table.alignments,
             format: table.format,
-            head: table.head.into_iter().map(|row| self.row(row)).collect(),
+            head: table.head.iter().map(|row| self.row(row, width)).collect(),
             kind: Kind(None),
-            rows: table.rows.into_iter().map(|row| self.row(row)).collect(),
+            rows: table.rows.iter().map(|row| self.row(row, width)).collect(),
             span,
         }
     }

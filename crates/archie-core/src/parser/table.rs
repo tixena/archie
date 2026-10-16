@@ -2,6 +2,7 @@
 //! Lining cells up in columns is not context-free, so a table reaches the
 //! grammar as one token.
 
+use core::iter;
 use core::ops::Range;
 
 use crate::parser::ast::{Alignment, TableFormat};
@@ -14,9 +15,51 @@ pub struct TableToken {
     pub rows: Vec<RowToken>,
 }
 
+impl TableToken {
+    /// Moves every offset the table holds to where `place` puts it.
+    pub fn place<F>(&mut self, place: &F)
+    where
+        F: Fn(usize) -> usize,
+    {
+        for row in self.head.iter_mut().chain(&mut self.rows) {
+            row.span = place(row.span.start)..place(row.span.end);
+            for line in row.cells.iter_mut().flat_map(|cell| &mut cell.lines) {
+                *line = place(line.start)..place(line.end);
+            }
+        }
+    }
+}
+
 pub struct RowToken {
-    pub cells: Vec<Range<usize>>,
+    pub cells: Vec<Cell>,
     pub span: Range<usize>,
+}
+
+pub struct Cell {
+    /// The cell's text on each line of its row, top to bottom.
+    pub lines: Vec<Range<usize>>,
+}
+
+impl Cell {
+    /// A cell written on one line.
+    pub fn line(range: Range<usize>) -> Self {
+        Self { lines: vec![range] }
+    }
+
+    /// From the first line that holds text to the end of the last one, or
+    /// empty at the start of the first line when none does.
+    pub fn span(&self) -> Range<usize> {
+        let written = |line: &&Range<usize>| !line.is_empty();
+        let first = self.lines.iter().find(written);
+        let last = self.lines.iter().rfind(written);
+        first.zip(last).map_or_else(
+            || {
+                let at = self.lines.first().map_or(0, |line| line.start);
+                at..at
+            },
+            |(from, to)| from.start..to.end,
+        )
+    }
 }
 
 /// One line of a table: its text from `start` to `end`, the start of the
@@ -77,15 +120,14 @@ fn line_after(source: &str, at: usize, level: usize) -> Option<TableLine> {
 }
 
 /// A header row, a delimiter row such as `|:--|--:|`, and the rows after
-/// them up to the first line without a pipe.
+/// them up to the first line without a pipe. The table is as wide as the
+/// widest of them; a column the delimiter row does not reach has the
+/// default alignment.
 fn pipe(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Range<usize>, usize)> {
     let head_cells = pipe_cells(source, head)?;
     let delimiter = line_after(source, head.next, level)?;
     let delimiter_cells = pipe_cells(source, &delimiter)?;
-    if delimiter_cells.len() != head_cells.len() {
-        return None;
-    }
-    let alignments = delimiter_cells
+    let mut alignments = delimiter_cells
         .iter()
         .map(|cell| alignment(&source[cell.clone()], '-'))
         .collect::<Option<Vec<_>>>()?;
@@ -95,20 +137,24 @@ fn pipe(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Ran
         let Some(cells) = pipe_cells(source, &line) else {
             break;
         };
-        if cells.len() != alignments.len() {
-            return None;
-        }
         rows.push(RowToken {
-            cells,
+            cells: cells.into_iter().map(Cell::line).collect(),
             span: line.start..line.end,
         });
         last = line;
     }
+    let width = rows
+        .iter()
+        .map(|row| row.cells.len())
+        .chain([head_cells.len(), alignments.len()])
+        .max()
+        .unwrap_or_default();
+    alignments.resize(width, Alignment::Default);
     let table = TableToken {
         alignments,
         format: TableFormat::Pipe,
         head: vec![RowToken {
-            cells: head_cells,
+            cells: head_cells.into_iter().map(Cell::line).collect(),
             span: head.start..head.end,
         }],
         rows,
@@ -153,25 +199,32 @@ fn pipe_cells(source: &str, line: &TableLine) -> Option<Vec<Range<usize>>> {
     Some(cells)
 }
 
-/// A table drawn with `+---+` borders and `|` walls, every row one line.
-/// A `+===+` border ends the header.
+/// A table drawn with `+---+` borders and `|` walls. Every line between two
+/// borders belongs to one row. A `+===+` border ends the header.
 fn grid(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Range<usize>, usize)> {
     let top: Vec<char> = source[head.start..head.end].chars().collect();
     let (corners, mut alignments) = border(&top, '-')?;
     let mut head_rows = Vec::new();
     let mut rows = Vec::new();
     let mut last = head.clone();
-    while let Some(line) = line_after(source, last.next, level) {
-        if line.indent() != head.indent() || !source[line.start..line.end].starts_with('|') {
-            break;
+    loop {
+        let mut lines: Vec<TableLine> = Vec::new();
+        let mut next = last.next;
+        while let Some(line) = line_after(source, next, level).filter(|line| {
+            line.indent() == head.indent() && source[line.start..line.end].starts_with('|')
+        }) {
+            next = line.next;
+            lines.push(line);
         }
-        let cells = grid_cells(source, &line, &corners)?;
+        let Some((first, final_line)) = lines.first().zip(lines.last()) else {
+            break;
+        };
         rows.push(RowToken {
-            cells,
-            span: line.start..line.end,
+            cells: grid_cells(source, &lines, &corners),
+            span: first.start..final_line.end,
         });
-        let closing = line_after(source, line.next, level)
-            .filter(|closing| closing.indent() == head.indent())?;
+        let closing =
+            line_after(source, next, level).filter(|closing| closing.indent() == head.indent())?;
         let closing_chars: Vec<char> = source[closing.start..closing.end].chars().collect();
         if let Some((found, header)) = border(&closing_chars, '=') {
             if found != corners || !head_rows.is_empty() {
@@ -221,34 +274,76 @@ fn border(chars: &[char], fill: char) -> Option<(Vec<usize>, Vec<Alignment>)> {
     Some((corners, alignments))
 }
 
-/// The cells of a grid row, whose walls stand at the border's corners.
-fn grid_cells(source: &str, line: &TableLine, corners: &[usize]) -> Option<Vec<Range<usize>>> {
-    let text = &source[line.start..line.end];
-    let offsets: Vec<(usize, char)> = text.char_indices().collect();
-    if offsets.len() != corners.last().copied()? + 1 {
-        return None;
-    }
-    if corners
+/// The cells of a grid row written on `lines`, one per pair of the border's
+/// corners. A cell's lines keep their indentation relative to each other.
+fn grid_cells(source: &str, lines: &[TableLine], corners: &[usize]) -> Vec<Cell> {
+    let columns: Vec<Vec<Range<usize>>> = lines
         .iter()
-        .any(|&column| offsets.get(column).map(|&(_, character)| character) != Some('|'))
-    {
-        return None;
-    }
-    let cells = corners
+        .map(|line| grid_columns(source, line, corners))
+        .collect();
+    (0..corners.len().saturating_sub(1))
+        .map(|column| {
+            let written: Vec<Range<usize>> = columns
+                .iter()
+                .map(|ranges| ranges[column].clone())
+                .collect();
+            let indent = written
+                .iter()
+                .map(|range| &source[range.clone()])
+                .filter(|text| !text.trim_matches([' ', '\t']).is_empty())
+                .map(|text| text.len() - text.trim_start_matches([' ', '\t']).len())
+                .min()
+                .unwrap_or_default();
+            let trimmed = written
+                .into_iter()
+                .map(|range| {
+                    let start = (range.start + indent).min(range.end);
+                    let text = source[start..range.end].trim_end_matches([' ', '\t']);
+                    start..start + text.len()
+                })
+                .collect();
+            Cell { lines: trimmed }
+        })
+        .collect()
+}
+
+/// Where each column's text is on one line of a grid row. A column runs
+/// from its left corner to its right one: a `|` at a corner is a wall, and
+/// a `|` that ends the line closes it, so a wall out of line stays text.
+fn grid_columns(source: &str, line: &TableLine, corners: &[usize]) -> Vec<Range<usize>> {
+    let text = &source[line.start..line.end];
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let wall = |column: usize| {
+        chars
+            .get(column)
+            .is_some_and(|&(_, character)| character == '|')
+    };
+    let close = if chars.len() > 1 && text.ends_with('|') {
+        chars.len() - 1
+    } else {
+        chars.len()
+    };
+    let byte_at =
+        |column: usize| line.start + chars.get(column).map_or(text.len(), |&(offset, _)| offset);
+    let count = corners.len().saturating_sub(1);
+    corners
         .iter()
         .zip(corners.iter().skip(1))
-        .map(|(&left, &right)| {
-            let from = offsets[left].0 + 1;
-            let to = offsets[right].0;
-            trim(source, line.start + from..line.start + to)
+        .enumerate()
+        .map(|(index, (&left, &right))| {
+            let from = (left + usize::from(wall(left))).min(close);
+            let to = if index + 1 == count {
+                close
+            } else {
+                right.min(close)
+            };
+            byte_at(from)..byte_at(to)
         })
-        .collect();
-    Some(cells)
+        .collect()
 }
 
 /// A header line, a line of dash groups marking the columns, and the rows
-/// after them up to a blank line. No text may cross from one column into
-/// the next.
+/// after them up to a blank line.
 fn simple(
     source: &str,
     head: &TableLine,
@@ -256,22 +351,17 @@ fn simple(
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let dashes = line_after(source, head.next, level)?;
     let groups = dash_groups(&source[dashes.line_start..dashes.end])?;
-    let mut lines = vec![head.clone()];
+    let mut lines = Vec::new();
     let mut last = dashes;
     while let Some(line) = line_after(source, last.next, level) {
         lines.push(line.clone());
         last = line;
     }
-    if lines.len() < 2 {
+    if lines.is_empty() {
         return None;
     }
-    let mut rows = lines
-        .iter()
-        .map(|line| simple_row(source, line, &groups))
-        .collect::<Option<Vec<_>>>()?;
-    let head_row = rows.remove(0);
-    let alignments = head_row
-        .cells
+    let head_cells = simple_cells(source, head, &groups);
+    let alignments = head_cells
         .iter()
         .zip(&groups)
         .map(|(cell, group)| {
@@ -286,10 +376,18 @@ fn simple(
             }
         })
         .collect();
+    let row = |line: &TableLine, cells: Vec<Range<usize>>| RowToken {
+        cells: cells.into_iter().map(Cell::line).collect(),
+        span: line.start..line.end,
+    };
+    let rows = lines
+        .iter()
+        .map(|line| row(line, simple_cells(source, line, &groups)))
+        .collect();
     let table = TableToken {
         alignments,
         format: TableFormat::Simple,
-        head: vec![head_row],
+        head: vec![row(head, head_cells)],
         rows,
     };
     Some((table, head.start..last.end, last.next))
@@ -318,33 +416,30 @@ fn dash_groups(text: &str) -> Option<Vec<Range<usize>>> {
 }
 
 /// The cells of a simple row. Each column runs from its dash group to the
-/// next group; text before the first group, or a word across a column
-/// edge, makes the row malformed.
-fn simple_row(source: &str, line: &TableLine, groups: &[Range<usize>]) -> Option<RowToken> {
+/// next group, the first one from the start of the line, and a word that
+/// crosses into the next column stays in the column it starts in.
+fn simple_cells(source: &str, line: &TableLine, groups: &[Range<usize>]) -> Vec<Range<usize>> {
     let text = &source[line.line_start..line.end];
     let chars: Vec<(usize, char)> = text.char_indices().collect();
-    let first = groups.first()?.start;
-    if chars
-        .iter()
-        .take(first)
-        .any(|&(_, character)| character != ' ')
-    {
-        return None;
-    }
-    let edges: Vec<usize> = groups.iter().skip(1).map(|group| group.start).collect();
-    for &edge in &edges {
-        let before = chars.get(edge - 1).map(|&(_, character)| character);
-        let after = chars.get(edge).map(|&(_, character)| character);
-        if before.is_some_and(|character| character != ' ')
-            && after.is_some_and(|character| character != ' ')
-        {
-            return None;
+    let written = |column: usize| {
+        chars
+            .get(column)
+            .is_some_and(|&(_, character)| character != ' ')
+    };
+    let mut edges: Vec<usize> = Vec::new();
+    for group in groups.iter().skip(1) {
+        let mut edge = edges
+            .last()
+            .map_or(group.start, |&last| group.start.max(last));
+        while edge > 0 && written(edge - 1) && written(edge) {
+            edge += 1;
         }
+        edges.push(edge);
     }
     let byte_at = |column: usize| chars.get(column).map_or(text.len(), |&(offset, _)| offset);
-    let starts = groups.iter().map(|group| group.start);
+    let starts = iter::once(0).chain(edges.iter().copied());
     let ends = edges.iter().copied().chain([chars.len()]);
-    let cells = starts
+    starts
         .zip(ends)
         .map(|(from, to)| {
             trim(
@@ -352,11 +447,7 @@ fn simple_row(source: &str, line: &TableLine, groups: &[Range<usize>]) -> Option
                 line.line_start + byte_at(from)..line.line_start + byte_at(to),
             )
         })
-        .collect();
-    Some(RowToken {
-        cells,
-        span: line.start..line.end,
-    })
+        .collect()
 }
 
 /// The column of byte `at` on the line starting at `line_start`.
