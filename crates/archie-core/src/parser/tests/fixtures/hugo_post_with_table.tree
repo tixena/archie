@@ -1,0 +1,19 @@
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=title
+        Scalar String "Shipping the parser"
+      Pair key=date
+        Scalar Date 2026-10-03
+      Pair key=params
+        Mapping
+          Pair key=author
+            Scalar String "Ada"
+          Pair key=toc
+            Scalar Boolean true
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "The parser reads a file in two stages."

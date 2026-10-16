@@ -1,8 +1,10 @@
 //! The frontmatter block: finding it and reading it in its own syntax.
 
+use core::ops::Range;
 use core::{iter, mem};
 
 use indexmap::IndexMap;
+use indexmap::map::Entry;
 
 use crate::parser::ast::{Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value};
 use crate::parser::error::ParseError;
@@ -37,15 +39,25 @@ pub fn parse(source: &str) -> Result<(Option<Frontmatter>, usize), ParseError> {
 /// Adds a pair to a mapping being read. A key written again joins the first
 /// one: its value becomes a list of every value written for it.
 pub fn insert(pairs: &mut IndexMap<String, Pair>, key: String, pair: Pair) {
-    let Some(first) = pairs.get_mut(&key) else {
-        pairs.insert(key, pair);
-        return;
-    };
-    let span = first.value.span().clone();
-    let mut items = into_items(mem::replace(&mut first.value, empty(span.start)));
-    items.extend(into_items(pair.value));
-    first.value = Value::Sequence(Sequence { items, span });
-    first.repeats.push(pair.span);
+    match pairs.entry(key) {
+        Entry::Vacant(slot) => {
+            slot.insert(pair);
+        }
+        Entry::Occupied(slot) => {
+            let first = slot.into_mut();
+            first.repeats.push(pair.span);
+            append(&mut first.value, pair.value);
+        }
+    }
+}
+
+/// Makes `first` a list of its own items followed by those of `value`. The
+/// list keeps the range of `first`.
+pub fn append(first: &mut Value, value: Value) {
+    let span = first.span().clone();
+    let mut items = into_items(mem::replace(first, empty(span.start)));
+    items.extend(into_items(value));
+    *first = Value::Sequence(Sequence { items, span });
 }
 
 /// A list gives its items; any other value gives itself.
@@ -67,18 +79,22 @@ const fn empty(at: usize) -> Value {
 /// The mapping holding `pairs`. Its span runs from the first key to the end
 /// of the last value written; with no pairs it is empty, at `empty_at`.
 pub fn finish(pairs: IndexMap<String, Pair>, empty_at: usize) -> Mapping {
+    let span = extent(&pairs).unwrap_or(empty_at..empty_at);
+    Mapping { pairs, span }
+}
+
+/// From the first key of `pairs` to the end of the last value written, or
+/// `None` when there are no pairs.
+pub fn extent(pairs: &IndexMap<String, Pair>) -> Option<Range<usize>> {
     let end = pairs
         .values()
         .flat_map(|pair| iter::once(&pair.span).chain(&pair.repeats))
         .map(|span| span.end)
         .max();
-    let span = pairs
+    pairs
         .first()
         .zip(end)
-        .map_or(empty_at..empty_at, |((_, first), last_end)| {
-            first.span.start..last_end
-        });
-    Mapping { pairs, span }
+        .map(|((_, first), last_end)| first.span.start..last_end)
 }
 
 fn closing(source: &str, from: usize, format: FrontmatterFormat) -> Option<Line> {

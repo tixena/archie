@@ -34,15 +34,18 @@ fn a_toml_string_left_open_is_refused() {
 }
 
 #[test]
-fn toml_constructs_not_read_yet_are_refused_by_name() {
-    let (table, _) = failure("+++\n[owner]\nname = \"Ada\"\n+++\n");
-    assert_eq!(table, "table headers are not read yet");
+fn a_toml_table_header_or_multi_line_string_left_open_is_refused() {
+    let (header, _) = failure("+++\n[owner\nname = \"Ada\"\n+++\n");
+    assert_eq!(header, "expected `]` to close the table header");
 
-    let (dotted, _) = failure("+++\nowner.name = \"Ada\"\n+++\n");
-    assert_eq!(dotted, "dotted keys are not read yet");
+    let (array, _) = failure("+++\n[[owner]\nname = \"Ada\"\n+++\n");
+    assert_eq!(array, "expected `]` to close the table header");
 
-    let (multi_line, _) = failure("+++\ntext = \"\"\"\nlong\n\"\"\"\n+++\n");
-    assert_eq!(multi_line, "multi-line strings are not read yet");
+    let (basic, _) = failure("+++\ntext = \"\"\"\nlong\n+++\n");
+    assert_eq!(basic, "the string is not closed");
+
+    let (literal, _) = failure("+++\ntext = '''\nlong\n+++\n");
+    assert_eq!(literal, "the string is not closed");
 }
 
 #[test]
@@ -209,22 +212,4 @@ fn yaml_indentation_that_matches_no_block_is_refused() {
 
     let (shallower, _) = failure("---\n  a: 1\nb: 2\n---\n");
     assert_eq!(shallower, "this line is indented less than the first key");
-}
-
-#[test]
-fn a_hugo_post_with_a_toml_table_is_refused() {
-    let source = include_str!("fixtures/refused/hugo_post_with_table.md");
-    assert_eq!(
-        refusal(source),
-        ("table headers are not read yet".to_owned(), "[params]")
-    );
-}
-
-#[test]
-fn a_toml_frontmatter_with_a_multi_line_string_is_refused() {
-    let source = include_str!("fixtures/refused/toml_multi_line_string.md");
-    assert_eq!(
-        refusal(source),
-        ("multi-line strings are not read yet".to_owned(), "\"\"")
-    );
 }

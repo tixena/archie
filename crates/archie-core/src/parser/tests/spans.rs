@@ -174,3 +174,31 @@ fn toml_frontmatter_spans() {
         ],
     );
 }
+
+#[test]
+fn toml_header_dotted_key_and_multi_line_string_spans() {
+    let whole = "+++\na.b = 1\ns = '''\nx'''\n[[p]]\nn = 2\n+++\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            (
+                "Frontmatter format=Toml",
+                "+++\na.b = 1\ns = '''\nx'''\n[[p]]\nn = 2\n+++",
+            ),
+            ("Mapping", "a.b = 1\ns = '''\nx'''\n[[p]]\nn = 2"),
+            ("Pair key=a", "a.b = 1"),
+            ("Mapping", "b = 1"),
+            ("Pair key=b", "b = 1"),
+            ("Scalar Integer 1", "1"),
+            ("Pair key=s", "s = '''\nx'''"),
+            (r#"Scalar String "x""#, "'''\nx'''"),
+            ("Pair key=p", "[[p]]\nn = 2"),
+            ("Sequence", "[[p]]\nn = 2"),
+            ("Mapping", "n = 2"),
+            ("Pair key=n", "n = 2"),
+            ("Scalar Integer 2", "2"),
+            ("MarkdownBlock", ""),
+        ],
+    );
+}
