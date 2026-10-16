@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/archie-core"]
+members = ["crates/archie-core", "crates/archie-query"]
 resolver = "2"
 
 [workspace.package]

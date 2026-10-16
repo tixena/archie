@@ -1,0 +1,17 @@
+[package]
+name = "archie-query"
+description = "Frontmatter query language over archie-core documents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+archie-core = { path = "../archie-core" }
+
+# Error handling
+thiserror.workspace = true

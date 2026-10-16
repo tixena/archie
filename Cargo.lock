@@ -11,6 +11,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "archie-query"
+version = "0.1.0"
+dependencies = [
+ "archie-core",
+ "thiserror",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

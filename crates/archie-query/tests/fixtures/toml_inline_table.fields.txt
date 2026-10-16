@@ -1,0 +1,3 @@
+type = "contact"
+phone.home = "555-0100"
+phone.work = "555-0199"
