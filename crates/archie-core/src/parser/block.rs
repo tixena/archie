@@ -11,8 +11,16 @@ use crate::parser::ast::{
 };
 use crate::parser::extension::Extension;
 use crate::parser::inline::line;
-use crate::parser::lexer::{Token, TokenKind, lex};
+use crate::parser::lexer::{Marker, Token, TokenKind, lex};
 use crate::parser::table::{RowToken, TableToken};
+
+/// Where a markdown block has blank lines: between two of its blocks, or at
+/// its end. A list is loose by them.
+#[derive(Clone, Copy, Default)]
+struct Blanks {
+    between: bool,
+    trailing: bool,
+}
 
 struct Parser<'src, E> {
     extension: PhantomData<E>,
@@ -72,8 +80,8 @@ where
         }
     }
 
-    fn item(&mut self, marker: Range<usize>) -> Item<E> {
-        let body = self.markdown_block(marker.end);
+    fn item(&mut self, marker: Range<usize>) -> (Item<E>, Blanks) {
+        let (body, blanks) = self.markdown_block(marker.end);
         if self
             .tokens
             .get(self.pos)
@@ -85,39 +93,56 @@ where
             .sections
             .last()
             .map_or(marker.end, |section| section.span.end);
-        Item {
+        let item = Item {
             body,
             kind: Kind(None),
             span: marker.start..end,
-        }
+        };
+        (item, blanks)
     }
 
-    /// Consecutive items make one list. Blank lines between them do not
-    /// end it.
-    fn list(&mut self, marker: Range<usize>) -> List<E> {
-        let start = marker.start;
-        let mut items = vec![self.item(marker)];
-        while let Some(next) = self.next_item() {
-            items.push(self.item(next));
+    /// Consecutive items whose markers have the same bullet character, or
+    /// the same delimiter, make one list; blank lines between them do not
+    /// end it. Gives the list and whether it ends with a blank line.
+    fn list(&mut self, marker: Marker, span: Range<usize>) -> (List<E>, bool) {
+        let from = span.start;
+        let (first, mut blanks) = self.item(span);
+        let mut loose = blanks.between;
+        let mut items = vec![first];
+        while let Some((next, skipped)) = self.next_item(marker) {
+            let (item, item_blanks) = self.item(next);
+            loose |= blanks.trailing || skipped || item_blanks.between;
+            blanks = item_blanks;
+            items.push(item);
         }
-        let end = items.last().map_or(start, |item| item.span.end);
-        List {
+        let end = items.last().map_or(from, |item| item.span.end);
+        let list = List {
             items,
             kind: Kind(None),
-            span: start..end,
-        }
+            loose,
+            span: from..end,
+            start: marker.start(),
+        };
+        (list, blanks.trailing)
     }
 
     /// The sections up to the end of the enclosing list item, or of the
     /// tokens. It spans its sections, or is empty at `at` when it has none.
-    fn markdown_block(&mut self, at: usize) -> MarkdownBlock<E> {
+    fn markdown_block(&mut self, at: usize) -> (MarkdownBlock<E>, Blanks) {
         let mut sections = Sections::new();
+        let mut blanks = Blanks::default();
+        let mut read = false;
         while !self.stops() {
             let Some(token) = self.take() else {
                 break;
             };
+            let mut trailing = false;
             let found = match token.kind {
-                TokenKind::Blank | TokenKind::ItemEnd => None,
+                TokenKind::Blank => {
+                    blanks.trailing = true;
+                    continue;
+                }
+                TokenKind::ItemEnd => continue,
                 TokenKind::CodeBlock {
                     content,
                     info,
@@ -134,40 +159,51 @@ where
                     sections.open(usize::from(level), heading, token.span);
                     None
                 }
-                TokenKind::ItemStart => Some(Block::List(self.list(token.span))),
+                TokenKind::ItemStart(marker) => {
+                    let (list, ends_blank) = self.list(marker, token.span);
+                    trailing = ends_blank;
+                    Some(Block::List(list))
+                }
                 TokenKind::Table(table) => Some(Block::Table(self.table(table, token.span))),
                 TokenKind::Text => Some(Block::Paragraph(self.paragraph(token.span))),
             };
+            blanks.between |= read && blanks.trailing;
+            blanks.trailing = trailing;
+            read = true;
             if let Some(block) = found {
                 sections.block(block);
             }
         }
-        let read = sections.finish();
-        let span = read
+        let finished = sections.finish();
+        let span = finished
             .first()
-            .zip(read.last())
+            .zip(finished.last())
             .map_or(at..at, |(first, last)| first.span.start..last.span.end);
-        MarkdownBlock {
+        let block = MarkdownBlock {
             kind: Kind(None),
-            sections: read,
+            sections: finished,
             span,
-        }
+        };
+        (block, blanks)
     }
 
-    /// The marker of the next item of the list being read, past any blank
-    /// lines before it.
-    fn next_item(&mut self) -> Option<Range<usize>> {
+    /// The marker of the next item of the list whose items carry `marker`,
+    /// past any blank lines before it, and whether there were any.
+    fn next_item(&mut self, marker: Marker) -> Option<(Range<usize>, bool)> {
         let blanks = self.tokens[self.pos..]
             .iter()
             .take_while(|token| matches!(token.kind, TokenKind::Blank))
             .count();
         let token = self.tokens.get(self.pos + blanks)?;
-        if !matches!(token.kind, TokenKind::ItemStart) {
+        let TokenKind::ItemStart(next) = token.kind else {
+            return None;
+        };
+        if !marker.same_list(next) {
             return None;
         }
-        let marker = token.span.clone();
+        let span = token.span.clone();
         self.pos += blanks + 1;
-        Some(marker)
+        Some((span, blanks > 0))
     }
 
     fn paragraph(&mut self, first: Range<usize>) -> Paragraph<E> {
@@ -303,7 +339,7 @@ where
         source,
         tokens: lex(source, start),
     };
-    let body = parser.markdown_block(start);
+    let (body, _) = parser.markdown_block(start);
     MarkdownBlock {
         kind: Kind(None),
         sections: body.sections,

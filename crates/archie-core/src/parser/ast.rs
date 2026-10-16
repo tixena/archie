@@ -243,7 +243,12 @@ where
     pub span: Range<usize>,
 }
 
-/// A bulleted list.
+/// A bullet or ordered list.
+///
+/// Its items have the same bullet character, or the same delimiter after
+/// their number. `start` is an ordered list's first number, `None` for a
+/// bullet list. `loose` is set when a blank line separates two items, or two
+/// blocks of one item.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct List<E = Markdown>
@@ -252,7 +257,9 @@ where
 {
     pub items: Vec<Item<E>>,
     pub kind: Kind<E>,
+    pub loose: bool,
     pub span: Range<usize>,
+    pub start: Option<u64>,
 }
 
 /// One entry of a list.
@@ -267,9 +274,12 @@ where
     pub span: Range<usize>,
 }
 
-/// Lines between two fences of backticks. `content` is the range of those
-/// lines in the source, `info` the text after the opening fence, and `value`
-/// the lines as the block holds them.
+/// Lines between two fences of backticks, or indented four columns past
+/// their parent's.
+///
+/// `content` is the range of those lines in the source, `info` the text after
+/// the opening fence, empty for an indented block, and `value` the lines as
+/// the block holds them.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct CodeBlock<E = Markdown>

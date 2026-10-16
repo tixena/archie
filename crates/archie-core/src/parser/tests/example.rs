@@ -198,7 +198,9 @@ fn steps() -> Block {
                                 span: span(186, "- spans"),
                             }],
                             kind: Kind(None),
+                            loose: false,
                             span: span(186, "- spans"),
+                            start: None,
                         }),
                     ],
                 ),
@@ -212,7 +214,9 @@ fn steps() -> Block {
             },
         ],
         kind: Kind(None),
+        loose: false,
         span: span(170, "- define tree\n  - spans\n- write rules"),
+        start: None,
     })
 }
 

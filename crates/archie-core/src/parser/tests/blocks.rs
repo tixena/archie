@@ -303,7 +303,7 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
   MarkdownBlock
     Section
       Heading
-      List
+      List loose
         Item
           MarkdownBlock
             Section
@@ -349,7 +349,7 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
 }
 
 #[test]
-fn blank_lines_and_other_bullets_keep_one_list_and_an_item_may_be_empty() {
+fn another_bullet_character_starts_a_new_list_and_an_item_may_be_empty() {
     check(
         "\
 * star
@@ -371,6 +371,7 @@ fn blank_lines_and_other_bullets_keep_one_list_and_an_item_may_be_empty() {
               Paragraph
                 Line
                   Text "star"
+      List
         Item
           MarkdownBlock
             Section
@@ -378,6 +379,7 @@ fn blank_lines_and_other_bullets_keep_one_list_and_an_item_may_be_empty() {
               Paragraph
                 Line
                   Text "plus"
+      List
         Item
           MarkdownBlock
         Item
@@ -485,7 +487,7 @@ fn a_fence_inside_an_item_closes_only_on_a_fence_at_least_as_long() {
   MarkdownBlock
     Section
       Heading
-      List
+      List loose
         Item
           MarkdownBlock
             Section
@@ -596,11 +598,13 @@ fn an_empty_file_is_a_document_with_an_empty_body() {
 }
 
 #[test]
-fn the_item_text_column_is_two_past_the_bullet_however_it_is_spaced() {
+fn the_item_text_starts_at_its_first_word() {
     check(
         "\
 -   wide
   - inner
+1.  one
+    continues one
 ",
         r#"Document
   MarkdownBlock
@@ -614,6 +618,348 @@ fn the_item_text_column_is_two_past_the_bullet_however_it_is_spaced() {
               Paragraph
                 Line
                   Text "wide"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "inner"
+      List start=1
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "one"
+                Line
+                  Text "continues one"
+"#,
+    );
+}
+
+#[test]
+fn four_spaces_of_indentation_are_a_code_block_and_a_tab_is_text() {
+    check(
+        "    four spaces\n\n\t- tab\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      CodeBlock info="" value="four spaces"
+      Paragraph
+        Line
+          Text "\t- tab"
+"#,
+    );
+}
+
+#[test]
+fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
+    check(
+        "\
+- one
+* two
++ three
+
+1. a
+1) b
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "one"
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "two"
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "three"
+      List start=1
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+      List start=1
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "b"
+"#,
+    );
+}
+
+#[test]
+fn an_ordered_list_keeps_its_first_number() {
+    check(
+        "\
+3. third
+4. fourth
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List start=3
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "third"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "fourth"
+"#,
+    );
+}
+
+#[test]
+fn an_ordered_marker_has_one_to_nine_digits() {
+    check(
+        "\
+123456789) nine digits
+
+1234567890) ten digits
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List start=123456789
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "nine digits"
+      Paragraph
+        Line
+          Text "1234567890) ten digits"
+"#,
+    );
+}
+
+#[test]
+fn an_ordered_list_interrupts_a_paragraph_only_when_it_starts_at_one() {
+    check(
+        "\
+text
+2. two
+
+text
+1. one
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "text"
+        Line
+          Text "2. two"
+      Paragraph
+        Line
+          Text "text"
+      List start=1
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "one"
+"#,
+    );
+}
+
+#[test]
+fn a_blank_line_between_items_or_between_two_blocks_of_an_item_makes_a_list_loose() {
+    check(
+        "\
+- a
+
+- b
+
+# Next
+
+- a
+- b
+
+  second block of b
+- c
+
+# Tight
+
+- a
+- b
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "b"
+    Section
+      Heading
+        Text "Next"
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "b"
+              Paragraph
+                Line
+                  Text "second block of b"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "c"
+    Section
+      Heading
+        Text "Tight"
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "b"
+"#,
+    );
+}
+
+#[test]
+fn a_blank_line_inside_a_nested_list_makes_only_the_list_it_separates_loose() {
+    check(
+        "\
+- a
+  - b
+
+    c
+- d
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+              List loose
+                Item
+                  MarkdownBlock
+                    Section
+                      Heading
+                      Paragraph
+                        Line
+                          Text "b"
+                      Paragraph
+                        Line
+                          Text "c"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "d"
+"#,
+    );
+}
+
+#[test]
+fn a_blank_line_closing_a_nested_list_separates_the_items_around_it() {
+    check(
+        "\
+- a
+  - b
+
+- c
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
               List
                 Item
                   MarkdownBlock
@@ -621,26 +967,145 @@ fn the_item_text_column_is_two_past_the_bullet_however_it_is_spaced() {
                       Heading
                       Paragraph
                         Line
-                          Text "inner"
+                          Text "b"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "c"
 "#,
     );
 }
 
 #[test]
-fn indentation_outside_a_list_means_nothing_and_a_tab_is_text() {
+fn text_indented_four_columns_past_the_item_text_is_a_code_block() {
     check(
-        "    four spaces\n\n\t- tab\n",
+        "\
+1. first
+2. second
+
+- item
+
+      code here
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List start=1
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "first"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "second"
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "item"
+              CodeBlock info="" value="code here"
+"#,
+    );
+}
+
+#[test]
+fn a_marker_followed_by_five_spaces_starts_its_text_one_space_after_it() {
+    check(
+        "\
+-     code
+-      indented code
+1.     indented code
+
+   paragraph
+
+       more code
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              CodeBlock info="" value="code"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              CodeBlock info="" value=" indented code"
+      List start=1 loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              CodeBlock info="" value="indented code"
+              Paragraph
+                Line
+                  Text "paragraph"
+              CodeBlock info="" value="more code"
+"#,
+    );
+}
+
+#[test]
+fn an_indented_code_block_keeps_the_blank_lines_between_its_lines() {
+    check(
+        "text\n\n    code\n\n      indented\n    \n\n# Heading\n    after the heading\n",
         r#"Document
   MarkdownBlock
     Section
       Heading
       Paragraph
         Line
-          Text "four spaces"
+          Text "text"
+      CodeBlock info="" value="code\n\n  indented"
+    Section
+      Heading
+        Text "Heading"
+      CodeBlock info="" value="after the heading"
+"#,
+    );
+}
+
+#[test]
+fn an_indented_line_after_paragraph_text_continues_the_paragraph() {
+    check(
+        "\
+Some text
+    more text
+    # not a heading
+    - not an item
+",
+        r##"Document
+  MarkdownBlock
+    Section
+      Heading
       Paragraph
         Line
-          Text "\t- tab"
-"#,
+          Text "Some text"
+        Line
+          Text "more text"
+        Line
+          Text "# not a heading"
+        Line
+          Text "- not an item"
+"##,
     );
 }
 

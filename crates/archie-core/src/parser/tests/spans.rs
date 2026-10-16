@@ -175,3 +175,29 @@ fn toml_frontmatter_spans() {
         ],
     );
 }
+
+#[test]
+fn an_indented_code_block_spans_from_its_code_column_to_its_last_line() {
+    let whole = "- a\n\n        code\n\n      more\n\n";
+    let item = "- a\n\n        code\n\n      more";
+    let content = "a\n\n        code\n\n      more";
+    let code = "  code\n\n      more";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", item),
+            ("Heading", ""),
+            ("List loose", item),
+            ("Item", item),
+            ("MarkdownBlock", content),
+            ("Section", content),
+            ("Heading", ""),
+            ("Paragraph", "a"),
+            ("Line", "a"),
+            (r#"Text "a""#, "a"),
+            (r#"CodeBlock info="" value="  code\n\nmore""#, code),
+        ],
+    );
+}

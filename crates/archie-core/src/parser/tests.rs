@@ -56,7 +56,11 @@ impl Rows {
                 self.push(depth, label, &code_block.span);
             }
             Block::List(list) => {
-                self.push(depth, "List".to_owned(), &list.span);
+                let start = list
+                    .start
+                    .map_or_else(String::new, |start| format!(" start={start}"));
+                let loose = if list.loose { " loose" } else { "" };
+                self.push(depth, format!("List{start}{loose}"), &list.span);
                 for item in &list.items {
                     self.push(depth + 1, "Item".to_owned(), &item.span);
                     self.markdown_block(depth + 2, &item.body);
