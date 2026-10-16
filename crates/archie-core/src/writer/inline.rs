@@ -6,6 +6,7 @@ use crate::parser::definition;
 use crate::parser::entity;
 use crate::parser::extension::{Construct, Extension};
 use crate::parser::inline::{is_punctuation, is_whitespace};
+use crate::parser::table;
 use crate::writer::Writer;
 
 /// What is written next to a text: a character, the start or the end of its
@@ -48,6 +49,8 @@ enum Segment {
 pub struct Segments {
     fences: Vec<Fence>,
     list: Vec<Segment>,
+    /// Whether every `|` of the text is escaped.
+    pipes: bool,
 }
 
 /// What a run of `*` or `_` has on one side.
@@ -189,6 +192,11 @@ impl Segments {
         self.wrapped(writer, &emphasis.children, emphasis.continues, "*", link);
     }
 
+    /// Puts a backslash before every `|` of the text written from now on.
+    pub const fn escape_pipes(&mut self) {
+        self.pipes = true;
+    }
+
     /// `![alt](target "title")`, or `![[target|alt]]` for a wiki embed.
     pub fn image<T>(&mut self, image: &Image<T>)
     where
@@ -277,6 +285,7 @@ impl Segments {
         Self {
             fences: pieces.fences(),
             list: Vec::new(),
+            pipes: false,
         }
     }
 
@@ -350,7 +359,7 @@ impl Segments {
                         .list
                         .get(index + 1)
                         .map_or(end, |next| next.edge(false));
-                    escape(&mut out, value, before, after, *link);
+                    escape(&mut out, value, before, after, *link, self.pipes);
                 }
             }
         }
@@ -411,6 +420,25 @@ pub fn guard_definition(lines: &mut [String]) {
     }
 }
 
+/// Whether `lines`, a paragraph as written, would read as a table that
+/// starts on one of them, each line offered to the table reader as the
+/// lexer offers it.
+pub fn reads_as_table(lines: &[String]) -> bool {
+    let source = lines.join("\n");
+    let mut line_start = 0;
+    for line in lines {
+        let content = line.trim_start_matches(' ');
+        let start = line_start + (line.len() - content.len());
+        let end = start + content.trim_end_matches([' ', '\t']).len();
+        let next = (line_start + line.len() + 1).min(source.len());
+        if table::read(&source, line_start, start..end, next, 0, 0).is_some() {
+            return true;
+        }
+        line_start = next;
+    }
+    false
+}
+
 /// Where a backslash goes so that `text`, a line that starts with text, does
 /// not start a block: before the first character of a heading, a block
 /// quote, a bullet, a thematic break, a tilde fence or, after the first line
@@ -450,8 +478,8 @@ const fn closes(continues: Continues) -> bool {
 /// backtick, a `*` or `_` run that could open or close emphasis, a `&` that
 /// starts a reference, a `<` that could start a tag or an autolink, and the
 /// `!`, `[` and `]` that would start or end a link. Between a link's
-/// brackets, `link`, every bracket is escaped.
-fn escape(out: &mut String, value: &str, before: Near, after: Near, link: bool) {
+/// brackets, `link`, every bracket is escaped, and with `pipes`, every `|`.
+fn escape(out: &mut String, value: &str, before: Near, after: Near, link: bool, pipes: bool) {
     let chars: Vec<(usize, char)> = value.char_indices().collect();
     let near = |index: usize| {
         chars
@@ -483,6 +511,7 @@ fn escape(out: &mut String, value: &str, before: Near, after: Near, link: bool) 
                 '[' => link || matches!(next, Near::Char('[') | Near::Unknown),
                 ']' => link || matches!(next, Near::Char('(') | Near::Unknown),
                 '!' => matches!(next, Near::Char('[') | Near::Unknown),
+                '|' => pipes,
                 _ => false,
             };
             (index + 1, escaped)

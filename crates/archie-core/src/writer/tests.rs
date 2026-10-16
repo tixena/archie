@@ -580,6 +580,19 @@ fn a_first_body_line_that_would_open_a_toml_frontmatter_is_escaped() {
 }
 
 #[test]
+fn a_paragraph_that_would_read_as_a_table_escapes_its_pipes() {
+    assert_eq!(
+        round_trip("a \\| b\n\\--- \\| ---\n"),
+        "a \\| b\n--- \\| ---\n"
+    );
+    assert_eq!(
+        round_trip("\\+---+\n\\| a \\|\n\\+---+\n"),
+        "+---+\n\\| a \\|\n+---+\n"
+    );
+    assert_eq!(round_trip("a | b\n"), "a | b\n");
+}
+
+#[test]
 fn line_breaks_quotes_html_and_breaks_take_archies_form() {
     assert_eq!(round_trip("a  \nb\\\nc\n"), "a\\\nb\\\nc\n");
     assert_eq!(round_trip(">a\n>\n>  b\n"), "> a\n>\n>  b\n");

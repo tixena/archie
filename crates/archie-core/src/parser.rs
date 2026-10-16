@@ -16,7 +16,7 @@ pub(crate) mod inline;
 mod lexer;
 mod line;
 pub(crate) mod scalar;
-mod table;
+pub(crate) mod table;
 mod toml;
 mod yaml;
 
