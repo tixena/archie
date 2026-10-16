@@ -41,7 +41,7 @@ Document
         Paragraph
           Line
             Text "An error carries a message and a byte range:"
-        CodeBlock info="json" value="{\n  \"message\": \"the key `a` is written twice\",\n  \"span\": { \"start\": 10, \"end\": 11 }\n}"
+        CodeBlock info="json" value="{\n  \"message\": \"`tomorrow` is not a value\",\n  \"span\": { \"start\": 10, \"end\": 18 }\n}"
         Paragraph
           Line
             Text "To show a fence inside a fence, use a longer one:"

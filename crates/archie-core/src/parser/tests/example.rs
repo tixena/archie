@@ -44,7 +44,12 @@ fn span(start: usize, covered: &str) -> Range<usize> {
 }
 
 fn pair(key: &str, range: Range<usize>, value: Value) -> (String, Pair) {
-    (key.to_owned(), Pair { span: range, value })
+    let pair = Pair {
+        repeats: Vec::new(),
+        span: range,
+        value,
+    };
+    (key.to_owned(), pair)
 }
 
 fn scalar(range: Range<usize>, value: ScalarValue) -> Value {

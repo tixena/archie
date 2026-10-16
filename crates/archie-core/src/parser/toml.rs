@@ -31,7 +31,6 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
 fn entry(cursor: &mut Cursor<'_>, pairs: &mut IndexMap<String, Pair>) -> Result<(), ParseError> {
     let start = cursor.pos();
     let name = key(cursor)?;
-    let key_end = cursor.pos();
     cursor.skip_spaces();
     if cursor.peek() == Some(b'.') {
         return cursor.error("dotted keys are not read yet");
@@ -41,8 +40,13 @@ fn entry(cursor: &mut Cursor<'_>, pairs: &mut IndexMap<String, Pair>) -> Result<
     }
     cursor.skip_spaces();
     let value = value(cursor)?;
-    let span = start..value.span().end;
-    insert(pairs, name, start..key_end, Pair { span, value })
+    let pair = Pair {
+        repeats: Vec::new(),
+        span: start..value.span().end,
+        value,
+    };
+    insert(pairs, name, pair);
+    Ok(())
 }
 
 fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {

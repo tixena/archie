@@ -1,10 +1,10 @@
 //! The frontmatter block: finding it and reading it in its own syntax.
 
-use core::ops::Range;
+use core::{iter, mem};
 
 use indexmap::IndexMap;
 
-use crate::parser::ast::{Frontmatter, FrontmatterFormat, Mapping, Pair};
+use crate::parser::ast::{Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value};
 use crate::parser::error::ParseError;
 use crate::parser::line::{Line, line_at};
 use crate::parser::{toml, yaml};
@@ -34,29 +34,49 @@ pub fn parse(source: &str) -> Result<(Option<Frontmatter>, usize), ParseError> {
     Ok((Some(frontmatter), closing.next))
 }
 
-/// Adds a pair to a mapping being read. A key may be written only once.
-pub fn insert(
-    pairs: &mut IndexMap<String, Pair>,
-    key: String,
-    key_span: Range<usize>,
-    pair: Pair,
-) -> Result<(), ParseError> {
-    if pairs.contains_key(&key) {
-        let message = format!("the key `{key}` is written twice");
-        return Err(ParseError::new(&message, key_span));
-    }
-    pairs.insert(key, pair);
-    Ok(())
+/// Adds a pair to a mapping being read. A key written again joins the first
+/// one: its value becomes a list of every value written for it.
+pub fn insert(pairs: &mut IndexMap<String, Pair>, key: String, pair: Pair) {
+    let Some(first) = pairs.get_mut(&key) else {
+        pairs.insert(key, pair);
+        return;
+    };
+    let span = first.value.span().clone();
+    let mut items = into_items(mem::replace(&mut first.value, empty(span.start)));
+    items.extend(into_items(pair.value));
+    first.value = Value::Sequence(Sequence { items, span });
+    first.repeats.push(pair.span);
 }
 
-/// The mapping holding `pairs`. With no pairs its span is empty, at
-/// `empty_at`.
+/// A list gives its items; any other value gives itself.
+fn into_items(value: Value) -> Vec<Value> {
+    match value {
+        Value::Sequence(sequence) => sequence.items,
+        Value::Mapping(_) | Value::Scalar(_) => vec![value],
+    }
+}
+
+/// A list with no items, at `at`.
+const fn empty(at: usize) -> Value {
+    Value::Sequence(Sequence {
+        items: Vec::new(),
+        span: at..at,
+    })
+}
+
+/// The mapping holding `pairs`. Its span runs from the first key to the end
+/// of the last value written; with no pairs it is empty, at `empty_at`.
 pub fn finish(pairs: IndexMap<String, Pair>, empty_at: usize) -> Mapping {
+    let end = pairs
+        .values()
+        .flat_map(|pair| iter::once(&pair.span).chain(&pair.repeats))
+        .map(|span| span.end)
+        .max();
     let span = pairs
         .first()
-        .zip(pairs.last())
-        .map_or(empty_at..empty_at, |((_, first), (_, last))| {
-            first.span.start..last.span.end
+        .zip(end)
+        .map_or(empty_at..empty_at, |((_, first), last_end)| {
+            first.span.start..last_end
         });
     Mapping { pairs, span }
 }
