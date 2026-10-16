@@ -564,6 +564,22 @@ fn text_that_would_read_as_markup_is_escaped() {
 }
 
 #[test]
+fn a_text_line_that_would_open_a_tilde_fence_is_escaped() {
+    assert_eq!(round_trip("\\~~~\n"), "\\~~~\n");
+    assert_eq!(round_trip("a\n\\~~~ b\n"), "a\n\\~~~ b\n");
+    assert_eq!(round_trip("~~\n"), "~~\n");
+}
+
+#[test]
+fn a_first_body_line_that_would_open_a_toml_frontmatter_is_escaped() {
+    let text = round_trip("\\+++\nx = 1\n\\+++\n");
+    assert_eq!(text, "\\+++\nx = 1\n+++\n");
+    assert!(parse(&text).unwrap().frontmatter.is_none());
+    assert_eq!(round_trip("+++ x\n"), "+++ x\n");
+    assert_eq!(round_trip("\\---\nx: 1\n\\---\n"), "\\---\nx: 1\n\\---\n");
+}
+
+#[test]
 fn line_breaks_quotes_html_and_breaks_take_archies_form() {
     assert_eq!(round_trip("a  \nb\\\nc\n"), "a\\\nb\\\nc\n");
     assert_eq!(round_trip(">a\n>\n>  b\n"), "> a\n>\n>  b\n");
@@ -900,6 +916,16 @@ fn every_fixture_frontmatter_reads_back_to_the_same_mapping_in_yaml_and_in_toml(
         assert_eq!(mapping(&written(source)), expected, "{name}");
     }
     assert_eq!(with_frontmatter_count, 15);
+}
+
+#[test]
+fn a_body_line_after_the_frontmatter_is_not_escaped() {
+    let source = "---\na: 1\n---\n\\+++\n";
+    assert_eq!(round_trip(source), "---\na: 1\n---\n+++\n");
+    let text = toml(source);
+    assert_eq!(text, "+++\na = 1\n+++\n+++\n");
+    assert_eq!(mapping(&text), mapping(source));
+    assert_eq!(body(&text), body(source));
 }
 
 #[test]

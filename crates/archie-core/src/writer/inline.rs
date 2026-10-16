@@ -413,8 +413,8 @@ pub fn guard_definition(lines: &mut [String]) {
 
 /// Where a backslash goes so that `text`, a line that starts with text, does
 /// not start a block: before the first character of a heading, a block
-/// quote, a bullet, a thematic break or, after the first line of a
-/// paragraph, a heading underline; before the `.` or `)` of an ordered
+/// quote, a bullet, a thematic break, a tilde fence or, after the first line
+/// of a paragraph, a heading underline; before the `.` or `)` of an ordered
 /// list's number.
 fn block_start(text: &str, first: bool) -> Option<usize> {
     let bytes = text.as_bytes();
@@ -426,7 +426,8 @@ fn block_start(text: &str, first: bool) -> Option<usize> {
         && bytes.first().is_some_and(|&mark| {
             matches!(mark, b'=' | b'-') && bytes.iter().all(|&byte| byte == mark)
         });
-    if heading || bullet || underline || is_thematic_break(text) || text.starts_with('>') {
+    let fence = text.starts_with("~~~");
+    if heading || bullet || underline || fence || is_thematic_break(text) || text.starts_with('>') {
         return Some(0);
     }
     let digits = bytes

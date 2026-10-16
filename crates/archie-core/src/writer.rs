@@ -44,6 +44,9 @@ pub struct Writer {
     blank: bool,
     /// The depth of the section being written, from 1.
     depth: usize,
+    /// Whether the text written starts the file, with no frontmatter before
+    /// it.
+    file_start: bool,
     out: String,
     /// Whether blocks follow each other with no blank line, as in the items
     /// of a tight list.
@@ -51,6 +54,11 @@ pub struct Writer {
 }
 
 impl Writer {
+    /// Whether the next text written is the first of the file.
+    const fn at_file_start(&self) -> bool {
+        self.file_start && self.out.is_empty()
+    }
+
     fn block<T>(&mut self, block: &Block<T>)
     where
         T: Extension,
@@ -96,6 +104,7 @@ impl Writer {
     {
         let mut writer = Self {
             depth: self.depth,
+            file_start: self.at_file_start(),
             tight: self.tight,
             ..Self::new()
         };
@@ -237,7 +246,10 @@ impl Writer {
     where
         T: Extension,
     {
-        let mut inner = Self::new();
+        let mut inner = Self {
+            file_start: self.at_file_start(),
+            ..Self::new()
+        };
         inner.markdown_node(block);
         self.end_line();
         self.put(&inner.finish());
@@ -281,6 +293,7 @@ impl Writer {
         Self {
             blank: false,
             depth: 1,
+            file_start: false,
             out: String::new(),
             tight: false,
         }
@@ -303,7 +316,8 @@ impl Writer {
         self.end_line();
     }
 
-    /// Each line of the paragraph on a line of its own.
+    /// Each line of the paragraph on a line of its own, with a backslash
+    /// before a first line that would open a TOML frontmatter.
     fn paragraph<T>(&mut self, paragraph: &Paragraph<T>)
     where
         T: Extension,
@@ -324,6 +338,11 @@ impl Writer {
         }
         if text_led {
             inline::guard_definition(&mut lines);
+            if self.at_file_start()
+                && let Some(first) = lines.first_mut().filter(|first| *first == "+++")
+            {
+                first.insert(0, '\\');
+            }
         }
         for line in &lines {
             self.put(line);
@@ -431,6 +450,7 @@ where
             Self::List(list) => writer.list(list),
             Self::MarkdownBlock(block) => {
                 let mut inner = Writer {
+                    file_start: writer.at_file_start(),
                     tight: writer.tight,
                     ..Writer::new()
                 };
@@ -469,7 +489,10 @@ where
         (Some(frontmatter), FrontmatterFormat::Toml) => toml::frontmatter(&frontmatter.mapping)?,
         (Some(frontmatter), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
     };
-    let mut writer = Writer::new();
+    let mut writer = Writer {
+        file_start: document.frontmatter.is_none(),
+        ..Writer::new()
+    };
     writer.node(&document.kind, Construct::Document(document));
     text.push_str(&writer.finish());
     Ok(text)
