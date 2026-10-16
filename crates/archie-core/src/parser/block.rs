@@ -21,6 +21,10 @@ use crate::parser::table::{Cell, RowToken, TableToken};
 /// Each grid cell's lines, as ranges of the source, by the cell's span.
 pub type Cells = HashMap<Range<usize>, Vec<Range<usize>>>;
 
+/// Each table cell's tokens, by the cell's span, lexed once by the
+/// definitions pass and taken by the cell when its blocks are built.
+type Lexed = HashMap<Range<usize>, Vec<Token>>;
+
 /// Where a markdown block has blank lines: between two of its blocks, or at
 /// its end. A list is loose by them.
 #[derive(Clone, Copy, Default)]
@@ -43,6 +47,7 @@ struct Parser<'src, E> {
     cells: Cells,
     definitions: Definitions,
     extension: PhantomData<E>,
+    lexed: Lexed,
     pos: usize,
     source: &'src str,
     tokens: Vec<Token>,
@@ -67,16 +72,22 @@ where
     /// one container deeper than its table, which `depth` containers hold.
     fn cell(&mut self, cell: &Cell, depth: usize) -> TableCell<E> {
         let span = cell.span();
+        let tokens = self
+            .lexed
+            .remove(&span)
+            .unwrap_or_else(|| lex_lines(self.source, &cell.lines, 0, depth + 1));
         let mut parser = Self {
             cells: Cells::new(),
             definitions: self.definitions.clone(),
             extension: PhantomData,
+            lexed: mem::take(&mut self.lexed),
             pos: 0,
             source: self.source,
-            tokens: lex_lines(self.source, &cell.lines, 0, depth + 1),
+            tokens,
         };
         let (body, _) = parser.markdown_block(span.start);
         self.cells.extend(parser.cells);
+        self.lexed = parser.lexed;
         TableCell {
             body,
             kind: Kind(None),
@@ -479,10 +490,12 @@ fn read<E>(
 where
     E: Extension,
 {
+    let mut lexed = Lexed::new();
     let mut parser = Parser {
         cells: Cells::new(),
-        definitions: definitions(source, &tokens),
+        definitions: definitions(source, &tokens, &mut lexed),
         extension: PhantomData,
+        lexed,
         pos: 0,
         source,
         tokens,
@@ -498,7 +511,8 @@ where
 
 /// The link definitions among `tokens` and in the cells of their tables,
 /// each target by its folded label. The first definition of a label wins.
-fn definitions(source: &str, tokens: &[Token]) -> Definitions {
+/// Each cell's tokens go into `lexed`, by the cell's span.
+fn definitions(source: &str, tokens: &[Token], lexed: &mut Lexed) -> Definitions {
     let mut found = Definitions::new();
     for token in tokens {
         if let TokenKind::Definition { label, target } = &token.kind {
@@ -514,9 +528,10 @@ fn definitions(source: &str, tokens: &[Token]) -> Definitions {
                 .flat_map(|row| &row.cells);
             for cell in cells {
                 let read = lex_lines(source, &cell.lines, 0, depth + 1);
-                for (label, target) in definitions(source, &read) {
+                for (label, target) in definitions(source, &read, lexed) {
                     found.entry(label).or_insert(target);
                 }
+                lexed.insert(cell.span(), read);
             }
         }
     }
