@@ -310,3 +310,59 @@ fn yaml_indentation_that_matches_no_block_is_refused() {
     let (shallower, _) = failure("---\n  a: 1\nb: 2\n---\n");
     assert_eq!(shallower, "this line is indented less than the first key");
 }
+
+#[test]
+fn a_plain_value_cannot_start_with_an_indicator() {
+    let refused = |character: &str| {
+        named(
+            &format!("a plain value cannot start with `{character}`; quote it"),
+            character,
+        )
+    };
+    assert_eq!(failed("---\na: @x\n---\n"), refused("@"));
+    assert_eq!(failed("---\na: `x\n---\n"), refused("`"));
+    assert_eq!(failed("---\na: %x\n---\n"), refused("%"));
+    assert_eq!(failed("---\na: ,x\n---\n"), refused(","));
+    assert_eq!(failed("---\na: ]x\n---\n"), refused("]"));
+    assert_eq!(failed("---\na: }x\n---\n"), refused("}"));
+    assert_eq!(failed("---\na:\n  @x\n---\n"), refused("@"));
+    assert_eq!(failed("---\nitems:\n- @x\n---\n"), refused("@"));
+    assert_eq!(failed("---\na: !!str @x\n---\n"), refused("@"));
+    assert_eq!(failed("---\nt: [@x]\n---\n"), refused("@"));
+    assert_eq!(failed("---\nt: [a, `b]\n---\n"), refused("`"));
+    assert_eq!(
+        refusal("---\na: -\n---\n"),
+        (
+            "a plain value cannot start with `-`; quote it".to_owned(),
+            "-"
+        )
+    );
+}
+
+#[test]
+fn a_plain_value_cannot_start_with_a_dash_a_question_mark_or_a_colon_and_a_space() {
+    let refused = |character: &str, at: &'static str| {
+        (
+            format!("a plain value cannot start with `{character}` and a space; quote it"),
+            at,
+        )
+    };
+    assert_eq!(refusal("---\na: - x\n---\n"), refused("-", "- x"));
+    assert_eq!(refusal("---\na: ? k\n---\n"), refused("?", "? k"));
+    assert_eq!(refusal("---\na: : x\n---\n"), refused(":", ": x"));
+}
+
+#[test]
+fn a_block_key_needs_a_space_after_its_colon() {
+    let refused = ("expected a space after the `:`".to_owned(), "1");
+    assert_eq!(refusal("---\n\"a\":1\n---\n"), refused);
+    assert_eq!(refusal("---\nitems:\n- \"a\":1\n---\n"), refused);
+}
+
+#[test]
+fn an_explicit_key_that_is_a_collection_is_refused() {
+    let refused = |at: &'static str| ("expected a key".to_owned(), at);
+    assert_eq!(refusal("---\n? [a, b]\n: v\n---\n"), refused("[a, b]"));
+    assert_eq!(refusal("---\n?\n  a: 1\n: v\n---\n"), refused("a: 1"));
+    assert_eq!(refusal("---\n?\n  - a\n: v\n---\n"), refused("- a"));
+}
