@@ -849,14 +849,14 @@ where
 
 /// A Unicode whitespace character, as `CommonMark` counts them: a space
 /// separator, a tab, a line feed, a form feed or a carriage return.
-fn is_whitespace(character: char) -> bool {
+pub fn is_whitespace(character: char) -> bool {
     matches!(character, '\t' | '\n' | '\u{c}' | '\r')
         || character.general_category() == GeneralCategory::SpaceSeparator
 }
 
 /// A Unicode punctuation character, as `CommonMark` counts them: one of the
 /// punctuation or symbol general categories.
-fn is_punctuation(character: char) -> bool {
+pub fn is_punctuation(character: char) -> bool {
     matches!(
         character.general_category_group(),
         GeneralCategoryGroup::Punctuation | GeneralCategoryGroup::Symbol
