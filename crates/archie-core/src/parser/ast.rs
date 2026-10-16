@@ -293,8 +293,8 @@ where
     pub span: Range<usize>,
 }
 
-/// Lines between two fences of backticks, or indented four columns past
-/// their parent's.
+/// Lines between two fences of backticks or of tildes, or indented four
+/// columns past their parent's.
 ///
 /// `content` is the range of those lines in the source, `info` the text after
 /// the opening fence, empty for an indented block, and `value` the lines as

@@ -1125,26 +1125,68 @@ fn closing_hashes_of_a_heading_are_kept_as_text() {
 }
 
 #[test]
-fn a_fence_of_tildes_is_text() {
-    check(
+fn a_fence_of_tildes_is_a_code_block() {
+    for (source, info, value) in [
+        ("~~~\ncode\n~~~\n", "", "code"),
+        ("~~~python\nprint(1)\n~~~\n", "python", "print(1)"),
+        ("~~~ a`b\nx\n~~~\n", "a`b", "x"),
+    ] {
+        check(source, &code_block_outline(info, value));
+    }
+}
+
+#[test]
+fn a_fence_closes_only_on_its_own_character_at_least_as_long() {
+    for (source, value) in [
+        ("~~~\n```\n~~~\n", "```"),
+        ("~~~~\nx\n~~~\n~~~~\n", "x\n~~~"),
+        ("```\nx\n~~~\n", "x\n~~~"),
+    ] {
+        check(source, &code_block_outline("", value));
+    }
+}
+
+/// The outline of a document holding only a code block.
+fn code_block_outline(info: &str, value: &str) -> String {
+    format!(
         "\
-~~~
-code
-~~~
-",
-        r#"Document
+Document
   MarkdownBlock
     Section
       Heading
-      Paragraph
-        Line
-          Text "~~~"
-        Line
-          Text "code"
-        Line
-          Text "~~~"
+      CodeBlock info={info:?} value={value:?}
+"
+    )
+}
+
+#[test]
+fn a_fence_of_tildes_inside_an_item_is_a_code_block_as_one_of_backticks_is() {
+    for fence in ["```", "~~~"] {
+        check(
+            &format!("- step\n\n  {fence}text\n  code\n  {fence}\n- next\n"),
+            r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "step"
+              CodeBlock info="text" value="code"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "next"
 "#,
-    );
+        );
+    }
 }
 
 #[test]

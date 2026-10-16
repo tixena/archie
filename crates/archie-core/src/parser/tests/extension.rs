@@ -569,6 +569,7 @@ fn a_fenced_block_whose_info_starts_with_markdown_or_md_in_any_case_holds_a_mark
         "```md\n# A\n```\n",
         "```MD\n# A\n```\n",
         "```Markdown title\n# A\n```\n",
+        "~~~markdown\n# A\n~~~\n",
     ] {
         let document = parse(source).unwrap();
         let block = code_blocks(&document.body)[0];

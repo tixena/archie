@@ -17,7 +17,7 @@ characters, so the grammar never sees it.
 | What is not context-free | What handles it | What the grammar sees instead |
 |---|---|---|
 | Which list item a line belongs to depends on how far it is indented compared with earlier lines. | The body lexer keeps a stack of the open items. | `ITEM_START` and `ITEM_END` tokens. |
-| A fenced code block ends at a fence at least as long as the one that opened it. | The body lexer reads the whole block. | One `CODE_BLOCK` token. |
+| A fenced code block ends at a fence of the same character, at least as long as the one that opened it. | The body lexer reads the whole block. | One `CODE_BLOCK` token. |
 | A table's cells line up in columns, and a pipe table's first line is a header only when the next line is a delimiter row. | The table reader reads the whole table. | One `TABLE` token. |
 | A code span ends at a run of exactly as many backticks as opened it. | The inline scanner compares the two runs. | One `code` node. |
 | Which YAML mapping a line belongs to depends on its indentation. | The YAML reader compares each line's indentation with that of the block it is reading. | `INDENT` and `DEDENT` in the rules below. |
@@ -88,12 +88,13 @@ open list item: the column where that item's text starts.
    fits:
    1. No item is open, and it is one to six `#` followed by a space or by the end
       of the line: `HEADING_n`, where `n` is the number of `#`.
-   2. It starts with three or more backticks and holds no other backtick: a fenced
-      code block starts. The lexer takes every line up to and including the first
-      line made only of at least that many backticks, and emits one `CODE_BLOCK`
-      holding the lines between and their range in the source. With no closing fence, the block ends before the
-      first non-blank line indented less than the enclosing item, or at the end of
-      the file.
+   2. It starts with three or more backticks and holds no other backtick, or with
+      three or more tildes: a fenced code block starts. The lexer takes every line
+      up to and including the first line made only of the fence's character, at
+      least as many of it as opened the block, and emits one `CODE_BLOCK` holding
+      the lines between and their range in the source. With no closing fence, the
+      block ends before the first non-blank line indented less than the enclosing
+      item, or at the end of the file.
    3. It is `-`, `*` or `+` followed by a space or by the end of the line, and the
       line is not three or more of the same `-`, `*` or `_` with only spaces
       between them: `ITEM_START`. The item's text column is the bullet's column
@@ -482,13 +483,12 @@ between the two lines.
    paragraph, not code. A tab is a character of text, not indentation.
 5. A heading is written with `#`, outside any list item. Closing `#`s are part of
    its text.
-6. A code block is written with backtick fences only.
-7. An inline node does not cross a line break. A link's text holds no brackets
+6. An inline node does not cross a line break. A link's text holds no brackets
    other than an image's, and a link with a title is text.
-8. A table is read only when it is well formed. GitHub fills a short row with empty
+7. A table is read only when it is well formed. GitHub fills a short row with empty
    cells and drops the extra cells of a long one; archie reads the whole table as
    text instead. A pipe table also ends at the first line with no pipe.
-9. These have no node and stay as text: block quotes, ordered lists, emphasis and
+8. These have no node and stay as text: block quotes, ordered lists, emphasis and
    strong, thematic breaks, underlined headings, reference links, autolinks and
    HTML.
 
