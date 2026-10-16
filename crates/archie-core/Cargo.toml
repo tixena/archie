@@ -16,3 +16,9 @@ thiserror.workspace = true
 
 # Insertion-ordered map
 indexmap.workspace = true
+
+# Unicode full case folding, for link labels
+unicase.workspace = true
+
+# Unicode general categories, for emphasis delimiter runs
+unicode-properties.workspace = true

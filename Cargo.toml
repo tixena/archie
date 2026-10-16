@@ -16,6 +16,12 @@ thiserror = "2"
 # Insertion-ordered map
 indexmap = "2"
 
+# Unicode full case folding, for link labels
+unicase = "2.10"
+
+# Unicode general categories, for emphasis delimiter runs
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

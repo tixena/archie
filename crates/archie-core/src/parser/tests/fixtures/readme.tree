@@ -15,7 +15,10 @@ Document
             Image form=Markdown target="https://img.shields.io/badge/docs-online-blue.svg" alt="docs"
       Paragraph
         Line
-          Text "quill reads markdown files into a **typed tree**."
+          Text "quill reads markdown files into a "
+          Strong
+            Text "typed tree"
+          Text "."
       Section
         Heading
           Text "Install"

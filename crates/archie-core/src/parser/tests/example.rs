@@ -164,6 +164,7 @@ fn dependencies() -> Block {
                     kind: Kind(None),
                     span: span(132, "[[grammar]]"),
                     target: "grammar".to_owned(),
+                    title: None,
                 }),
                 text(143, " and the "),
                 Inline::Link(Link {
@@ -172,6 +173,7 @@ fn dependencies() -> Block {
                     kind: Kind(None),
                     span: span(152, "[spec](spec.md)"),
                     target: "spec.md".to_owned(),
+                    title: None,
                 }),
                 text(167, "."),
             ],

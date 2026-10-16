@@ -209,7 +209,7 @@ where
     pub value: String,
 }
 
-/// A raw HTML block, as written.
+/// Raw HTML, as written: a block, or an inline node such as `<span>`.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Html<E = Markdown>
@@ -404,8 +404,12 @@ where
     E: Extension,
 {
     Code(Code<E>),
+    Emphasis(Emphasis<E>),
+    Html(Html<E>),
     Image(Image<E>),
+    LineBreak(LineBreak<E>),
     Link(Link<E>),
+    Strong(Strong<E>),
     Text(Text<E>),
 }
 
@@ -418,8 +422,12 @@ where
     pub const fn span(&self) -> &Range<usize> {
         match self {
             Self::Code(code) => &code.span,
+            Self::Emphasis(emphasis) => &emphasis.span,
+            Self::Html(html) => &html.span,
             Self::Image(image) => &image.span,
+            Self::LineBreak(line_break) => &line_break.span,
             Self::Link(link) => &link.span,
+            Self::Strong(strong) => &strong.span,
             Self::Text(text) => &text.span,
         }
     }
@@ -437,8 +445,48 @@ where
     pub value: String,
 }
 
-/// A link: `[text](target)`, `[[target]]` or `[[target|text]]`. `children`
-/// are the text shown, and are empty for `[[target]]`.
+/// Text between `*` or `_`, such as `*a*`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Emphasis<E = Markdown>
+where
+    E: Extension,
+{
+    pub children: Vec<Inline<E>>,
+    pub kind: Kind<E>,
+    pub span: Range<usize>,
+}
+
+/// Text between `**` or `__`, such as `**b**`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Strong<E = Markdown>
+where
+    E: Extension,
+{
+    pub children: Vec<Inline<E>>,
+    pub kind: Kind<E>,
+    pub span: Range<usize>,
+}
+
+/// A hard line break: the two or more spaces, or the backslash, that end a
+/// line followed by another line of its paragraph.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct LineBreak<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
+    pub span: Range<usize>,
+}
+
+/// A link: `[text](target "title")`, a reference link, an autolink,
+/// `[[target]]` or `[[target|text]]`.
+///
+/// `children` are the text shown, and are empty for `[[target]]`. A
+/// reference link takes its target and title from its label's definition.
+/// `target` and `title` hold their escapes and references resolved.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Link<E = Markdown>
@@ -450,6 +498,7 @@ where
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub target: String,
+    pub title: Option<String>,
 }
 
 /// How a link or an image is written.
@@ -462,8 +511,10 @@ pub enum LinkForm {
     Wiki,
 }
 
-/// An embed: `![alt](target)`, `![[target]]` or `![[target|alt]]`. `alt` is
-/// empty when none is written.
+/// An embed: `![alt](target "title")`, `![[target]]` or `![[target|alt]]`.
+///
+/// `alt` is empty when none is written. `target` and `title` hold their
+/// escapes and references resolved.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Image<E = Markdown>
@@ -475,6 +526,7 @@ where
     pub kind: Kind<E>,
     pub span: Range<usize>,
     pub target: String,
+    pub title: Option<String>,
 }
 
 /// Text between backticks, such as `` `archie check` ``.

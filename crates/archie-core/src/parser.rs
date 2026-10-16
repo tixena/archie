@@ -9,6 +9,7 @@ mod block;
 mod claim;
 mod cursor;
 mod definition;
+mod entity;
 mod frontmatter;
 mod html;
 mod inline;

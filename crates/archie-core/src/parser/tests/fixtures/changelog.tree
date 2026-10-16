@@ -8,7 +8,8 @@ Document
           Text "All notable changes to this project are documented in this file."
       Section
         Heading
-          Text "[Unreleased]"
+          Link form=Markdown target="https://example.com/compare/2.3.0...HEAD"
+            Text "Unreleased"
         Section
           Heading
             Text "Added"
@@ -33,7 +34,9 @@ Document
                       Text "."
       Section
         Heading
-          Text "[2.3.0] - 2026-09-30"
+          Link form=Markdown target="https://example.com/compare/2.2.0...2.3.0"
+            Text "2.3.0"
+          Text " - 2026-09-30"
         Section
           Heading
             Text "Changed"
@@ -44,7 +47,9 @@ Document
                   Heading
                   Paragraph
                     Line
-                      Text "**Breaking:** "
+                      Strong
+                        Text "Breaking:"
+                      Text " "
                       Code "Mapping"
                       Text " keeps its keys in the order written."
         Section
@@ -63,7 +68,9 @@ Document
                       Text ")"
       Section
         Heading
-          Text "[2.2.0] - 2026-09-01"
+          Link form=Markdown target="https://example.com/releases/tag/2.2.0"
+            Text "2.2.0"
+          Text " - 2026-09-01"
         Paragraph
           Line
             Text "Maintenance release."

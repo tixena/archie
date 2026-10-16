@@ -16,13 +16,15 @@ Document
       Heading
       Paragraph
         Line
-          Text "**What happened**"
+          Strong
+            Text "What happened"
       Paragraph
         Line
           Text "A clear description of the bug."
       Paragraph
         Line
-          Text "**Steps to reproduce**"
+          Strong
+            Text "Steps to reproduce"
       List start=1
         Item
           MarkdownBlock
@@ -41,7 +43,8 @@ Document
                   Text "See the error"
       Paragraph
         Line
-          Text "**Expected**"
+          Strong
+            Text "Expected"
       Paragraph
         Line
           Text "What should have happened instead."

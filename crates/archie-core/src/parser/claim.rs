@@ -2,8 +2,9 @@
 //! children before parents.
 
 use crate::parser::ast::{
-    Block, BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Inline, Item, Kind, Line,
-    Link, List, MarkdownBlock, Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak,
+    Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Inline, Item,
+    Kind, Line, LineBreak, Link, List, MarkdownBlock, Paragraph, Section, Strong, Table, TableCell,
+    TableRow, Text, ThematicBreak,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension};
@@ -80,6 +81,20 @@ where
     }
 }
 
+impl<T> Offer for Emphasis<T>
+where
+    T: Extension,
+{
+    fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
+        each(&mut self.children, context)?;
+        let claimed = T::claim(
+            Construct::Emphasis(self),
+            &located(context, self.span.start),
+        );
+        settle(&mut self.kind, claimed, context)
+    }
+}
+
 impl<T> Offer for Heading<T>
 where
     T: Extension,
@@ -118,8 +133,12 @@ where
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         match self {
             Self::Code(code) => code.offer(context),
+            Self::Emphasis(emphasis) => emphasis.offer(context),
+            Self::Html(html) => html.offer(context),
             Self::Image(image) => image.offer(context),
+            Self::LineBreak(line_break) => line_break.offer(context),
             Self::Link(link) => link.offer(context),
+            Self::Strong(strong) => strong.offer(context),
             Self::Text(text) => text.offer(context),
         }
     }
@@ -143,6 +162,19 @@ where
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.children, context)?;
         let claimed = T::claim(Construct::Line(self), &located(context, self.span.start));
+        settle(&mut self.kind, claimed, context)
+    }
+}
+
+impl<T> Offer for LineBreak<T>
+where
+    T: Extension,
+{
+    fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
+        let claimed = T::claim(
+            Construct::LineBreak(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -206,6 +238,17 @@ where
         each(&mut self.blocks, context)?;
         each(&mut self.subsections, context)?;
         let claimed = T::claim(Construct::Section(self), &located(context, self.span.start));
+        settle(&mut self.kind, claimed, context)
+    }
+}
+
+impl<T> Offer for Strong<T>
+where
+    T: Extension,
+{
+    fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
+        each(&mut self.children, context)?;
+        let claimed = T::claim(Construct::Strong(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }

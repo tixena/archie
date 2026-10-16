@@ -1,6 +1,15 @@
-//! Link reference definitions, such as `[guide]: <https://example.com> "Guide"`.
+//! Link reference definitions, such as `[guide]: <https://example.com> "Guide"`,
+//! and the labels, destinations and titles links share with them.
 
 use core::cell::Cell;
+use std::collections::HashMap;
+
+use unicase::UniCase;
+
+use crate::parser::entity::resolve;
+
+/// The link definitions of a file: each target by its folded label.
+pub type Definitions = HashMap<String, Target>;
 
 /// A definition read from the start of a text.
 pub struct Definition {
@@ -8,8 +17,15 @@ pub struct Definition {
     pub label: String,
     /// How many lines of the text the definition takes.
     pub lines: usize,
-    /// The destination as written, without the angle brackets around it.
-    pub target: String,
+    pub target: Target,
+}
+
+/// Where a link points: its destination, without the angle brackets around
+/// it, and its title, each with escapes and character references resolved.
+#[derive(Clone)]
+pub struct Target {
+    pub destination: String,
+    pub title: Option<String>,
 }
 
 /// The definition a text starts with, if any, as far as the text goes.
@@ -58,34 +74,90 @@ pub fn read(text: &str) -> Reading {
     }
 }
 
+/// A link label as `CommonMark` matches labels: Unicode full case folding,
+/// then each run of spaces, tabs and line endings one space, and none at
+/// either end.
+pub fn fold_label(label: &str) -> String {
+    UniCase::new(label)
+        .to_folded_case()
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The target of the inline link `(destination "title")` whose `(` is at
+/// `open` in `text`, and where it ends, past its `)`. The destination and
+/// the title may each be left out.
+pub fn inline(text: &str, open: usize) -> Option<(Target, usize)> {
+    let bytes = Bytes {
+        bytes: text.as_bytes(),
+        past_end: Cell::new(false),
+    };
+    if bytes.at(open) != Some(b'(') {
+        return None;
+    }
+    let start = spaces_end(&bytes, open + 1);
+    let (destination, after) = if bytes.at(start) == Some(b')') {
+        (String::new(), start)
+    } else {
+        destination(text, &bytes, start)?
+    };
+    let title_at = spaces_end(&bytes, after);
+    let titled = (title_at > after)
+        .then(|| title_end(&bytes, title_at))
+        .flatten();
+    let (title, close) = titled.map_or((None, title_at), |title_close| {
+        (
+            Some(resolve(&text[title_at + 1..title_close - 1])),
+            spaces_end(&bytes, title_close),
+        )
+    });
+    (bytes.at(close) == Some(b')')).then(|| (Target { destination, title }, close + 1))
+}
+
+/// The `]` that closes the link label whose `[` is at `open` in `text`, if
+/// the brackets make one.
+pub fn label_at(text: &str, open: usize) -> Option<usize> {
+    let bytes = Bytes {
+        bytes: text.as_bytes(),
+        past_end: Cell::new(false),
+    };
+    label_end(text, &bytes, open)
+}
+
 fn definition(text: &str, bytes: &Bytes<'_>) -> Option<Definition> {
-    let close = label_end(text, bytes)?;
+    let close = label_end(text, bytes, 0)?;
     if bytes.at(close + 1) != Some(b':') {
         return None;
     }
-    let (target, after) = destination(text, bytes, gap(bytes, close + 2))?;
-    let title = gap(bytes, after);
-    let titled = if title > after {
-        title_end(bytes, title).and_then(|title_close| line_end(bytes, title_close))
-    } else {
-        None
+    let (destination, after) = destination(text, bytes, gap(bytes, close + 2))?;
+    let title_at = gap(bytes, after);
+    let titled = (title_at > after)
+        .then(|| title_end(bytes, title_at))
+        .flatten()
+        .and_then(|title_close| {
+            let end = line_end(bytes, title_close)?;
+            Some((end, resolve(&text[title_at + 1..title_close - 1])))
+        });
+    let (end, title) = match titled {
+        Some((end, title)) => (end, Some(title)),
+        None => (line_end(bytes, after)?, None),
     };
-    let end = titled.or_else(|| line_end(bytes, after))?;
     Some(Definition {
         label: text[1..close].to_owned(),
         lines: text[..end].matches('\n').count() + 1,
-        target,
+        target: Target { destination, title },
     })
 }
 
-/// The `]` that closes the label `text` opens: the first one not escaped,
-/// with no unescaped `[` before it, around at most 999 characters that are
-/// not all whitespace.
-fn label_end(text: &str, bytes: &Bytes<'_>) -> Option<usize> {
-    if bytes.at(0) != Some(b'[') {
+/// The `]` that closes the label whose `[` is at `open`: the first one not
+/// escaped, with no unescaped `[` before it, around at most 999 characters
+/// that are not all whitespace.
+fn label_end(text: &str, bytes: &Bytes<'_>, open: usize) -> Option<usize> {
+    if bytes.at(open) != Some(b'[') {
         return None;
     }
-    let mut at = 1;
+    let mut at = open + 1;
     loop {
         match bytes.at(at)? {
             b'\\' if bytes.escapes(at) => at += 2,
@@ -94,13 +166,13 @@ fn label_end(text: &str, bytes: &Bytes<'_>) -> Option<usize> {
             _ => at += 1,
         }
     }
-    let inner = &text[1..at];
+    let inner = &text[open + 1..at];
     (inner.chars().count() <= 999 && !inner.trim_ascii().is_empty()).then_some(at)
 }
 
-/// The destination at `at`, and where it ends: text between `<` and `>` on
-/// one line, or a nonempty run with no space or control character whose
-/// parentheses pair up.
+/// The destination at `at`, resolved, and where it ends: text between `<`
+/// and `>` on one line, or a nonempty run with no space or control
+/// character whose parentheses pair up.
 fn destination(text: &str, bytes: &Bytes<'_>, at: usize) -> Option<(String, usize)> {
     if bytes.at(at) == Some(b'<') {
         let mut close = at + 1;
@@ -112,7 +184,7 @@ fn destination(text: &str, bytes: &Bytes<'_>, at: usize) -> Option<(String, usiz
                 _ => close += 1,
             }
         }
-        return Some((text[at + 1..close].to_owned(), close + 1));
+        return Some((resolve(&text[at + 1..close]), close + 1));
     }
     let mut end = at;
     let mut depth = 0_usize;
@@ -132,7 +204,7 @@ fn destination(text: &str, bytes: &Bytes<'_>, at: usize) -> Option<(String, usiz
             _ => end += 1,
         }
     }
-    (end > at && depth == 0).then(|| (text[at..end].to_owned(), end))
+    (end > at && depth == 0).then(|| (resolve(&text[at..end]), end))
 }
 
 /// Where the title at `at` ends, past its closing mark. A title is text

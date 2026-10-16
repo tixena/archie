@@ -5,12 +5,12 @@ use core::iter;
 use core::marker::PhantomData;
 use core::mem;
 use core::ops::Range;
-use std::collections::HashMap;
 
 use crate::parser::ast::{
     Block, BlockQuote, CodeBlock, Heading, Html, Inline, Item, Kind, Line, List, MarkdownBlock,
     Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak,
 };
+use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::inline::line;
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
@@ -35,8 +35,7 @@ where
 }
 
 struct Parser<'src, E> {
-    /// Each link definition's destination, by its folded label.
-    definitions: HashMap<String, String>,
+    definitions: Definitions,
     extension: PhantomData<E>,
     pos: usize,
     source: &'src str,
@@ -83,7 +82,7 @@ where
             empty_heading(written.start)
         } else {
             Heading {
-                children: line(self.source, text).children,
+                children: line(self.source, text, &self.definitions, false).children,
                 kind: Kind(None),
                 span: written.clone(),
             }
@@ -245,15 +244,20 @@ where
     /// it, or the heading they make when an underline follows them.
     fn paragraph(&mut self, first: Range<usize>) -> Lines<E> {
         let start = first.start;
-        let mut end = first.end;
-        let mut lines = vec![line(self.source, first)];
+        let mut ranges = vec![first];
         while let Some(token) = self.tokens.get(self.pos)
             && matches!(token.kind, TokenKind::Text)
         {
-            end = token.span.end;
-            lines.push(line(self.source, token.span.clone()));
+            ranges.push(token.span.clone());
             self.pos += 1;
         }
+        let last = ranges.len() - 1;
+        let lines: Vec<Line<E>> = ranges
+            .into_iter()
+            .enumerate()
+            .map(|(index, range)| line(self.source, range, &self.definitions, index < last))
+            .collect();
+        let end = lines.last().map_or(start, |written| written.span.end);
         if let Some(token) = self.tokens.get(self.pos)
             && let TokenKind::Underline(level) = token.kind
         {
@@ -387,7 +391,7 @@ where
 /// The markdown block that starts at byte `start` of `source`, with no node
 /// claimed yet, and its link definitions. It spans everything from `start`
 /// to the end of `source`.
-pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, HashMap<String, String>)
+pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, Definitions)
 where
     E: Extension,
 {
@@ -396,12 +400,8 @@ where
 
 /// The markdown block that starts at byte `start` of `source`, each line read
 /// with at most `base` of its leading spaces left out, and its link
-/// definitions: each destination by its label, folded.
-pub fn parse_from<E>(
-    source: &str,
-    start: usize,
-    base: usize,
-) -> (MarkdownBlock<E>, HashMap<String, String>)
+/// definitions.
+pub fn parse_from<E>(source: &str, start: usize, base: usize) -> (MarkdownBlock<E>, Definitions)
 where
     E: Extension,
 {
@@ -422,26 +422,22 @@ where
     (block, parser.definitions)
 }
 
-/// The link definitions among `tokens`, each destination by its label
-/// folded as `CommonMark` matches labels: in lower case, with each run of
-/// whitespace one space. The first definition of a label wins.
-fn definitions(tokens: &[Token]) -> HashMap<String, String> {
-    let mut definitions = HashMap::new();
+/// The link definitions among `tokens`, each target by its folded label.
+/// The first definition of a label wins.
+fn definitions(tokens: &[Token]) -> Definitions {
+    let mut definitions = Definitions::new();
     for token in tokens {
         if let TokenKind::Definition { label, target } = &token.kind {
-            let folded = label
-                .split_ascii_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase();
-            definitions.entry(folded).or_insert_with(|| target.clone());
+            definitions
+                .entry(fold_label(label))
+                .or_insert_with(|| target.clone());
         }
     }
     definitions
 }
 
 /// The inline nodes of `lines` as those of one line, with a space where
-/// each line ends.
+/// each line ends, unless it ends with a hard line break.
 fn joined<E>(lines: Vec<Line<E>>) -> Vec<Inline<E>>
 where
     E: Extension,
@@ -449,14 +445,23 @@ where
     let mut children = Vec::new();
     let mut previous_end = None;
     for line in lines {
-        if let Some(end) = previous_end {
+        let broken = matches!(children.last(), Some(Inline::LineBreak(_)));
+        if let Some(end) = previous_end
+            && !broken
+        {
             push_text(&mut children, " ", end..line.span.start);
         }
         previous_end = Some(line.span.end);
         for child in line.children {
             match child {
                 Inline::Text(text) => push_text(&mut children, &text.value, text.span),
-                Inline::Code(_) | Inline::Image(_) | Inline::Link(_) => children.push(child),
+                Inline::Code(_)
+                | Inline::Emphasis(_)
+                | Inline::Html(_)
+                | Inline::Image(_)
+                | Inline::LineBreak(_)
+                | Inline::Link(_)
+                | Inline::Strong(_) => children.push(child),
             }
         }
     }

@@ -11,7 +11,10 @@ Document
           Text "to decide for itself what the description meant."
       Paragraph
         Line
-          Text "That is *why* two tools can disagree about the same file. One reads an indented"
+          Text "That is "
+          Emphasis
+            Text "why"
+          Text " two tools can disagree about the same file. One reads an indented"
         Line
           Text "line as code; another reads it as the end of a list. Neither is wrong, because"
         Line

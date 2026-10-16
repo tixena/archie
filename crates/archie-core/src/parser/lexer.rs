@@ -5,7 +5,7 @@
 
 use core::ops::Range;
 
-use crate::parser::definition;
+use crate::parser::definition::{self, Target};
 use crate::parser::html::{self, End};
 use crate::parser::line::{line_at, line_from};
 use crate::parser::table::{self, TableToken};
@@ -77,11 +77,10 @@ pub enum TokenKind {
         info: String,
         value: String,
     },
-    /// A link reference definition: its label as written and its
-    /// destination.
+    /// A link reference definition: its label as written and its target.
     Definition {
         label: String,
-        target: String,
+        target: Target,
     },
     Heading {
         level: u8,

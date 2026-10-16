@@ -1,5 +1,5 @@
 //! Where an HTML block starts and what ends it, by the seven kinds of HTML
-//! block of `CommonMark`.
+//! block of `CommonMark`, and where inline HTML ends.
 
 /// The tag names that start an HTML block of the sixth kind, in lower case.
 const BLOCK_TAGS: [&str; 62] = [
@@ -151,6 +151,40 @@ pub fn start(rest: &str) -> Option<Start> {
     })
 }
 
+/// Where the inline HTML at `at` in `text` ends, past its last character:
+/// an open or closing tag, a comment, a processing instruction, a
+/// declaration or a CDATA section.
+pub fn inline_end(text: &str, at: usize) -> Option<usize> {
+    let rest = &text[at..];
+    let closed = |opening: usize, end: &str| {
+        rest[opening..]
+            .find(end)
+            .map(|found| at + opening + found + end.len())
+    };
+    if rest.starts_with("<!-->") {
+        return Some(at + 5);
+    }
+    if rest.starts_with("<!--->") {
+        return Some(at + 6);
+    }
+    if rest.starts_with("<!--") {
+        return closed(4, "-->");
+    }
+    if rest.starts_with("<?") {
+        return closed(2, "?>");
+    }
+    if rest.starts_with("<![CDATA[") {
+        return closed(9, "]]>");
+    }
+    if rest
+        .strip_prefix("<!")
+        .is_some_and(|after| after.starts_with(|letter: char| letter.is_ascii_alphabetic()))
+    {
+        return closed(2, ">");
+    }
+    tag_end(text.as_bytes(), at)
+}
+
 /// Whether `lower` opens the tag `name`: `<`, the name, then a space, a tab,
 /// `>` or the end of the line.
 fn opens(lower: &str, name: &str) -> bool {
@@ -164,24 +198,30 @@ fn opens(lower: &str, name: &str) -> bool {
 /// tag, followed only by spaces and tabs.
 fn complete_tag(rest: &str) -> bool {
     let bytes = rest.as_bytes();
-    let closing = bytes.get(1) == Some(&b'/');
-    let mut at = if closing { 2 } else { 1 };
-    if !bytes.get(at).is_some_and(u8::is_ascii_alphabetic) {
-        return false;
+    tag_end(bytes, 0).is_some_and(|end| bytes[end..].iter().all(|&byte| is_space(byte)))
+}
+
+/// Where the opening or closing tag whose `<` is at `at` ends, past its
+/// `>`.
+fn tag_end(bytes: &[u8], at: usize) -> Option<usize> {
+    let closing = bytes.get(at + 1) == Some(&b'/');
+    let mut end = at + if closing { 2 } else { 1 };
+    if !bytes.get(end).is_some_and(u8::is_ascii_alphabetic) {
+        return None;
     }
-    at = skip(bytes, at, |byte| {
+    end = skip(bytes, end, |byte| {
         byte.is_ascii_alphanumeric() || byte == b'-'
     });
     if !closing {
-        while let Some(next) = attribute(bytes, at) {
-            at = next;
+        while let Some(next) = attribute(bytes, end) {
+            end = next;
         }
     }
-    at = skip(bytes, at, is_space);
-    if !closing && bytes.get(at) == Some(&b'/') {
-        at += 1;
+    end = skip(bytes, end, is_space);
+    if !closing && bytes.get(end) == Some(&b'/') {
+        end += 1;
     }
-    bytes.get(at) == Some(&b'>') && bytes[at + 1..].iter().all(|&byte| is_space(byte))
+    (bytes.get(end) == Some(&b'>')).then_some(end + 1)
 }
 
 /// Where the attribute that starts at `at`, after at least one space,

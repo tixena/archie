@@ -4,7 +4,9 @@
 use core::ops::Range;
 
 use super::{Rows, outline};
-use crate::parser::ast::{Block, CodeBlock, Document, Mapping, MarkdownBlock, ScalarValue, Value};
+use crate::parser::ast::{
+    Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Value,
+};
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, With};
 use crate::parser::{ParseOptions, parse, parse_with, read_yaml};
@@ -163,6 +165,37 @@ impl Extension for Raw {
             return Some(Ok(format!("html {}", html.value)));
         }
         matches!(construct, Construct::ThematicBreak(_)).then(|| Ok("break".to_owned()))
+    }
+}
+
+/// Claims every emphasis, strong emphasis, inline HTML and hard line break,
+/// as a label.
+#[derive(Debug, Clone, PartialEq)]
+struct Marks;
+
+impl Extension for Marks {
+    type Node<T>
+        = String
+    where
+        T: Extension;
+
+    fn claim<T>(
+        construct: Construct<'_, T>,
+        _context: &Context<'_>,
+    ) -> Option<Result<String, ParseError>>
+    where
+        T: Extension,
+    {
+        if let Construct::Html(html) = construct {
+            return Some(Ok(format!("html {}", html.value)));
+        }
+        if matches!(construct, Construct::Emphasis(_)) {
+            return Some(Ok("emphasis".to_owned()));
+        }
+        if matches!(construct, Construct::Strong(_)) {
+            return Some(Ok("strong".to_owned()));
+        }
+        matches!(construct, Construct::LineBreak(_)).then(|| Ok("break".to_owned()))
     }
 }
 
@@ -741,4 +774,50 @@ fn an_extension_may_claim_a_block_quote_an_html_block_or_a_thematic_break() {
         })
         .collect();
     assert_eq!(labels, [Some("quote q"), Some("html <div>"), Some("break")]);
+}
+
+#[test]
+fn an_extension_may_claim_emphasis_strong_inline_html_or_a_line_break() {
+    let document = parse_with::<Marks>("*a* **b** <br>\\\nc\n", &ParseOptions::default()).unwrap();
+    let first = document.body.sections[0]
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::Paragraph(paragraph) => paragraph.lines.first(),
+            Block::BlockQuote(_)
+            | Block::CodeBlock(_)
+            | Block::Html(_)
+            | Block::List(_)
+            | Block::Table(_)
+            | Block::ThematicBreak(_) => None,
+        })
+        .unwrap();
+    let labels: Vec<Option<&str>> = first
+        .children
+        .iter()
+        .map(|inline| {
+            let kind = match inline {
+                Inline::Code(code) => &code.kind,
+                Inline::Emphasis(emphasis) => &emphasis.kind,
+                Inline::Html(html) => &html.kind,
+                Inline::Image(image) => &image.kind,
+                Inline::LineBreak(line_break) => &line_break.kind,
+                Inline::Link(link) => &link.kind,
+                Inline::Strong(strong) => &strong.kind,
+                Inline::Text(text) => &text.kind,
+            };
+            kind.0.as_deref().and_then(second).map(String::as_str)
+        })
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            Some("emphasis"),
+            None,
+            Some("strong"),
+            None,
+            Some("html <br>"),
+            Some("break")
+        ]
+    );
 }

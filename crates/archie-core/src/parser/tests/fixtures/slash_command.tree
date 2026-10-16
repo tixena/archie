@@ -26,7 +26,9 @@ Document
                 Heading
                 Paragraph
                   Line
-                    Text "**Invoke the activity tool.** Call "
+                    Strong
+                      Text "Invoke the activity tool."
+                    Text " Call "
                     Code "mcp__remargin__activity"
                     Text " with "
                     Code "path"
@@ -41,14 +43,18 @@ Document
                 Heading
                 Paragraph
                   Line
-                    Text "**Surface the output verbatim.** Paste the pretty-printed activity timeline into the response. Do not paraphrase, summarize, or reformat."
+                    Strong
+                      Text "Surface the output verbatim."
+                    Text " Paste the pretty-printed activity timeline into the response. Do not paraphrase, summarize, or reformat."
           Item
             MarkdownBlock
               Section
                 Heading
                 Paragraph
                   Line
-                    Text "**Decide whether to react.** After surfacing the output, briefly call out anything actionable: comments addressed to the caller that are pending, edits on files the caller is staging, sandbox-adds by other identities the caller might want to look at. Keep this short — one or two sentences. The user (or the next agent step) decides what to do with it."
+                    Strong
+                      Text "Decide whether to react."
+                    Text " After surfacing the output, briefly call out anything actionable: comments addressed to the caller that are pending, edits on files the caller is staging, sandbox-adds by other identities the caller might want to look at. Keep this short — one or two sentences. The user (or the next agent step) decides what to do with it."
       Section
         Heading
           Text "Constraints"

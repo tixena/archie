@@ -13,7 +13,8 @@ Document
         CodeBlock info="console" value="$ archie ls"
         Paragraph
           Line
-            Text "*Arguments and options are not yet specified.*"
+            Emphasis
+              Text "Arguments and options are not yet specified."
       Section
         Heading
           Text "Not yet specified"

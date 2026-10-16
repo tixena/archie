@@ -126,6 +126,40 @@ fn inline_nodes_span_their_delimiters() {
 }
 
 #[test]
+fn emphasis_strong_html_autolinks_and_line_breaks_span_their_delimiters() {
+    let whole = "**a *b*** <i> <x@y.z>  \nc [d][1]\\\ne\n\n[1]: /u\n";
+    let paragraph = "**a *b*** <i> <x@y.z>  \nc [d][1]\\\ne";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", paragraph),
+            ("Heading", ""),
+            ("Paragraph", paragraph),
+            ("Line", "**a *b*** <i> <x@y.z>  "),
+            ("Strong", "**a *b***"),
+            (r#"Text "a ""#, "a "),
+            ("Emphasis", "*b*"),
+            (r#"Text "b""#, "b"),
+            (r#"Text " ""#, " "),
+            (r#"Html "<i>""#, "<i>"),
+            (r#"Text " ""#, " "),
+            (r#"Link form=Markdown target="mailto:x@y.z""#, "<x@y.z>"),
+            (r#"Text "x@y.z""#, "x@y.z"),
+            ("LineBreak", "  "),
+            ("Line", "c [d][1]\\"),
+            (r#"Text "c ""#, "c "),
+            (r#"Link form=Markdown target="/u""#, "[d][1]"),
+            (r#"Text "d""#, "d"),
+            ("LineBreak", "\\"),
+            ("Line", "e"),
+            (r#"Text "e""#, "e"),
+        ],
+    );
+}
+
+#[test]
 fn yaml_frontmatter_spans() {
     let whole = "---\na: 1\nb:\n  - x\nc:\n---\nbody\n";
     check_spans(

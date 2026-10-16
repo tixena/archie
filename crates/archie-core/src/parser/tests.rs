@@ -144,20 +144,43 @@ impl Rows<'_> {
                 Inline::Code(code) => {
                     self.push(depth, format!("Code {:?}", code.value), &code.span);
                 }
+                Inline::Emphasis(emphasis) => {
+                    self.push(depth, "Emphasis".to_owned(), &emphasis.span);
+                    self.inlines(depth + 1, &emphasis.children);
+                }
+                Inline::Html(html) => {
+                    self.push(depth, format!("Html {:?}", html.value), &html.span);
+                }
                 Inline::Image(image) => {
                     let alt = if image.alt.is_empty() {
                         String::new()
                     } else {
                         format!(" alt={:?}", image.alt)
                     };
-                    let label =
-                        format!("Image form={:?} target={:?}{alt}", image.form, image.target);
+                    let label = format!(
+                        "Image form={:?} target={:?}{}{alt}",
+                        image.form,
+                        image.target,
+                        title_label(image.title.as_deref())
+                    );
                     self.push(depth, label, &image.span);
                 }
+                Inline::LineBreak(line_break) => {
+                    self.push(depth, "LineBreak".to_owned(), &line_break.span);
+                }
                 Inline::Link(link) => {
-                    let label = format!("Link form={:?} target={:?}", link.form, link.target);
+                    let label = format!(
+                        "Link form={:?} target={:?}{}",
+                        link.form,
+                        link.target,
+                        title_label(link.title.as_deref())
+                    );
                     self.push(depth, label, &link.span);
                     self.inlines(depth + 1, &link.children);
+                }
+                Inline::Strong(strong) => {
+                    self.push(depth, "Strong".to_owned(), &strong.span);
+                    self.inlines(depth + 1, &strong.children);
                 }
                 Inline::Text(text) => {
                     self.push(depth, format!("Text {:?}", text.value), &text.span);
@@ -330,6 +353,11 @@ fn assert_nested(source: &str, rows: &[Row]) {
                 .map(|frontmatter| (row.depth, frontmatter.clone()));
         }
     }
+}
+
+/// ` title="..."` for a link or an image with a title, else nothing.
+fn title_label(title: Option<&str>) -> String {
+    title.map_or_else(String::new, |written| format!(" title={written:?}"))
 }
 
 fn scalar_label(value: &ScalarValue) -> String {

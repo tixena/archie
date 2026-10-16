@@ -6,8 +6,9 @@ use core::fmt::Debug;
 use core::ops::Range;
 
 use crate::parser::ast::{
-    BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Item, Line, Link, List,
-    MarkdownBlock, Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak,
+    BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Item, Line, LineBreak,
+    Link, List, MarkdownBlock, Paragraph, Section, Strong, Table, TableCell, TableRow, Text,
+    ThematicBreak,
 };
 use crate::parser::error::ParseError;
 use crate::parser::{block, claim};
@@ -42,16 +43,19 @@ where
     Code(&'node Code<T>),
     CodeBlock(&'node CodeBlock<T>),
     Document(&'node Document<T>),
+    Emphasis(&'node Emphasis<T>),
     Heading(&'node Heading<T>),
     Html(&'node Html<T>),
     Image(&'node Image<T>),
     Item(&'node Item<T>),
     Line(&'node Line<T>),
+    LineBreak(&'node LineBreak<T>),
     Link(&'node Link<T>),
     List(&'node List<T>),
     MarkdownBlock(&'node MarkdownBlock<T>),
     Paragraph(&'node Paragraph<T>),
     Section(&'node Section<T>),
+    Strong(&'node Strong<T>),
     Table(&'node Table<T>),
     TableCell(&'node TableCell<T>),
     TableRow(&'node TableRow<T>),

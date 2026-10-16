@@ -73,4 +73,5 @@ Document
                     Text "Freezes well"
         Paragraph
           Line
-            Text "*Adapted from a family recipe.*"
+            Emphasis
+              Text "Adapted from a family recipe."

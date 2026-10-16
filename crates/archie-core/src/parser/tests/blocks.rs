@@ -1563,7 +1563,7 @@ d
         Line
           Text "c"
         Line
-          Text "<span>"
+          Html "<span>"
         Line
           Text "d"
 "#,
@@ -1599,7 +1599,7 @@ fn a_line_holding_one_whole_tag_starts_an_html_block() {
 }
 
 #[test]
-fn a_link_definition_gives_no_node_and_the_parser_keeps_its_destination() {
+fn a_link_definition_gives_no_node_and_the_parser_keeps_its_target() {
     let source = "\
 [1]: https://example.com/guide
 [Guide  Two]: <https://example.com/guide> \"Title\"
@@ -1610,17 +1610,23 @@ fn a_link_definition_gives_no_node_and_the_parser_keeps_its_destination() {
 ";
     check(source, "Document\n  MarkdownBlock\n");
     let (_, definitions) = block::parse::<Markdown>(source, 0);
-    let mut found: Vec<(&str, &str)> = definitions
+    let mut found: Vec<(&str, &str, Option<&str>)> = definitions
         .iter()
-        .map(|(label, target)| (label.as_str(), target.as_str()))
+        .map(|(label, target)| {
+            (
+                label.as_str(),
+                target.destination.as_str(),
+                target.title.as_deref(),
+            )
+        })
         .collect();
     found.sort_unstable();
     assert_eq!(
         found,
         [
-            ("1", "https://example.com/guide"),
-            ("a", "/next-line"),
-            ("guide two", "https://example.com/guide"),
+            ("1", "https://example.com/guide", None),
+            ("a", "/next-line", Some("title")),
+            ("guide two", "https://example.com/guide", Some("Title")),
         ]
     );
 }
@@ -1657,7 +1663,12 @@ text
     );
     let (_, definitions) = block::parse::<Markdown>(source, 0);
     assert_eq!(definitions.len(), 1);
-    assert_eq!(definitions.get("c").map(String::as_str), Some("/u"));
+    assert_eq!(
+        definitions
+            .get("c")
+            .map(|target| target.destination.as_str()),
+        Some("/u")
+    );
 }
 
 #[test]
@@ -1707,7 +1718,12 @@ fn inside_a_list_item_each_construct_counts_columns_from_the_item_text() {
 "#,
     );
     let (_, definitions) = block::parse::<Markdown>(source, 0);
-    assert_eq!(definitions.get("x").map(String::as_str), Some("/u"));
+    assert_eq!(
+        definitions
+            .get("x")
+            .map(|target| target.destination.as_str()),
+        Some("/u")
+    );
 }
 
 #[test]
