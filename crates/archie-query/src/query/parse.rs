@@ -6,6 +6,11 @@ use crate::error::QueryError;
 use crate::field::{Date, DateTime};
 use crate::query::lexer::{CmpOp, Kind, Token, lex};
 
+/// Deepest nesting of parentheses and `not`.
+const MAX_DEPTH: usize = 64;
+/// Most comparisons in one query.
+const MAX_TERMS: usize = 256;
+
 /// A parsed query.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -35,8 +40,10 @@ pub enum Literal {
 }
 
 struct Parser<'tokens> {
+    depth: usize,
     end: usize,
     pos: usize,
+    terms: usize,
     tokens: &'tokens [Token],
 }
 
@@ -50,6 +57,13 @@ impl<'tokens> Parser<'tokens> {
     }
 
     fn cmp(&mut self) -> Result<Expr, QueryError> {
+        self.terms += 1;
+        if self.terms > MAX_TERMS {
+            return Err(QueryError::new(
+                "too many comparisons in one query (at most 256)",
+                self.here(),
+            ));
+        }
         match self.next() {
             Some(Token {
                 kind: Kind::Ident(name),
@@ -140,6 +154,18 @@ impl<'tokens> Parser<'tokens> {
         }
     }
 
+    fn nested(&mut self) -> Result<Expr, QueryError> {
+        if self.eat_ident("not") {
+            return Ok(Expr::Not(Box::new(self.unary()?)));
+        }
+        self.pos += 1;
+        let inner = self.or()?;
+        if !self.eat(&Kind::RParen) {
+            return Err(QueryError::new("expected `)`", self.here()));
+        }
+        Ok(inner)
+    }
+
     fn next(&mut self) -> Option<&'tokens Token> {
         let token = self.tokens.get(self.pos);
         if token.is_some() {
@@ -165,17 +191,23 @@ impl<'tokens> Parser<'tokens> {
     }
 
     fn unary(&mut self) -> Result<Expr, QueryError> {
-        if self.eat_ident("not") {
-            return Ok(Expr::Not(Box::new(self.unary()?)));
+        let opens = self.peek().is_some_and(|token| {
+            matches!(&token.kind, Kind::LParen)
+                || matches!(&token.kind, Kind::Ident(name) if name == "not")
+        });
+        if !opens {
+            return self.cmp();
         }
-        if self.eat(&Kind::LParen) {
-            let inner = self.or()?;
-            if !self.eat(&Kind::RParen) {
-                return Err(QueryError::new("expected `)`", self.here()));
-            }
-            return Ok(inner);
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(QueryError::new(
+                "query nested too deep (at most 64 levels of `(` and `not`)",
+                self.here(),
+            ));
         }
-        self.cmp()
+        let result = self.nested();
+        self.depth -= 1;
+        result
     }
 }
 
@@ -183,8 +215,10 @@ impl<'tokens> Parser<'tokens> {
 pub fn parse(text: &str) -> Result<Expr, QueryError> {
     let tokens = lex(text)?;
     let mut parser = Parser {
+        depth: 0,
         end: text.len(),
         pos: 0,
+        terms: 0,
         tokens: &tokens,
     };
     let expr = parser.or()?;

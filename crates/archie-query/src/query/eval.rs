@@ -50,8 +50,10 @@ fn order(field: &Field, literal: &Literal) -> Option<Ordering> {
     match (field, literal) {
         (Field::Bool(left), Literal::Bool(right)) => Some(left.cmp(right)),
         (Field::Float(left), Literal::Float(right)) => left.partial_cmp(right),
-        (Field::Float(left), Literal::Int(right)) => left.partial_cmp(&small_float(*right)?),
-        (Field::Int(left), Literal::Float(right)) => small_float(*left)?.partial_cmp(right),
+        (Field::Float(left), Literal::Int(right)) => {
+            int_vs_float(*right, *left).map(Ordering::reverse)
+        }
+        (Field::Int(left), Literal::Float(right)) => int_vs_float(*left, *right),
         (Field::Int(left), Literal::Int(right)) => Some(left.cmp(right)),
         (Field::Str(left), Literal::Str(right)) => Some(left.as_str().cmp(right.as_str())),
         (_, Literal::Date(_) | Literal::DateTime(_)) => {
@@ -61,10 +63,31 @@ fn order(field: &Field, literal: &Literal) -> Option<Ordering> {
     }
 }
 
-/// `value` as a float, exactly. `None` beyond 32 bits.
-// ponytail: mixed int/float comparison is exact only for ints that fit in i32; widen if a real vault needs it.
-fn small_float(value: i64) -> Option<f64> {
-    i32::try_from(value).ok().map(f64::from)
+/// How `int` compares with `float`, exactly; `None` for NaN.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "`float` is range-checked first, so the cast to i64 is exact; `i64::MAX as f64` rounds to exactly 2^63"
+)]
+fn int_vs_float(int: i64, float: f64) -> Option<Ordering> {
+    const TWO_POW_63: f64 = i64::MAX as f64;
+    const MINUS_TWO_POW_63: f64 = i64::MIN as f64;
+    if float.is_nan() {
+        return None;
+    }
+    if float >= TWO_POW_63 {
+        return Some(Ordering::Less);
+    }
+    if float < MINUS_TWO_POW_63 {
+        return Some(Ordering::Greater);
+    }
+    let whole = float.trunc();
+    let order = int.cmp(&(whole as i64));
+    if order == Ordering::Equal {
+        return 0.0_f64.partial_cmp(&float.fract());
+    }
+    Some(order)
 }
 
 /// A date-like field as an instant. A string counts when it is written as a date or datetime.

@@ -106,18 +106,18 @@ impl Date {
         i128::from(days_from_civil(self.y, self.m, self.d)) * SECONDS_PER_DAY * NANOS_PER_SECOND
     }
 
-    /// Reads `YYYY-MM-DD`.
+    /// Reads `YYYY-MM-DD`; the day must exist in that month.
     pub(crate) fn parse(text: &str) -> Option<Self> {
-        if !text.is_ascii() || text.len() != 10 || text.get(4..5)? != "-" || text.get(7..8)? != "-"
-        {
+        if text.len() != 10 || text.get(4..5)? != "-" || text.get(7..8)? != "-" {
             return None;
         }
         let date = Self {
-            d: text.get(8..10)?.parse().ok()?,
-            m: text.get(5..7)?.parse().ok()?,
-            y: text.get(0..4)?.parse().ok()?,
+            d: digits(text.get(8..10)?)?.try_into().ok()?,
+            m: digits(text.get(5..7)?)?.try_into().ok()?,
+            y: digits(text.get(0..4)?)?.try_into().ok()?,
         };
-        ((1..=12).contains(&date.m) && (1..=31).contains(&date.d)).then_some(date)
+        ((1..=12).contains(&date.m) && (1..=days_in_month(date.y, date.m)).contains(&date.d))
+            .then_some(date)
     }
 }
 
@@ -141,17 +141,23 @@ impl DateTime {
             return None;
         }
         let mut time = Time {
-            h: rest.get(0..2)?.parse().ok()?,
-            m: rest.get(3..5)?.parse().ok()?,
+            h: digits(rest.get(0..2)?)?.try_into().ok()?,
+            m: digits(rest.get(3..5)?)?.try_into().ok()?,
             ns: 0,
-            s: rest.get(6..8)?.parse().ok()?,
+            s: digits(rest.get(6..8)?)?.try_into().ok()?,
         };
+        if time.h > 23 || time.m > 59 || time.s > 59 {
+            return None;
+        }
         let mut tail = rest.get(8..)?;
         if let Some(fraction) = tail.strip_prefix('.') {
-            let digits = fraction.bytes().take_while(u8::is_ascii_digit).count();
-            let padded = format!("{:0<9}", fraction.get(..digits.min(9))?);
-            time.ns = padded.parse().ok()?;
-            tail = fraction.get(digits..)?;
+            let count = fraction.bytes().take_while(u8::is_ascii_digit).count();
+            if count == 0 {
+                return None;
+            }
+            let padded = format!("{:0<9}", fraction.get(..count.min(9))?);
+            time.ns = digits(&padded)?;
+            tail = fraction.get(count..)?;
         }
         let offset_minutes = match tail {
             "" => None,
@@ -165,8 +171,11 @@ impl DateTime {
                 if signed.len() != 6 || signed.get(3..4)? != ":" {
                     return None;
                 }
-                let hours: i16 = signed.get(1..3)?.parse().ok()?;
-                let minutes: i16 = signed.get(4..6)?.parse().ok()?;
+                let hours = i16::try_from(digits(signed.get(1..3)?)?).ok()?;
+                let minutes = i16::try_from(digits(signed.get(4..6)?)?).ok()?;
+                if hours > 23 || minutes > 59 {
+                    return None;
+                }
                 Some(sign * (hours * 60 + minutes))
             }
         };
@@ -175,6 +184,24 @@ impl DateTime {
             offset_minutes,
             time,
         })
+    }
+}
+
+/// `text` as a number when every character is an ASCII digit.
+fn digits(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// How many days `month` has in `year`.
+const fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
     }
 }
 
@@ -188,3 +215,6 @@ fn days_from_civil(year: i32, month: u8, day: u8) -> i64 {
     let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
     era * 146_097 + day_of_era - 719_468
 }
+
+#[cfg(test)]
+mod tests;

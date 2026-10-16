@@ -59,8 +59,20 @@ pub fn lex(text: &str) -> Result<Vec<Token>, QueryError> {
                 Kind::RParen
             }
             b'.' => {
-                at += 1;
-                Kind::Dot
+                // A key after a dot is read with ident rules: `fm.2fa`, `fm.has`.
+                let key_end = run(bytes, start + 1, is_ident_byte);
+                tokens.push(Token {
+                    kind: Kind::Dot,
+                    span: start..start + 1,
+                });
+                if key_end > start + 1 {
+                    tokens.push(Token {
+                        kind: Kind::Ident(text[start + 1..key_end].to_owned()),
+                        span: start + 1..key_end,
+                    });
+                }
+                at = key_end;
+                continue;
             }
             b'"' => {
                 let (value, end) = string(text, start)?;
@@ -90,7 +102,13 @@ pub fn lex(text: &str) -> Result<Vec<Token>, QueryError> {
                     Kind::Ident(word.to_owned())
                 }
             }
-            _ => return Err(QueryError::new("unexpected character", start..start + 1)),
+            _ => {
+                let width = text[start..].chars().next().map_or(1, char::len_utf8);
+                return Err(QueryError::new(
+                    "unexpected character",
+                    start..start + width,
+                ));
+            }
         };
         tokens.push(Token {
             kind,
@@ -135,18 +153,23 @@ fn string(text: &str, start: usize) -> Result<(String, usize), QueryError> {
     while let Some((offset, current)) = chars.next() {
         match current {
             '"' => return Ok((value, start + 1 + offset + 1)),
-            '\\' => match chars.next() {
-                Some((_, '"')) => value.push('"'),
-                Some((_, '\\')) => value.push('\\'),
-                Some((_, 'n')) => value.push('\n'),
-                Some((_, 't')) => value.push('\t'),
-                _ => {
-                    return Err(QueryError::new(
-                        "unknown escape in string",
-                        start + 1 + offset..start + 1 + offset + 2,
-                    ));
+            '\\' => {
+                let escaped = chars.next().map(|(_, found)| found);
+                match escaped {
+                    Some('"') => value.push('"'),
+                    Some('\\') => value.push('\\'),
+                    Some('n') => value.push('\n'),
+                    Some('t') => value.push('\t'),
+                    other => {
+                        let from = start + 1 + offset;
+                        let width = 1 + other.map_or(0, char::len_utf8);
+                        return Err(QueryError::new(
+                            "unknown escape in string",
+                            from..from + width,
+                        ));
+                    }
                 }
-            },
+            }
             other => value.push(other),
         }
     }
