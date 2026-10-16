@@ -1,7 +1,8 @@
 use std::thread;
 
-use super::{check, check_spans};
-use crate::parser::ast::{Block, Inline};
+use super::{check, check_spans, on_two_megabytes};
+use crate::parser::ast::{Block, Document, Inline};
+use crate::parser::inline::INLINE_CAP;
 use crate::parser::parse;
 use crate::writer::{WriteOptions, write};
 
@@ -1617,4 +1618,94 @@ fn emphasis_nested_two_thousand_deep_reads_writes_and_drops_on_a_two_megabyte_st
         })
         .unwrap();
     reader.join().unwrap();
+}
+
+/// The nodes of the one line of the paragraph that `document` holds.
+fn only_line(document: &Document) -> &[Inline] {
+    match document.body.sections[0].blocks.as_slice() {
+        [Block::Paragraph(paragraph)] => paragraph.lines[0].children.as_slice(),
+        _ => &[],
+    }
+}
+
+/// How deep strong emphasis nests from `nodes` down, and what the innermost
+/// one holds.
+fn strong_depth(nodes: &[Inline]) -> (usize, &[Inline]) {
+    let mut inner = nodes;
+    let mut depth = 0_usize;
+    while let [Inline::Strong(strong)] = inner {
+        depth += 1;
+        inner = &strong.children;
+    }
+    (depth, inner)
+}
+
+/// Checks that the one line of `document` is the text `stars`, strong
+/// emphasis nested `INLINE_CAP` deep around `a`, then `stars` again.
+fn assert_inline_capped(document: &Document, stars: &str) {
+    let nodes = only_line(document);
+    assert!(
+        matches!(nodes, [Inline::Text(before), Inline::Strong(_), Inline::Text(after)]
+            if before.value == stars && after.value == stars)
+    );
+    let (depth, innermost) = strong_depth(&nodes[1..2]);
+    assert_eq!(depth, INLINE_CAP);
+    assert!(matches!(innermost, [Inline::Text(text)] if text.value == "a"));
+}
+
+#[test]
+fn emphasis_nests_the_inline_cap_deep_and_the_stars_past_it_stay_text() {
+    on_two_megabytes(|| {
+        let marks = "*".repeat(10_000);
+        let document = parse(&format!("{marks}a{marks}\n")).unwrap();
+        let stars = "*".repeat(10_000 - 2 * INLINE_CAP);
+        assert_inline_capped(&document, &stars);
+        let written = write(&document, &WriteOptions::default()).unwrap();
+        let escaped = "\\*".repeat(stars.len());
+        let paired = "*".repeat(2 * INLINE_CAP);
+        assert_eq!(written, format!("{escaped}{paired}a{paired}{escaped}\n"));
+        assert_inline_capped(&parse(&written).unwrap(), &stars);
+        let copy = document.clone();
+        assert_eq!(copy, document);
+        let printed = format!("{document:?}");
+        assert_eq!(printed.matches("Strong(").count(), INLINE_CAP);
+        drop(copy);
+        drop(document);
+    });
+}
+
+#[test]
+fn emphasis_at_the_inline_cap_reads_back_from_its_written_text_to_the_same_tree() {
+    on_two_megabytes(|| {
+        let marks = "*".repeat(2 * INLINE_CAP);
+        let source = format!("{marks}a{marks}\n");
+        let document = parse(&source).unwrap();
+        let (depth, innermost) = strong_depth(only_line(&document));
+        assert_eq!(depth, INLINE_CAP);
+        assert!(matches!(innermost, [Inline::Text(text)] if text.value == "a"));
+        let written = write(&document, &WriteOptions::default()).unwrap();
+        assert_eq!(written, source);
+        assert_eq!(parse(&written).unwrap(), document);
+    });
+}
+
+#[test]
+fn a_link_that_would_nest_past_the_inline_cap_keeps_its_brackets_as_text() {
+    on_two_megabytes(|| {
+        let marks = "*".repeat(2 * INLINE_CAP);
+        let document = parse(&format!("[{marks}a{marks}](u)\n")).unwrap();
+        let nodes = only_line(&document);
+        assert!(
+            matches!(nodes, [Inline::Text(open), Inline::Strong(_), Inline::Text(close)]
+                if open.value == "[" && close.value == "](u)")
+        );
+        assert_eq!(strong_depth(&nodes[1..2]).0, INLINE_CAP);
+        let fewer = "*".repeat(2 * (INLINE_CAP - 1));
+        let linked = parse(&format!("[{fewer}a{fewer}](u)\n")).unwrap();
+        let (depth, _) = match only_line(&linked) {
+            [Inline::Link(link)] if link.target == "u" => strong_depth(&link.children),
+            _ => (0, &[][..]),
+        };
+        assert_eq!(depth, INLINE_CAP - 1);
+    });
 }

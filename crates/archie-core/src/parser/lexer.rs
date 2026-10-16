@@ -10,6 +10,9 @@ use crate::parser::html::{self, End};
 use crate::parser::line::{line_at, line_from};
 use crate::parser::table::{self, TableToken};
 
+/// How deep list items nest: at 465, writing the tree overflows a 2 MB debug stack.
+pub const BLOCK_CAP: usize = 100;
+
 /// The marker that starts a list item.
 #[derive(Clone, Copy)]
 pub enum Marker {
@@ -441,7 +444,9 @@ impl Lexer<'_> {
     /// The block that the text at `text`, on the line starting at
     /// `line_start`, starts, read on from `next`, tried in the order of
     /// precedence `CommonMark` gives them. `continues` is set when the line
-    /// would continue a paragraph, which only some blocks may interrupt.
+    /// would continue a paragraph, which only some blocks may interrupt. An
+    /// item that would open deeper than `BLOCK_CAP` is not opened, and its
+    /// line is text.
     fn start(
         &self,
         line_start: usize,
@@ -472,7 +477,7 @@ impl Lexer<'_> {
             // An empty item never interrupts a paragraph.
             !continues || (marker.interrupts() && !rest[width..].trim_start_matches(' ').is_empty())
         }) {
-            return Some(Start::Item { marker, width });
+            return (self.levels.len() < BLOCK_CAP).then_some(Start::Item { marker, width });
         }
         table::read(self.source, line_start, text, next, self.level(), self.base).map(
             |(table, span, after)| Start::Table {
