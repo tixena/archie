@@ -1,0 +1,45 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=title
+        Scalar String "Black bean soup"
+      Pair key=servings
+        Scalar Integer 4
+      Pair key=prep_minutes
+        Scalar Integer 15
+      Pair key=cook_minutes
+        Scalar Integer 40
+      Pair key=rating
+        Scalar Float 4.5
+      Pair key=vegetarian
+        Scalar String "yes"
+      Pair key=spice_level
+        Scalar Integer 2
+      Pair key=source
+        Scalar Null
+      Pair key=ingredients
+        Sequence
+          Scalar String "2 cups black beans"
+          Scalar String "1 onion, diced"
+          Scalar String "1 tsp cumin: toasted"
+  Body
+    Section level=1
+      Heading
+        Text "Black bean soup"
+      Section level=2
+        Heading
+          Text "Steps"
+        Paragraph
+          Text "1. Soak the beans overnight.\n2. Simmer for 40 minutes.\nStir now and then.\n3. Season and serve."
+      Section level=2
+        Heading
+          Text "Notes"
+        List
+          Item
+            Paragraph
+              Text "Keeps 3 days in the fridge"
+          Item
+            Paragraph
+              Text "Freezes well"
+        Paragraph
+          Text "*Adapted from a family recipe.*"

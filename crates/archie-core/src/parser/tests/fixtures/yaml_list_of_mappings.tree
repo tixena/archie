@@ -1,0 +1,21 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=title
+        Scalar String "Weekly sync"
+      Pair key=attendees
+        Sequence
+          Mapping
+            Pair key=name
+              Scalar String "Ada Lovelace"
+            Pair key=role
+              Scalar String "host"
+          Mapping
+            Pair key=name
+              Scalar String "Grace Hopper"
+            Pair key=role
+              Scalar String "reviewer"
+  Body
+    Section level=1
+      Heading
+        Text "Weekly sync"

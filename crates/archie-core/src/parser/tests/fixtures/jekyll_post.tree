@@ -1,0 +1,38 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=layout
+        Scalar String "post"
+      Pair key=title
+        Scalar String "Parsing markdown: a field guide"
+      Pair key=date
+        Scalar String "2026-10-03 14:30:00 -0400"
+      Pair key=categories
+        Sequence
+          Scalar String "engineering"
+          Scalar String "parsing"
+      Pair key=author
+        Scalar String "ada"
+      Pair key=published
+        Scalar Boolean true
+      Pair key=excerpt_separator
+        Scalar String "<!--more-->"
+  Body
+    Paragraph
+      Text "Markdown has no grammar. This post walks through what that means in practice."
+    Paragraph
+      Text "<!--more-->"
+    Section level=2
+      Heading
+        Text "Why it is hard"
+      Paragraph
+        Text "Three things get in the way:"
+      Paragraph
+        Text "1. Indentation decides which block a line belongs to.\n2. A reference link depends on a definition elsewhere.\n3. Emphasis follows rules about the characters around it."
+      Paragraph
+        Text "{% highlight ruby %}\nputs \"liquid tags are plain text here\"\n{% endhighlight %}"
+      Paragraph
+        Text "Read the "
+        Link form=Markdown target="https://spec.commonmark.org/"
+          Text "CommonMark spec"
+        Text " for the details, or the\n[summary]({% post_url 2026-09-01-summary %})."

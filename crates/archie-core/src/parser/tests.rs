@@ -1,0 +1,279 @@
+//! Each sample is a markdown source and the tree it parses into, written as
+//! an outline: one node per line, indented under its parent.
+
+mod blocks;
+mod documents;
+mod errors;
+mod example;
+mod extension;
+mod frontmatter;
+mod inlines;
+mod spans;
+mod tables;
+mod toml;
+mod unrecognized;
+mod yaml;
+
+use core::ops::Range;
+
+use crate::parser::ast::{
+    Block, Date, DateTime, Document, Inline, Mapping, ScalarValue, Time, Value,
+};
+use crate::parser::parse;
+
+/// One node of a parsed tree: how deep it sits, how it reads, what it covers.
+struct Row {
+    depth: usize,
+    label: String,
+    span: Range<usize>,
+}
+
+#[derive(Default)]
+struct Rows {
+    rows: Vec<Row>,
+}
+
+impl Rows {
+    fn block(&mut self, depth: usize, block: &Block) {
+        match block {
+            Block::CodeBlock(code_block) => {
+                let label = format!(
+                    "CodeBlock info={:?} value={:?}",
+                    code_block.info, code_block.value
+                );
+                self.push(depth, label, &code_block.span);
+            }
+            Block::List(list) => {
+                self.push(depth, "List".to_owned(), &list.span);
+                for item in &list.items {
+                    self.push(depth + 1, "Item".to_owned(), &item.span);
+                    self.blocks(depth + 2, &item.children);
+                }
+            }
+            Block::Paragraph(paragraph) => {
+                self.push(depth, "Paragraph".to_owned(), &paragraph.span);
+                self.inlines(depth + 1, &paragraph.children);
+            }
+            Block::Table(table) => {
+                let alignments: Vec<String> = table
+                    .alignments
+                    .iter()
+                    .map(|alignment| format!("{alignment:?}"))
+                    .collect();
+                let label = format!(
+                    "Table format={:?} alignments={}",
+                    table.format,
+                    alignments.join(",")
+                );
+                self.push(depth, label, &table.span);
+                let head = table.head.iter().map(|row| ("TableRow head", row));
+                let rows = table.rows.iter().map(|row| ("TableRow", row));
+                for (name, row) in head.chain(rows) {
+                    self.push(depth + 1, name.to_owned(), &row.span);
+                    for cell in &row.cells {
+                        self.push(depth + 2, "TableCell".to_owned(), &cell.span);
+                        self.blocks(depth + 3, &cell.children);
+                    }
+                }
+            }
+            Block::Section(section) => {
+                let label = format!("Section level={}", section.level);
+                self.push(depth, label, &section.span);
+                self.push(depth + 1, "Heading".to_owned(), &section.heading.span);
+                self.inlines(depth + 2, &section.heading.children);
+                self.blocks(depth + 1, &section.children);
+            }
+        }
+    }
+
+    fn blocks(&mut self, depth: usize, blocks: &[Block]) {
+        for block in blocks {
+            self.block(depth, block);
+        }
+    }
+
+    fn document(&mut self, document: &Document) {
+        self.push(0, "Document".to_owned(), &document.span);
+        if let Some(frontmatter) = &document.frontmatter {
+            let label = format!("Frontmatter format={:?}", frontmatter.format);
+            self.push(1, label, &frontmatter.span);
+            self.mapping(2, &frontmatter.mapping);
+        }
+        self.push(1, "Body".to_owned(), &document.body.span);
+        self.blocks(2, &document.body.children);
+    }
+
+    fn inlines(&mut self, depth: usize, inlines: &[Inline]) {
+        for inline in inlines {
+            match inline {
+                Inline::Code(code) => {
+                    self.push(depth, format!("Code {:?}", code.value), &code.span);
+                }
+                Inline::Image(image) => {
+                    let alt = if image.alt.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" alt={:?}", image.alt)
+                    };
+                    let label =
+                        format!("Image form={:?} target={:?}{alt}", image.form, image.target);
+                    self.push(depth, label, &image.span);
+                }
+                Inline::Link(link) => {
+                    let label = format!("Link form={:?} target={:?}", link.form, link.target);
+                    self.push(depth, label, &link.span);
+                    self.inlines(depth + 1, &link.children);
+                }
+                Inline::Text(text) => {
+                    self.push(depth, format!("Text {:?}", text.value), &text.span);
+                }
+            }
+        }
+    }
+
+    fn mapping(&mut self, depth: usize, mapping: &Mapping) {
+        self.push(depth, "Mapping".to_owned(), &mapping.span);
+        for (key, pair) in &mapping.pairs {
+            self.push(depth + 1, format!("Pair key={key}"), &pair.span);
+            self.value(depth + 2, &pair.value);
+        }
+    }
+
+    fn push(&mut self, depth: usize, label: String, span: &Range<usize>) {
+        self.rows.push(Row {
+            depth,
+            label,
+            span: span.clone(),
+        });
+    }
+
+    fn value(&mut self, depth: usize, value: &Value) {
+        match value {
+            Value::Mapping(mapping) => self.mapping(depth, mapping),
+            Value::Scalar(scalar) => {
+                let label = format!("Scalar {}", scalar_label(&scalar.value));
+                self.push(depth, label, &scalar.span);
+            }
+            Value::Sequence(sequence) => {
+                self.push(depth, "Sequence".to_owned(), &sequence.span);
+                for item in &sequence.items {
+                    self.value(depth + 1, item);
+                }
+            }
+        }
+    }
+}
+
+/// Parses `source` and checks the tree against `expected`, an outline.
+fn check(source: &str, expected: &str) {
+    let found = rows(source);
+    assert_nested(source, &found);
+    let actual = outline(&found);
+    assert!(
+        actual == expected,
+        "the tree differs.\n--- expected\n{expected}\n--- actual\n{actual}"
+    );
+}
+
+/// Parses `source` and checks, node by node, the source text each span
+/// covers.
+fn check_spans(source: &str, expected: &[(&str, &str)]) {
+    let found = rows(source);
+    let actual: Vec<(&str, &str)> = found
+        .iter()
+        .map(|row| (row.label.as_str(), &source[row.span.clone()]))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+/// One line per node, indented two spaces under its parent.
+fn outline(rows: &[Row]) -> String {
+    let mut text = String::new();
+    for row in rows {
+        text.push_str(&"  ".repeat(row.depth));
+        text.push_str(&row.label);
+        text.push('\n');
+    }
+    text
+}
+
+fn rows(source: &str) -> Vec<Row> {
+    let document = parse(source).unwrap();
+    assert_eq!(document.span, 0..source.len());
+    let mut rows = Rows::default();
+    rows.document(&document);
+    rows.rows
+}
+
+/// Every span lies inside its parent's span and after its previous sibling.
+fn assert_nested(source: &str, rows: &[Row]) {
+    let mut open: Vec<Range<usize>> = Vec::new();
+    for row in rows {
+        let span = &row.span;
+        let label = &row.label;
+        assert!(
+            span.start <= span.end
+                && source.is_char_boundary(span.start)
+                && source.is_char_boundary(span.end),
+            "{label} has a bad span"
+        );
+        open.truncate(row.depth + 1);
+        if let Some(parent) = row.depth.checked_sub(1).and_then(|depth| open.get(depth)) {
+            assert!(
+                parent.start <= span.start && span.end <= parent.end,
+                "{label} is outside its parent"
+            );
+        }
+        if let Some(sibling) = open.get(row.depth) {
+            assert!(
+                sibling.end <= span.start,
+                "{label} overlaps the node before it"
+            );
+        }
+        open.truncate(row.depth);
+        open.push(span.clone());
+    }
+}
+
+fn scalar_label(value: &ScalarValue) -> String {
+    match value {
+        ScalarValue::Boolean(boolean) => format!("Boolean {boolean}"),
+        ScalarValue::Date(date) => format!("Date {}", date_label(*date)),
+        ScalarValue::DateTime(date_time) => format!("DateTime {}", date_time_label(*date_time)),
+        ScalarValue::Float(float) => format!("Float {float}"),
+        ScalarValue::Integer(integer) => format!("Integer {integer}"),
+        ScalarValue::Null => "Null".to_owned(),
+        ScalarValue::String(string) => format!("String {string:?}"),
+        ScalarValue::Time(time) => format!("Time {}", time_label(*time)),
+    }
+}
+
+fn date_label(date: Date) -> String {
+    format!("{:04}-{:02}-{:02}", date.year, date.month, date.day)
+}
+
+fn time_label(time: Time) -> String {
+    let clock = format!("{:02}:{:02}:{:02}", time.hour, time.minute, time.second);
+    if time.nanosecond == 0 {
+        clock
+    } else {
+        format!("{clock}.{:09}", time.nanosecond)
+    }
+}
+
+fn date_time_label(date_time: DateTime) -> String {
+    let offset = match date_time.offset {
+        None => String::new(),
+        Some(0) => "Z".to_owned(),
+        Some(minutes) => {
+            let sign = if minutes < 0 { '-' } else { '+' };
+            let absolute = minutes.unsigned_abs();
+            format!("{sign}{:02}:{:02}", absolute / 60, absolute % 60)
+        }
+    };
+    format!(
+        "{}T{}{offset}",
+        date_label(date_time.date),
+        time_label(date_time.time)
+    )
+}

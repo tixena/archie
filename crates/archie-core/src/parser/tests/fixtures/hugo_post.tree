@@ -1,0 +1,44 @@
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=title
+        Scalar String "Shipping the parser"
+      Pair key=date
+        Scalar DateTime 2026-10-03T09:15:00-04:00
+      Pair key=lastmod
+        Scalar DateTime 2026-10-04T08:00:00Z
+      Pair key=draft
+        Scalar Boolean false
+      Pair key=weight
+        Scalar Integer 10
+      Pair key=tags
+        Sequence
+          Scalar String "rust"
+          Scalar String "markdown"
+          Scalar String "parsing"
+      Pair key=summary
+        Scalar String "A literal string: no \\escapes here"
+      Pair key=params
+        Mapping
+          Pair key=author
+            Scalar String "Ada"
+          Pair key=toc
+            Scalar Boolean true
+          Pair key=reading_time
+            Scalar Float 4.5
+  Body
+    Paragraph
+      Text "The parser reads a file in two stages."
+    Paragraph
+      Text "{{< figure src=\"/img/stages.png\" title=\"The two stages\" >}}"
+    Section level=2
+      Heading
+        Text "Stage one"
+      Paragraph
+        Text "The lexer turns lines into tokens:"
+      CodeBlock info="go" value="type Token struct {\n\tKind TokenKind\n\tSpan Range\n}"
+    Section level=2
+      Heading
+        Text "Stage two"
+      Paragraph
+        Text "A grammar over those tokens builds the tree. See [the grammar]({{< ref \"grammar.md\" >}})."

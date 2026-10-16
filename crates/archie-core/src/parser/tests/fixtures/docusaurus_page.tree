@@ -1,0 +1,32 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=id
+        Scalar String "intro"
+      Pair key=title
+        Scalar String "Introduction"
+      Pair key=sidebar_position
+        Scalar Integer 1
+      Pair key=slug
+        Scalar String "/"
+      Pair key=hide_table_of_contents
+        Scalar Boolean false
+      Pair key=keywords
+        Sequence
+          Scalar String "markdown"
+          Scalar String "parser"
+  Body
+    Paragraph
+      Text "import Tabs from '@theme/Tabs';"
+    Section level=1
+      Heading
+        Text "Introduction"
+      Paragraph
+        Text ":::note\nAdmonitions are not read; these lines stay text.\n:::"
+      Paragraph
+        Text "<Tabs>\n<TabItem value=\"toml\" label=\"TOML\">TOML frontmatter</TabItem>\n<TabItem value=\"yaml\" label=\"YAML\">YAML frontmatter</TabItem>\n</Tabs>"
+      Paragraph
+        Text "Read the "
+        Link form=Markdown target="./install.md"
+          Text "next page"
+        Text "."

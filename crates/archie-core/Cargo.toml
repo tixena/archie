@@ -1,0 +1,18 @@
+[package]
+name = "archie-core"
+description = "Core library for archie: markdown documents as a typed tree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Error handling
+thiserror.workspace = true
+
+# Insertion-ordered map
+indexmap.workspace = true

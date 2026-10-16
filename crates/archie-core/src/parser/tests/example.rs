@@ -1,0 +1,191 @@
+//! One document checked node by node against a tree written out by hand,
+//! with the byte range of every node.
+
+use core::ops::Range;
+
+use indexmap::IndexMap;
+
+use crate::parser::ast::{
+    Block, Body, Date, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Link,
+    LinkForm, List, Mapping, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Text, Value,
+};
+use crate::parser::parse;
+
+const SOURCE: &str = r#"+++
+type = "task"
+due = 2026-10-10
+tags = ["parser", "design"]
+priority = 2
+weight = 0.5
+done = false
++++
+# Ship parser
+
+Depends on [[grammar]] and the [spec](spec.md).
+
+- define tree
+  - spans
+- write rules
+"#;
+
+const TOML_PAIRS: &str = r#"type = "task"
+due = 2026-10-10
+tags = ["parser", "design"]
+priority = 2
+weight = 0.5
+done = false"#;
+
+/// The range starting at byte `start` of [`SOURCE`], checked to hold `covered`.
+fn span(start: usize, covered: &str) -> Range<usize> {
+    let end = start + covered.len();
+    assert_eq!(&SOURCE[start..end], covered);
+    start..end
+}
+
+fn pair(key: &str, range: Range<usize>, value: Value) -> (String, Pair) {
+    (key.to_owned(), Pair { span: range, value })
+}
+
+fn scalar(range: Range<usize>, value: ScalarValue) -> Value {
+    Value::Scalar(Scalar { span: range, value })
+}
+
+fn string(range: Range<usize>, value: &str) -> Value {
+    scalar(range, ScalarValue::String(value.to_owned()))
+}
+
+fn text(start: usize, value: &str) -> Inline {
+    Inline::Text(Text {
+        span: span(start, value),
+        value: value.to_owned(),
+    })
+}
+
+fn paragraph(start: usize, value: &str) -> Block {
+    Block::Paragraph(Paragraph {
+        children: vec![text(start, value)],
+        span: span(start, value),
+    })
+}
+
+fn frontmatter() -> Frontmatter {
+    let due = ScalarValue::Date(Date {
+        day: 10,
+        month: 10,
+        year: 2026,
+    });
+    let tags = Value::Sequence(Sequence {
+        items: vec![
+            string(span(43, r#""parser""#), "parser"),
+            string(span(53, r#""design""#), "design"),
+        ],
+        span: span(42, r#"["parser", "design"]"#),
+    });
+    let pairs = IndexMap::from([
+        pair(
+            "type",
+            span(4, r#"type = "task""#),
+            string(span(11, r#""task""#), "task"),
+        ),
+        pair(
+            "due",
+            span(18, "due = 2026-10-10"),
+            scalar(span(24, "2026-10-10"), due),
+        ),
+        pair("tags", span(35, r#"tags = ["parser", "design"]"#), tags),
+        pair(
+            "priority",
+            span(63, "priority = 2"),
+            scalar(span(74, "2"), ScalarValue::Integer(2)),
+        ),
+        pair(
+            "weight",
+            span(76, "weight = 0.5"),
+            scalar(span(85, "0.5"), ScalarValue::Float(0.5)),
+        ),
+        pair(
+            "done",
+            span(89, "done = false"),
+            scalar(span(96, "false"), ScalarValue::Boolean(false)),
+        ),
+    ]);
+    Frontmatter {
+        format: FrontmatterFormat::Toml,
+        mapping: Mapping {
+            pairs,
+            span: span(4, TOML_PAIRS),
+        },
+        span: span(0, &format!("+++\n{TOML_PAIRS}\n+++")),
+    }
+}
+
+fn dependencies() -> Block {
+    Block::Paragraph(Paragraph {
+        children: vec![
+            text(121, "Depends on "),
+            Inline::Link(Link {
+                children: Vec::new(),
+                form: LinkForm::Wiki,
+                span: span(132, "[[grammar]]"),
+                target: "grammar".to_owned(),
+            }),
+            text(143, " and the "),
+            Inline::Link(Link {
+                children: vec![text(153, "spec")],
+                form: LinkForm::Markdown,
+                span: span(152, "[spec](spec.md)"),
+                target: "spec.md".to_owned(),
+            }),
+            text(167, "."),
+        ],
+        span: span(121, "Depends on [[grammar]] and the [spec](spec.md)."),
+    })
+}
+
+fn steps() -> Block {
+    Block::List(List {
+        items: vec![
+            Item {
+                children: vec![
+                    paragraph(172, "define tree"),
+                    Block::List(List {
+                        items: vec![Item {
+                            children: vec![paragraph(188, "spans")],
+                            span: span(186, "- spans"),
+                        }],
+                        span: span(186, "- spans"),
+                    }),
+                ],
+                span: span(170, "- define tree\n  - spans"),
+            },
+            Item {
+                children: vec![paragraph(196, "write rules")],
+                span: span(194, "- write rules"),
+            },
+        ],
+        span: span(170, "- define tree\n  - spans\n- write rules"),
+    })
+}
+
+#[test]
+fn the_example_parses_into_the_tree_written_by_hand() {
+    let section = Section {
+        children: vec![dependencies(), steps()],
+        heading: Heading {
+            children: vec![text(108, "Ship parser")],
+            span: span(106, "# Ship parser"),
+        },
+        level: 1,
+        span: span(106, SOURCE[106..].trim_end()),
+    };
+    let document = Document {
+        body: Body {
+            children: vec![Block::Section(section)],
+            span: span(106, &SOURCE[106..]),
+        },
+        frontmatter: Some(frontmatter()),
+        span: span(0, SOURCE),
+    };
+
+    assert_eq!(parse(SOURCE), Ok(document));
+}

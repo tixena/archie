@@ -1,0 +1,28 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=name
+        Scalar String "Bug report"
+      Pair key=about
+        Scalar String "Report something that does not work"
+      Pair key=title
+        Scalar String "[bug] "
+      Pair key=labels
+        Scalar String "bug, needs-triage"
+      Pair key=assignees
+        Scalar String ""
+  Body
+    Paragraph
+      Text "**What happened**"
+    Paragraph
+      Text "A clear description of the bug."
+    Paragraph
+      Text "**Steps to reproduce**"
+    Paragraph
+      Text "1. Run "
+      Code "quill check"
+      Text "\n2. See the error"
+    Paragraph
+      Text "**Expected**"
+    Paragraph
+      Text "What should have happened instead."

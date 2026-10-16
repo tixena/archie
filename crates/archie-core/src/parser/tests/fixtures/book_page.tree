@@ -1,0 +1,67 @@
+Document
+  Body
+    Section level=1
+      Heading
+        Text "archie ls"
+      Paragraph
+        Code "archie ls"
+        Text " lists the contents of a corpus."
+      Section level=2
+        Heading
+          Text "Synopsis"
+        CodeBlock info="console" value="$ archie ls"
+        Paragraph
+          Text "*Arguments and options are not yet specified.*"
+      Section level=2
+        Heading
+          Text "Not yet specified"
+        List
+          Item
+            Paragraph
+              Text "What a row of the listing carries: a path alone, or a path together with the\nresource's type and other frontmatter values."
+          Item
+            Paragraph
+              Text "Whether a listing recurses."
+          Item
+            Paragraph
+              Text "Whether non-markdown files are listed alongside markdown ones."
+          Item
+            Paragraph
+              Text "Whether the ignore list in "
+              Code "archie.toml"
+              Text " applies."
+          Item
+            Paragraph
+              Text "What happens when no path is given."
+          Item
+            Paragraph
+              Text "Output and exit codes."
+        Paragraph
+          Text "See "
+          Link form=Markdown target="../../design-status.md"
+            Text "Design status"
+          Text " for the open questions around this\ncommand."
+      Section level=2
+        Heading
+          Text "Related"
+        List
+          Item
+            Paragraph
+              Link form=Markdown target="get.md"
+                Text "archie get"
+              Text " — retrieving what a listing names."
+          Item
+            Paragraph
+              Link form=Markdown target="query.md"
+                Text "archie query"
+              Text " — selecting documents by an expression rather than by\nlocation."
+          Item
+            Paragraph
+              Link form=Markdown target="../../concepts/archie-and-remargin.md"
+                Text "archie and remargin"
+              Text " — the overlap\nbetween archie's verbs and remargin's operations."
+          Item
+            Paragraph
+              Link form=Markdown target="index.md"
+                Text "Command-line interface"
+              Text " — global options and the command table."

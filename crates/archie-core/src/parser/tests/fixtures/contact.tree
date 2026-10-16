@@ -1,0 +1,45 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=type
+        Scalar String "contact"
+      Pair key=name
+        Scalar String "Ada Lovelace"
+      Pair key=company
+        Scalar String "Analytical Engines, Ltd."
+      Pair key=email
+        Scalar String "ada@example.com"
+      Pair key=phone
+        Scalar String "+1 809 555 0100"
+      Pair key=github
+        Scalar String "ada-l"
+      Pair key=website
+        Scalar String "https://example.com/~ada"
+      Pair key=languages
+        Sequence
+          Scalar String "en"
+          Scalar String "es"
+      Pair key=last_contact
+        Scalar Date 2026-09-28
+      Pair key=notes
+        Scalar String "Prefers \"async\" updates; it's fine to email."
+  Body
+    Section level=1
+      Heading
+        Text "Ada Lovelace"
+      Paragraph
+        Text "Works with "
+        Link form=Wiki target="Grace Hopper"
+        Text " at "
+        Link form=Wiki target="Analytical Engines"
+        Text "."
+      Section level=2
+        Heading
+          Text "Log"
+        List
+          Item
+            Paragraph
+              Text "2026-09-28: call about the parser"
+          Item
+            Paragraph
+              Text "2026-09-12: met at the meetup"

@@ -1,0 +1,60 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=description
+        Scalar String "Report \"what changed since the caller last touched a managed file\" across the vault. Surfaces comments, acks, edits, and sandbox-adds per file. Read-only — never mutates."
+  Body
+    Section level=1
+      Heading
+        Text "/remargin:activity [path]"
+      Paragraph
+        Text "Run "
+        Code "mcp__remargin__activity"
+        Text " to report what changed since the caller last acted on each managed "
+        Code ".md"
+        Text " file under "
+        Code "path"
+        Text " (defaults to cwd). Use this at the start of a session, or whenever the agent needs to notice what happened while it was away and decide whether to react."
+      Section level=2
+        Heading
+          Text "Steps"
+        Paragraph
+          Text "1. **Invoke the activity tool.** Call "
+          Code "mcp__remargin__activity"
+          Text " with "
+          Code "path"
+          Text " (the argument, or omit for cwd) and "
+          Code "pretty: true"
+          Text ". Do not pass "
+          Code "since"
+          Text " unless the user explicitly asked for a specific cutoff — the default per-file caller-last-action cutoff is the point of this tool."
+        Paragraph
+          Text "2. **Surface the output verbatim.** Paste the pretty-printed activity timeline into the response. Do not paraphrase, summarize, or reformat."
+        Paragraph
+          Text "3. **Decide whether to react.** After surfacing the output, briefly call out anything actionable: comments addressed to the caller that are pending, edits on files the caller is staging, sandbox-adds by other identities the caller might want to look at. Keep this short — one or two sentences. The user (or the next agent step) decides what to do with it."
+      Section level=2
+        Heading
+          Text "Constraints"
+        List
+          Item
+            Paragraph
+              Text "Read-only. Never mutate state from this command."
+          Item
+            Paragraph
+              Text "Do not hand-roll the cutoff from "
+              Code "comments"
+              Text " / "
+              Code "query"
+              Text " — those don't compute the per-file caller-last-action cutoff and don't fold edits / re-sandboxes into the same change list. "
+              Code "activity"
+              Text " is the only correct tool for this question."
+          Item
+            Paragraph
+              Text "If the user gave a "
+              Code "path"
+              Text " argument that resolves outside any remargin realm, surface the tool's error directly. Don't try to recover by searching adjacent directories."
+          Item
+            Paragraph
+              Text "If "
+              Code "pretty: true"
+              Text " output is empty, that's the correct answer: \"nothing new since you last acted in this path.\""

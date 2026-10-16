@@ -1,0 +1,44 @@
+Document
+  Body
+    Section level=1
+      Heading
+        Text "API reference"
+      Section level=2
+        Heading
+          Text "Parsing"
+        Section level=3
+          Heading
+            Code "parse"
+          Section level=4
+            Heading
+              Text "Arguments"
+            Section level=5
+              Heading
+                Code "source"
+              Section level=6
+                Heading
+                  Text "Encoding"
+                Paragraph
+                  Text "The source is UTF-8."
+          Section level=4
+            Heading
+              Text "Returns"
+            Paragraph
+              Text "A "
+              Code "Document"
+              Text ", or a "
+              Code "ParseError"
+              Text "."
+          Section level=4
+            Heading
+              Text "Example"
+            CodeBlock info="rust" value="let document = parse(\"# Title\\n\")?;"
+      Section level=2
+        Heading
+          Text "Errors"
+        Paragraph
+          Text "An error carries a message and a byte range:"
+        CodeBlock info="json" value="{\n  \"message\": \"the key `a` is written twice\",\n  \"span\": { \"start\": 10, \"end\": 11 }\n}"
+        Paragraph
+          Text "To show a fence inside a fence, use a longer one:"
+        CodeBlock info="markdown" value="```rust\nfn main() {}\n```"

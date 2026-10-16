@@ -1,0 +1,42 @@
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=title
+        Scalar String "Changelog"
+      Pair key=description
+        Scalar String "What changed in each release"
+      Pair key=date
+        Scalar Date 2026-10-01
+      Pair key=updated
+        Scalar Date 2026-10-03
+      Pair key=template
+        Scalar String "page.html"
+      Pair key=in_search_index
+        Scalar Boolean true
+      Pair key=taxonomies
+        Mapping
+          Pair key=tags
+            Sequence
+              Scalar String "release"
+              Scalar String "notes"
+          Pair key=authors
+            Sequence
+              Scalar String "ada"
+      Pair key=extra
+        Mapping
+          Pair key=toc
+            Scalar Boolean false
+          Pair key=order
+            Scalar Integer 3
+  Body
+    Paragraph
+      Text "Short introduction shown in listings."
+    Paragraph
+      Text "<!-- more -->"
+    Section level=1
+      Heading
+        Text "Releases"
+      Paragraph
+        Text "Each release has its own section[^1]."
+      Paragraph
+        Text "[^1]: Footnotes are not read; this line stays text."

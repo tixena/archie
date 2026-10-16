@@ -1,0 +1,57 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=type
+        Scalar String "meeting"
+      Pair key=date
+        Scalar Date 2026-10-02
+      Pair key=start
+        Scalar String "10:00"
+      Pair key=attendees
+        Sequence
+          Scalar String "Ada Lovelace"
+          Scalar String "Grace Hopper"
+          Scalar String "Hedy Lamarr (remote)"
+      Pair key=location
+        Mapping
+          Pair key=room
+            Scalar String "Blue"
+          Pair key=floor
+            Scalar Integer 3
+      Pair key=recording
+        Scalar Null
+      Pair key=follow_up
+        Scalar DateTime 2026-10-09T10:00:00-04:00
+  Body
+    Section level=1
+      Heading
+        Text "Weekly sync"
+      Section level=2
+        Heading
+          Text "Agenda"
+        List
+          Item
+            Paragraph
+              Text "Parser status\nThe lexer is done."
+            Paragraph
+              Text "The grammar document is next."
+          Item
+            Paragraph
+              Text "Open questions"
+            List
+              Item
+                Paragraph
+                  Text "Which YAML features to read?"
+              Item
+                Paragraph
+                  Text "Where do findings go?"
+      Section level=2
+        Heading
+          Text "Action items"
+        List
+          Item
+            Paragraph
+              Text "Ada: write the grammar document"
+          Item
+            Paragraph
+              Text "Grace: review the tree"
