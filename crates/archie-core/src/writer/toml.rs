@@ -3,7 +3,7 @@
 
 use core::fmt::{self, Write as _};
 
-use crate::parser::ast::{Mapping, ScalarValue, Value};
+use crate::parser::ast::{Mapping, NonFinite, ScalarValue, Value};
 use crate::writer::{WriteError, push_date_time, push_finite, push_local_date_time};
 
 /// `mapping` between `+++` lines, or an error naming the key of the first
@@ -118,23 +118,16 @@ fn push_scalar(out: &mut String, value: &ScalarValue, path: &[&str]) -> Result<(
             let _: fmt::Result = write!(out, "{date}");
         }
         ScalarValue::DateTime(date_time) => push_date_time(out, date_time),
-        ScalarValue::Float(float) => {
-            if float.is_nan() {
-                out.push_str("nan");
-            } else if float.is_infinite() {
-                out.push_str(if float.is_sign_negative() {
-                    "-inf"
-                } else {
-                    "inf"
-                });
-            } else {
-                push_finite(out, *float);
-            }
-        }
+        ScalarValue::Float(float) => push_finite(out, *float),
         ScalarValue::Integer(integer) => {
             let _: fmt::Result = write!(out, "{integer}");
         }
         ScalarValue::LocalDateTime(date_time) => push_local_date_time(out, date_time),
+        ScalarValue::NonFinite(non_finite) => out.push_str(match non_finite {
+            NonFinite::Infinity => "inf",
+            NonFinite::Nan => "nan",
+            NonFinite::NegativeInfinity => "-inf",
+        }),
         ScalarValue::Null => {
             let mut key = String::new();
             push_path(&mut key, path);

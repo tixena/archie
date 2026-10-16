@@ -388,6 +388,7 @@ fn scalar_label(value: &ScalarValue) -> String {
         ScalarValue::Float(float) => format!("Float {float}"),
         ScalarValue::Integer(integer) => format!("Integer {integer}"),
         ScalarValue::LocalDateTime(local) => format!("LocalDateTime {}", local_label(*local)),
+        ScalarValue::NonFinite(non_finite) => format!("NonFinite {non_finite:?}"),
         ScalarValue::Null => "Null".to_owned(),
         ScalarValue::String(string) => format!("String {string:?}"),
         ScalarValue::Time(time) => format!("Time {}", time_label(*time)),
