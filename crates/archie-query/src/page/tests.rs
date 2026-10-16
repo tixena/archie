@@ -70,7 +70,7 @@ fn a_zero_limit_still_returns_one_key_and_a_cursor() {
 #[test]
 fn an_empty_key_list_gives_an_empty_last_page() {
     let (items, next) = page(&[], None, 3);
-    assert!(items.is_empty());
+    assert_eq!(items.len(), 0);
     assert_eq!(next, None);
 }
 
@@ -91,6 +91,6 @@ fn non_ascii_keys_round_trip_through_the_cursor() {
 fn a_cursor_past_the_last_key_gives_an_empty_last_page() {
     let all = keys(&["a", "b"]);
     let (items, next) = page(&all, Some(&cursor_of("z")), 2);
-    assert!(items.is_empty());
+    assert_eq!(items.len(), 0);
     assert_eq!(next, None);
 }

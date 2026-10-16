@@ -68,7 +68,7 @@ impl<'tokens> Parser<'tokens> {
         match self.next() {
             Some(Token {
                 kind: Kind::Ident(name),
-                ..
+                span: _,
             }) if name == "fm" => {}
             other => {
                 return Err(QueryError::new(
@@ -82,7 +82,7 @@ impl<'tokens> Parser<'tokens> {
             match self.next() {
                 Some(Token {
                     kind: Kind::Ident(key) | Kind::Str(key),
-                    ..
+                    span: _,
                 }) => path.push(key.clone()),
                 other => return Err(QueryError::new("expected a key", self.span_of(other))),
             }
@@ -95,7 +95,8 @@ impl<'tokens> Parser<'tokens> {
         }
         let op = match self.next() {
             Some(Token {
-                kind: Kind::Op(op), ..
+                kind: Kind::Op(op),
+                span: _,
             }) => *op,
             other => {
                 return Err(QueryError::new(
@@ -136,11 +137,11 @@ impl<'tokens> Parser<'tokens> {
         match token {
             Some(Token {
                 kind: Kind::Str(text),
-                ..
+                span: _,
             }) => Ok(Literal::Str(text.clone())),
             Some(Token {
                 kind: Kind::Ident(word),
-                ..
+                span: _,
             }) if word == "true" || word == "false" => Ok(Literal::Bool(word == "true")),
             Some(Token {
                 kind: Kind::Word(word),
