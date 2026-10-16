@@ -320,14 +320,16 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
 - `PLAIN_KEY` runs to the first `:` followed by a space or by the end of the line.
   `FLOW_KEY` runs to the first `:` followed by a space or by one of `, [ ] { }`, or
   to the first of `, [ ] { }`.
-- Inside a flow mapping, a `FLOW_KEY` that runs to the end of its line goes on over
-  the following lines up to its `:`, or up to a `,`, `[`, `]`, `{` or `}`, as a
-  `PLAIN` inside a flow collection does: a comment ends it, each of its lines must be
-  indented more than the flow collection's key, and its lines are folded as a
-  `PLAIN`'s are. `{x` then `  y: 1}` is `{"x y": 1}`, `a: {x` then `  y: 1}` is
-  `{a: {"x y": 1}}`, and `{x` then `  y` then `  z: 1}` is `{"x y z": 1}`. Inside a
-  flow list, a key stays on its line: `[x` then `  y: 1]`, and `a: [x` then
-  `  y: 1]`, fail the file with ``expected `,` or `]` in the list``.
+- Inside a flow mapping, and after a `?` inside a flow list, a `FLOW_KEY` that runs
+  to the end of its line goes on over the following lines up to its `:`, or up to a
+  `,`, `[`, `]`, `{` or `}`, as a `PLAIN` inside a flow collection does: a comment
+  ends it, each of its lines must be indented more than the flow collection's key,
+  and its lines are folded as a `PLAIN`'s are. `{x` then `  y: 1}` is
+  `{"x y": 1}`, `a: {x` then `  y: 1}` is `{a: {"x y": 1}}`, `{x` then `  y` then
+  `  z: 1}` is `{"x y z": 1}`, and `a: [? x` then `  y : 1]` is
+  `{a: [{"x y": 1}]}`. Inside a flow list, a key with no `?` before it stays on its
+  line: `[x` then `  y: 1]`, and `a: [x` then `  y: 1]`, fail the file with
+  ``expected `,` or `]` in the list``.
 - Spaces may sit between a quoted key and its `:`: `"a" : 1` is `{a: 1}`.
 - Outside a flow collection, a space, a tab or the end of the line must follow the
   `:` of a key. `"a":1` fails the file with ``expected a space after the `:` ``,
@@ -404,10 +406,16 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
 - `double_quoted` reads the escapes `\0 \a \b \t \n \v \f \r \e \" \/ \\`, a
   backslash before a space, `\xXX`, `\uXXXX` and `\UXXXXXXXX`. Inside
   `single_quoted`, `''` is one quote.
-- A quoted value, but not a quoted key, may go on over several lines, folded as a
-  `PLAIN` is; inside `double_quoted`, a `\` at the end of a line removes the line
-  break. Each of its lines must be indented more than its key or `-`, inside a flow
-  collection too, except inside a flow mapping that is the whole frontmatter.
+- A quoted value may go on over several lines, folded as a `PLAIN` is, and so may a
+  quoted key inside a flow mapping or after a `?`; inside `double_quoted`, a `\` at
+  the end of a line removes the line break. Each line of a quoted value must be
+  indented more than its key or `-`, inside a flow collection too, and each line of
+  a quoted key inside a flow collection more than that collection's key or `-`,
+  except inside a flow mapping that is the whole frontmatter. `a: {"x` then
+  `  y": 1}` and `a: {'x` then `  y': 1}` are `{a: {"x y": 1}}`. Any other quoted
+  key stays on its line: `"x` then `  y": 1` fails the file with
+  `the string is not closed`, and `a: ["x` then `  y": 1]` with
+  ``expected `,` or `]` in the list``.
 - Blank lines and lines holding only a comment are skipped. A line holding only a
   comment may have tabs before its `#`.
 - A key written more than once becomes one key holding a list of every value
@@ -447,10 +455,12 @@ Any other tag, such as `!point`, fails the file with
   ``"`abc` is not a value of the tag `!!int`"``, or
   ``"a list is not a value of the tag `!!map`"``.
 - A tag on a key checks the key's text the same way.
-- A tag followed by `:` and a space, a tab or the end of the line is a tagged empty
-  key: the key is `""`, and it is checked against the tag as an empty value.
-  `!!str : v` is `{"": v}`, `a: 1` then `!!str : v` is `{a: 1, "": v}`, and
-  `{!!str : v}` is `{"": v}`. `!!int : v` fails the file with
+- A tag followed by `:` and a space, a tab or the end of the line, or inside a flow
+  collection by `:` and one of `, [ ] { }`, is a tagged empty key: the key is `""`,
+  and it is checked against the tag as an empty value. `!!str : v` is `{"": v}`,
+  `a: 1` then `!!str : v` is `{a: 1, "": v}`, `{!!str : v}` is `{"": v}`,
+  `{!!str :}` is `{"": null}`, `{!!str :, a: 1}` is `{"": null, a: 1}`, and
+  `a: [!!str :]` is `{a: [{"": null}]}`. `!!int : v` fails the file with
   ``an empty value is not a value of the tag `!!int` ``.
 
 A `PLAIN` value's type comes from how it is written:

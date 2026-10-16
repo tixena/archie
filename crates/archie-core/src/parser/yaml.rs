@@ -273,7 +273,7 @@ fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     match cursor.peek() {
         Some(b'"') => double_quoted(cursor, None),
         Some(b'\'') => single_quoted(cursor, None),
-        Some(b'!') => tagged_key(cursor, key),
+        Some(b'!') => tagged_key(cursor, false, key),
         Some(b'&' | b'*') => anchor(cursor),
         Some(b'[' | b'{') => cursor.error("expected a key"),
         Some(_) | None => {
@@ -611,8 +611,9 @@ fn flow_entry(
 }
 
 /// The key of a flow pair: the key after a `?`, or the empty key when none
-/// follows it or when the pair starts with its `:`. A plain key goes on over
-/// several lines inside a flow mapping, and stays on one inside a flow list.
+/// follows it or when the pair starts with its `:`. A key goes on over
+/// several lines inside a flow mapping or after a `?`, and otherwise stays on
+/// one inside a flow list.
 fn flow_pair_key(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
@@ -628,7 +629,10 @@ fn flow_pair_key(
     {
         return Ok(String::new());
     }
-    flow_key(cursor, (!in_list).then_some(Context::Flow(column)))
+    flow_key(
+        cursor,
+        (explicit || !in_list).then_some(Context::Flow(column)),
+    )
 }
 
 /// Whether the cursor is on a `?` that starts an explicit key inside a flow
@@ -647,13 +651,14 @@ fn is_empty_key(cursor: &Cursor<'_>, in_flow: bool) -> bool {
 
 /// A key inside a flow collection. A plain key ends at a `:` followed by a
 /// space or a flow indicator, at a flow indicator, or at a comment. With a
-/// `context`, as inside a flow mapping, a plain key that runs to the end of
-/// its line goes on over the lines below as a `PLAIN` does, up to that end.
+/// `context`, as inside a flow mapping, a quoted key may go on over several
+/// lines as a quoted value does, and a plain key that runs to the end of its
+/// line goes on over the lines below as a `PLAIN` does, up to that end.
 fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, ParseError> {
     match cursor.peek() {
-        Some(b'"') => double_quoted(cursor, None),
-        Some(b'\'') => single_quoted(cursor, None),
-        Some(b'!') => tagged_key(cursor, |inner| flow_key(inner, context)),
+        Some(b'"') => double_quoted(cursor, context),
+        Some(b'\'') => single_quoted(cursor, context),
+        Some(b'!') => tagged_key(cursor, true, |inner| flow_key(inner, context)),
         Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
             no_indicator(cursor, true, "key")?;
@@ -1067,15 +1072,16 @@ fn tagged(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError
 }
 
 /// A key written after a tag, read by `read` and checked against the tag. A
-/// `:` right after the tag leaves the key empty.
-fn tagged_key<F>(cursor: &mut Cursor<'_>, read: F) -> Result<String, ParseError>
+/// `:` right after the tag leaves the key empty, as `is_empty_key` reads it
+/// inside a flow collection or not.
+fn tagged_key<F>(cursor: &mut Cursor<'_>, in_flow: bool, read: F) -> Result<String, ParseError>
 where
     F: FnOnce(&mut Cursor<'_>) -> Result<String, ParseError>,
 {
     let tag = tag(cursor)?;
     cursor.skip_spaces();
     let start = cursor.pos();
-    let text = if is_empty_key(cursor, false) {
+    let text = if is_empty_key(cursor, in_flow) {
         String::new()
     } else {
         read(cursor)?
@@ -1185,8 +1191,8 @@ fn anchor<T>(cursor: &Cursor<'_>) -> Result<T, ParseError> {
     ))
 }
 
-/// A double-quoted string. With no `context`, as for a key, it stays on one
-/// line. A line break folds as in a plain scalar, and a `\` before it
+/// A double-quoted string. With no `context`, as for a key held to its line,
+/// it stays on one line. A line break folds as in a plain scalar, and a `\` before it
 /// removes it.
 fn double_quoted(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, ParseError> {
     cursor.bump();

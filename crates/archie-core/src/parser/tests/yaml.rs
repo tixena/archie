@@ -2078,3 +2078,78 @@ fn a_tag_followed_by_a_colon_is_a_tagged_empty_key() {
 "#,
     );
 }
+
+#[test]
+fn a_flow_key_may_be_a_tagged_empty_key_or_go_on_over_lines() {
+    check(
+        "---\n{!!str :}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=
+        Scalar Null
+  MarkdownBlock
+",
+    );
+    check(
+        "---\n{!!str :, a: 1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=
+        Scalar Null
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: {!!str :}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=
+            Scalar Null
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: [!!str :]\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+            Pair key=
+              Scalar Null
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: [? x\n  y : 1]\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+            Pair key=x y
+              Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    let quoted = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=x y
+            Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\na: {\"x\n  y\": 1}\n---\n", quoted);
+    check("---\na: {'x\n  y': 1}\n---\n", quoted);
+}
