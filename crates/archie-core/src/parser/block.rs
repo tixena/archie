@@ -63,8 +63,9 @@ impl<E> Parser<'_, E>
 where
     E: Extension,
 {
-    /// A cell holds the markdown block its lines read as, one after another.
-    fn cell(&mut self, cell: &Cell) -> TableCell<E> {
+    /// A cell holds the markdown block its lines read as, one after another,
+    /// one container deeper than its table, which `depth` containers hold.
+    fn cell(&mut self, cell: &Cell, depth: usize) -> TableCell<E> {
         let span = cell.span();
         let mut parser = Self {
             cells: Cells::new(),
@@ -72,7 +73,7 @@ where
             extension: PhantomData,
             pos: 0,
             source: self.source,
-            tokens: lex_lines(self.source, &cell.lines, 0),
+            tokens: lex_lines(self.source, &cell.lines, 0, depth + 1),
         };
         let (body, _) = parser.markdown_block(span.start);
         self.cells.extend(parser.cells);
@@ -201,7 +202,9 @@ where
                     trailing = ends_blank;
                     Some(Block::List(list))
                 }
-                TokenKind::Table(table) => Some(Block::Table(self.table(table, token.span))),
+                TokenKind::Table { depth, table } => {
+                    Some(Block::Table(self.table(table, depth, token.span)))
+                }
                 TokenKind::Text | TokenKind::Underline(_) => match self.paragraph(token.span) {
                     Lines::Heading { heading, level } => {
                         let written = heading.span.clone();
@@ -289,7 +292,8 @@ where
     }
 
     /// A row of `width` cells: a row with fewer gets empty cells at its end.
-    fn row(&mut self, row: &RowToken, width: usize) -> TableRow<E> {
+    /// `depth` containers hold its table.
+    fn row(&mut self, row: &RowToken, width: usize, depth: usize) -> TableRow<E> {
         let blank = Cell::line(row.span.end..row.span.end);
         let missing = width.saturating_sub(row.cells.len());
         TableRow {
@@ -297,7 +301,7 @@ where
                 .cells
                 .iter()
                 .chain(iter::repeat_n(&blank, missing))
-                .map(|cell| self.cell(cell))
+                .map(|cell| self.cell(cell, depth))
                 .collect(),
             kind: Kind(None),
             span: row.span.clone(),
@@ -312,8 +316,9 @@ where
             .is_none_or(|token| matches!(token.kind, TokenKind::ItemEnd))
     }
 
-    /// The table of `table`, keeping each grid cell's lines.
-    fn table(&mut self, table: TableToken, span: Range<usize>) -> Table<E> {
+    /// The table of `table`, which `depth` containers hold, keeping each grid
+    /// cell's lines.
+    fn table(&mut self, table: TableToken, depth: usize, span: Range<usize>) -> Table<E> {
         let width = table.alignments.len();
         if matches!(table.format, TableFormat::Grid) {
             for cell in table
@@ -328,9 +333,17 @@ where
         Table {
             alignments: table.alignments,
             format: table.format,
-            head: table.head.iter().map(|row| self.row(row, width)).collect(),
+            head: table
+                .head
+                .iter()
+                .map(|row| self.row(row, width, depth))
+                .collect(),
             kind: Kind(None),
-            rows: table.rows.iter().map(|row| self.row(row, width)).collect(),
+            rows: table
+                .rows
+                .iter()
+                .map(|row| self.row(row, width, depth))
+                .collect(),
             span,
         }
     }
@@ -418,36 +431,44 @@ pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, Definitions, C
 where
     E: Extension,
 {
-    parse_from(source, start, 0)
+    parse_from(source, start, 0, 0)
 }
 
 /// The markdown block that starts at byte `start` of `source`, each line read
 /// with at most `base` of its leading spaces left out, its link definitions,
-/// each destination by its label, folded, and its grid cells' lines.
+/// each destination by its label, folded, and its grid cells' lines. `outer`
+/// containers hold it.
 pub fn parse_from<E>(
     source: &str,
     start: usize,
     base: usize,
+    outer: usize,
 ) -> (MarkdownBlock<E>, Definitions, Cells)
 where
     E: Extension,
 {
-    read(source, lex_from(source, start, base), start..source.len())
+    read(
+        source,
+        lex_from(source, start, base, outer),
+        start..source.len(),
+    )
 }
 
 /// The markdown block written on `lines`, ranges of `source` read as
 /// consecutive lines, each with at most `base` of its leading spaces left
-/// out, with its link definitions and its grid cells' lines. It spans `span`.
+/// out, with its link definitions and its grid cells' lines. It spans `span`,
+/// and `outer` containers hold it.
 pub fn parse_lines<E>(
     source: &str,
     lines: &[Range<usize>],
     base: usize,
+    outer: usize,
     span: Range<usize>,
 ) -> (MarkdownBlock<E>, Definitions, Cells)
 where
     E: Extension,
 {
-    read(source, lex_lines(source, lines, base), span)
+    read(source, lex_lines(source, lines, base, outer), span)
 }
 
 fn read<E>(
@@ -485,14 +506,15 @@ fn definitions(source: &str, tokens: &[Token]) -> Definitions {
                 .entry(fold_label(label))
                 .or_insert_with(|| target.clone());
         }
-        if let TokenKind::Table(table) = &token.kind {
+        if let TokenKind::Table { depth, table } = &token.kind {
             let cells = table
                 .head
                 .iter()
                 .chain(&table.rows)
                 .flat_map(|row| &row.cells);
             for cell in cells {
-                for (label, target) in definitions(source, &lex_lines(source, &cell.lines, 0)) {
+                let read = lex_lines(source, &cell.lines, 0, depth + 1);
+                for (label, target) in definitions(source, &read) {
                     found.entry(label).or_insert(target);
                 }
             }

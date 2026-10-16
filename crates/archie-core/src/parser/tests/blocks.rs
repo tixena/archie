@@ -1,5 +1,7 @@
+use core::iter;
+
 use super::{check, on_two_megabytes};
-use crate::parser::ast::{Block, Document, Inline, MarkdownBlock};
+use crate::parser::ast::{Block, Document, Inline, MarkdownBlock, Section};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
 use crate::parser::lexer::BLOCK_CAP;
@@ -1988,5 +1990,228 @@ fn an_item_past_the_block_cap_on_its_own_line_continues_the_innermost_paragraph(
             })
             .collect();
         assert_eq!(values, ["a", "- a"]);
+    });
+}
+
+/// The body of the one container `body` holds, when it holds nothing else: a
+/// list of one item, a claimed markdown block, or a table of one cell.
+fn only_container(body: &MarkdownBlock) -> Option<&MarkdownBlock> {
+    let [section] = body.sections.as_slice() else {
+        return None;
+    };
+    match section.blocks.as_slice() {
+        [Block::CodeBlock(code)] => code.kind.0.as_deref(),
+        [Block::List(list)] => match list.items.as_slice() {
+            [item] => Some(&item.body),
+            _ => None,
+        },
+        [Block::Table(table)] => match (table.head.as_slice(), table.rows.as_slice()) {
+            ([], [row]) => match row.cells.as_slice() {
+                [cell] => Some(&cell.body),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// How many containers nest from `body` down, each the only block of the one
+/// before, and the body of the innermost.
+fn innermost(body: &MarkdownBlock) -> (usize, &MarkdownBlock) {
+    let mut inner = body;
+    let mut depth = 0_usize;
+    while let Some(next) = only_container(inner) {
+        depth += 1;
+        inner = next;
+    }
+    (depth, inner)
+}
+
+/// How deep list items, claimed markdown blocks and table cells nest
+/// anywhere in `body`.
+fn container_depth(body: &MarkdownBlock) -> usize {
+    let mut deepest = 0;
+    let mut bodies = vec![(body, 0_usize)];
+    while let Some((block, depth)) = bodies.pop() {
+        deepest = deepest.max(depth);
+        let mut sections: Vec<&Section> = block.sections.iter().collect();
+        while let Some(section) = sections.pop() {
+            sections.extend(&section.subsections);
+            for each in &section.blocks {
+                match each {
+                    Block::CodeBlock(code) => {
+                        bodies.extend(code.kind.0.as_deref().map(|inner| (inner, depth + 1)));
+                    }
+                    Block::List(list) => {
+                        bodies.extend(list.items.iter().map(|item| (&item.body, depth + 1)));
+                    }
+                    Block::Table(table) => bodies.extend(
+                        table
+                            .head
+                            .iter()
+                            .chain(&table.rows)
+                            .flat_map(|row| &row.cells)
+                            .map(|cell| (&cell.body, depth + 1)),
+                    ),
+                    Block::BlockQuote(_)
+                    | Block::Html(_)
+                    | Block::Paragraph(_)
+                    | Block::ThematicBreak(_) => {}
+                }
+            }
+        }
+    }
+    deepest
+}
+
+/// `levels` markdown blocks around `a`, each inside the one before: the
+/// innermost fence is three backticks, and each one around it one longer.
+fn nested_markdown_blocks(levels: usize) -> String {
+    let fences: Vec<String> = (3..levels + 3).map(|length| "`".repeat(length)).collect();
+    let mut source = String::new();
+    for fence in fences.iter().rev() {
+        source.push_str(fence);
+        source.push_str("markdown\n");
+    }
+    source.push_str("a\n");
+    for fence in &fences {
+        source.push_str(fence);
+        source.push('\n');
+    }
+    source
+}
+
+/// `levels` grid tables around `a`, each in the single cell of the one
+/// before.
+fn nested_grid_tables(levels: usize) -> String {
+    let line =
+        |depth: usize, text: &str| format!("{}{text}{}\n", "| ".repeat(depth), " |".repeat(depth));
+    let borders: Vec<String> = (0..levels)
+        .map(|depth| {
+            line(
+                depth,
+                &format!("+{}+", "-".repeat(4 * (levels - depth) - 1)),
+            )
+        })
+        .collect();
+    let mut source = borders.concat();
+    source.push_str(&line(levels, "a"));
+    for border in borders.iter().rev() {
+        source.push_str(border);
+    }
+    source
+}
+
+/// `levels` containers around `a`, each inside the one before: a list item,
+/// a markdown block and a grid table in turn, from the outside in.
+fn mixed_containers(levels: usize) -> String {
+    let mut lines = vec!["a".to_owned()];
+    let mut fence = 2_usize;
+    for level in (0..levels).rev() {
+        lines = match level % 3 {
+            0 => lines
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    if index == 0 {
+                        format!("- {line}")
+                    } else {
+                        format!("  {line}")
+                    }
+                })
+                .collect(),
+            1 => {
+                fence += 1;
+                let mark = "`".repeat(fence);
+                iter::once(format!("{mark}markdown"))
+                    .chain(lines)
+                    .chain(iter::once(mark))
+                    .collect()
+            }
+            _ => {
+                let width = lines.iter().map(String::len).max().unwrap_or_default();
+                let border = format!("+{}+", "-".repeat(width + 2));
+                iter::once(border.clone())
+                    .chain(lines.iter().map(|line| format!("| {line:<width$} |")))
+                    .chain(iter::once(border))
+                    .collect()
+            }
+        };
+    }
+    let mut source = lines.join("\n");
+    source.push('\n');
+    source
+}
+
+#[test]
+fn markdown_blocks_nest_the_block_cap_deep_and_the_block_past_it_stays_a_code_block() {
+    on_two_megabytes(|| {
+        let source = nested_markdown_blocks(1000);
+        let document = parse(&source).unwrap();
+        let (depth, inner) = innermost(&document.body);
+        assert_eq!(depth, BLOCK_CAP);
+        let rest = nested_markdown_blocks(1000 - BLOCK_CAP - 1);
+        let plain = match inner.sections.as_slice() {
+            [section] => match section.blocks.as_slice() {
+                [Block::CodeBlock(code)] => Some(code),
+                _ => None,
+            },
+            _ => None,
+        };
+        assert!(plain.is_some_and(|code| code.kind.0.is_none()
+            && code.info == "markdown"
+            && rest.strip_suffix('\n') == Some(code.value.as_str())));
+        let written = write(&document, &WriteOptions::default()).unwrap();
+        assert_eq!(written, source);
+        let copy = document.clone();
+        assert_eq!(copy, document);
+        let printed = format!("{document:?}");
+        assert_eq!(printed.matches("Kind(Some(").count(), BLOCK_CAP);
+        drop(copy);
+        drop(document);
+    });
+}
+
+#[test]
+fn grid_tables_nest_the_block_cap_deep_and_the_tables_past_it_stay_text() {
+    on_two_megabytes(|| {
+        let source = nested_grid_tables(1000);
+        let document = parse(&source).unwrap();
+        let (depth, inner) = innermost(&document.body);
+        assert_eq!(depth, BLOCK_CAP);
+        let lines = match inner.sections.as_slice() {
+            [section] => match section.blocks.as_slice() {
+                [Block::Paragraph(paragraph)] => paragraph.lines.as_slice(),
+                _ => &[],
+            },
+            _ => &[],
+        };
+        let texts: Vec<&str> = lines
+            .iter()
+            .map(|line| match line.children.as_slice() {
+                [Inline::Text(text)] => text.value.as_str(),
+                _ => "",
+            })
+            .collect();
+        let rest = nested_grid_tables(1000 - BLOCK_CAP);
+        assert_eq!(texts, rest.lines().collect::<Vec<_>>());
+        let written = write(&document, &WriteOptions::default()).unwrap();
+        assert_eq!(written.lines().count(), source.lines().count());
+        let copy = document.clone();
+        assert_eq!(copy, document);
+        let printed = format!("{document:?}");
+        assert_eq!(printed.matches("Table {").count(), BLOCK_CAP);
+        drop(copy);
+        drop(document);
+    });
+}
+
+#[test]
+fn lists_markdown_blocks_and_grid_tables_in_turn_nest_the_block_cap_deep_together() {
+    on_two_megabytes(|| {
+        let document = parse(&mixed_containers(1000)).unwrap();
+        assert_eq!(innermost(&document.body).0, BLOCK_CAP);
+        assert_eq!(container_depth(&document.body), BLOCK_CAP);
     });
 }

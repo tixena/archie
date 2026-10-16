@@ -46,6 +46,17 @@ impl<'text> Pass<'text> {
         }
     }
 
+    /// The pass inside a list item or a table cell, one container deeper.
+    const fn deeper(&self) -> Self {
+        Self {
+            context: Context {
+                depth: self.context.depth + 1,
+                ..self.context
+            },
+            ..*self
+        }
+    }
+
     /// The pass inside the cell that spans `span`: a grid cell's nodes read
     /// only its lines.
     fn inside(&self, span: &Range<usize>) -> Self {
@@ -170,7 +181,7 @@ where
     T: Extension,
 {
     fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
-        self.body.offer(pass)?;
+        self.body.offer(&pass.deeper())?;
         let claimed = T::claim(Construct::Item(self), &pass.at(self.span.start));
         settle(&mut self.kind, claimed, pass)
     }
@@ -263,7 +274,7 @@ where
     /// lines.
     fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
         let inside = pass.inside(&self.span);
-        self.body.offer(&inside)?;
+        self.body.offer(&inside.deeper())?;
         let claimed = T::claim(Construct::TableCell(self), &inside.at(self.span.start));
         settle(&mut self.kind, claimed, pass)
     }

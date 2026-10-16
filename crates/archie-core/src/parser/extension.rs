@@ -13,6 +13,7 @@ use crate::parser::ast::{
     ThematicBreak,
 };
 use crate::parser::error::ParseError;
+use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{block, claim};
 use crate::writer::Writer;
 
@@ -72,14 +73,17 @@ where
 }
 
 /// What an extension reads a construct with: where the construct starts on
-/// its line, the lines of the grid cell it lies in, the source text, and
-/// whether the parse is strict.
+/// its line, how many containers hold it, the lines of the grid cell it lies
+/// in, the source text, and whether the parse is strict.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Context<'text> {
     /// The column the offered construct's first line starts at, counted
     /// from the start of its cell's line in a grid cell.
     pub column: usize,
+    /// How many list items, markdown blocks and table cells hold the offered
+    /// construct.
+    pub depth: usize,
     /// The lines of the grid cell the offered construct lies in, as ranges
     /// of the source, or `None` outside grid cells.
     pub lines: Option<&'text [Range<usize>]>,
@@ -91,7 +95,8 @@ impl Context<'_> {
     /// Reads `range` of the source as a markdown block, with the extensions
     /// `T`, each line with at most `column` of its leading spaces left out.
     /// In a grid cell, only the parts of `range` on the cell's lines are
-    /// read, one after another. Spans count from the start of the source.
+    /// read, one after another. The block is one container deeper than the
+    /// construct. Spans count from the start of the source.
     ///
     /// # Errors
     ///
@@ -101,13 +106,18 @@ impl Context<'_> {
     where
         T: Extension,
     {
+        let depth = self.depth + 1;
         let (mut read, _, cells) = match self.lines {
-            Some(lines) => {
-                block::parse_lines(self.source, &within(lines, &range), self.column, range)
-            }
-            None => block::parse_from(&self.source[..range.end], range.start, self.column),
+            Some(lines) => block::parse_lines(
+                self.source,
+                &within(lines, &range),
+                self.column,
+                depth,
+                range,
+            ),
+            None => block::parse_from(&self.source[..range.end], range.start, self.column, depth),
         };
-        claim::markdown_block(&mut read, self, &cells)?;
+        claim::markdown_block(&mut read, &Self { depth, ..*self }, &cells)?;
         Ok(read)
     }
 }
@@ -142,7 +152,8 @@ impl Extension for Plain {
 }
 
 /// archie's own extension: a fenced block whose info string starts with the
-/// word `markdown` or `md`, in any case, holds a `MarkdownBlock`.
+/// word `markdown` or `md`, in any case, holds a `MarkdownBlock`, unless its
+/// content would lie deeper than the block cap.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -165,8 +176,9 @@ impl Extension for Markdown {
             return None;
         };
         let word = block.info.split_whitespace().next()?;
-        (word.eq_ignore_ascii_case("markdown") || word.eq_ignore_ascii_case("md"))
-            .then(|| context.markdown::<T>(block.content.clone()))
+        (context.depth < BLOCK_CAP
+            && (word.eq_ignore_ascii_case("markdown") || word.eq_ignore_ascii_case("md")))
+        .then(|| context.markdown::<T>(block.content.clone()))
     }
 
     fn write<T>(node: &Self::Node<T>, _plain: Construct<'_, T>, writer: &mut Writer)

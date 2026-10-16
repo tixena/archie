@@ -152,6 +152,7 @@ where
     };
     let context = Context {
         column: 0,
+        depth: 0,
         lines: None,
         source,
         strict: options.on_extension_error == OnExtensionError::Fail,
