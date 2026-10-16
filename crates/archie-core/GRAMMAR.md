@@ -115,7 +115,8 @@ deeper: an item its text, a fenced block whose info string starts with `markdown
 or `md` its content, and a table its cells, those of a pipe or simple table as well
 as a grid table's. Text 90 levels deep opens none of them and stays as it is
 written: a bullet is text, a grid table is paragraph text, and a `markdown` block is
-a plain code block whose value is its content.
+a plain code block whose value is its content. No node that deep is offered to an
+extension, and it stays the node archie built.
 
 ### Blocks
 

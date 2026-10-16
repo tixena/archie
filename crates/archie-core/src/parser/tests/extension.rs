@@ -3,12 +3,13 @@
 
 use core::ops::Range;
 
-use super::{Rows, outline};
+use super::{Rows, on_two_megabytes, outline};
 use crate::parser::ast::{
     Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, ScalarValue, TableCell, Value,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, With};
+use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{ParseOptions, from_json, parse, parse_with, read_yaml, rebuild_with, to_json};
 use crate::writer::{WriteOptions, Writer, write};
 
@@ -481,6 +482,37 @@ fn comment_outline(comment: &Comment<With<Comments>>) -> String {
     rows.markdown_block(0, &comment.body);
     rows.mapping(0, &comment.header);
     outline(&rows.rows)
+}
+
+/// `levels` comments around `a`, each in the body of the one before: the
+/// innermost fence is three backticks, and each one around it one longer.
+fn nested_comments(levels: usize) -> String {
+    let fences: Vec<String> = (3..levels + 3).map(|length| "`".repeat(length)).collect();
+    let mut source = String::new();
+    for fence in fences.iter().rev() {
+        source.push_str(fence);
+        source.push_str("remargin\n---\nid: c\n---\n");
+    }
+    source.push_str("a\n");
+    for fence in &fences {
+        source.push_str(fence);
+        source.push('\n');
+    }
+    source
+}
+
+/// How many claimed comments nest from `body` down, each the only code block
+/// of the body before, and the body of the innermost.
+fn comment_depth(body: &MarkdownBlock<With<Comments>>) -> (usize, &MarkdownBlock<With<Comments>>) {
+    let mut inner = body;
+    let mut depth = 0_usize;
+    while let &[block] = code_blocks(inner).as_slice()
+        && let Some(comment) = block.kind.0.as_deref().and_then(second)
+    {
+        depth += 1;
+        inner = &comment.body;
+    }
+    (depth, inner)
 }
 
 #[test]
@@ -1192,4 +1224,48 @@ fn a_markdown_block_in_a_list_item_is_built_again_from_json() {
     };
     assert!(markdown(&document).unwrap().contains("Text \"text\""));
     assert_eq!(markdown(&rebuilt(&document)), markdown(&document));
+}
+
+#[test]
+fn comments_nest_the_block_cap_deep_and_the_comment_past_it_stays_a_code_block() {
+    on_two_megabytes(|| {
+        let source = nested_comments(1000);
+        let document = parse_with::<Comments>(&source, &ParseOptions::default()).unwrap();
+        let (depth, inner) = comment_depth(&document.body);
+        assert_eq!(depth, BLOCK_CAP);
+        assert!(matches!(code_blocks(inner).as_slice(),
+            [code] if code.kind.0.is_none() && code.info == "remargin"));
+        write(&document, &WriteOptions::default()).unwrap();
+        let copy = document.clone();
+        assert_eq!(copy, document);
+        let printed = format!("{document:?}");
+        assert_eq!(printed.matches("Comment {").count(), BLOCK_CAP);
+        drop(copy);
+        drop(document);
+    });
+}
+
+#[test]
+fn a_comment_inside_the_block_cap_of_items_stays_a_code_block_and_inside_one_less_is_claimed() {
+    on_two_megabytes(|| {
+        for (items, claimed) in [(BLOCK_CAP, false), (BLOCK_CAP - 1, true)] {
+            let source = format!(
+                "{}```remargin\n{}",
+                "- ".repeat(items),
+                indented("---\nid: c\n---\nx\n```\n", &"  ".repeat(items))
+            );
+            let document = parse_with::<Comments>(&source, &ParseOptions::default()).unwrap();
+            let mut body = &document.body;
+            for _ in 0..items {
+                body = first_item(body);
+            }
+            let block = code_blocks(body)[0];
+            assert_eq!(block.info, "remargin", "{items}");
+            assert_eq!(
+                block.kind.0.as_deref().and_then(second).is_some(),
+                claimed,
+                "{items}"
+            );
+        }
+    });
 }

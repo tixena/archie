@@ -13,6 +13,7 @@ use crate::parser::block::Cells;
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension};
 use crate::parser::inline::children_mut;
+use crate::parser::lexer::BLOCK_CAP;
 
 /// What the pass carries down the tree: the context of the nodes it offers,
 /// each grid cell's lines, by the cell's span, and where each line of the
@@ -224,6 +225,9 @@ where
     T: Extension,
 {
     fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
+        if pass.context.depth >= BLOCK_CAP {
+            return Ok(());
+        }
         each(&mut self.sections, pass)?;
         let claimed = T::claim(Construct::MarkdownBlock(self), &pass.at(self.span.start));
         settle(&mut self.kind, claimed, pass)

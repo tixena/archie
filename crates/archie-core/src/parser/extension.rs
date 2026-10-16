@@ -13,7 +13,6 @@ use crate::parser::ast::{
     ThematicBreak,
 };
 use crate::parser::error::ParseError;
-use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{block, claim};
 use crate::writer::Writer;
 
@@ -27,7 +26,9 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
         T: Extension;
 
     /// `None` leaves the construct to archie. `Some(Err(..))` falls back to
-    /// the plain node, or fails a strict parse.
+    /// the plain node, or fails a strict parse. No construct that
+    /// `BLOCK_CAP` or more list items, markdown blocks and table cells hold
+    /// is offered: it stays the node archie built.
     fn claim<T>(
         construct: Construct<'_, T>,
         context: &Context<'_>,
@@ -82,7 +83,8 @@ pub struct Context<'text> {
     /// from the start of its cell's line in a grid cell.
     pub column: usize,
     /// How many list items, markdown blocks and table cells hold the offered
-    /// construct.
+    /// construct. No construct that `BLOCK_CAP` or more of them hold is
+    /// offered.
     pub depth: usize,
     /// The lines of the grid cell the offered construct lies in, as ranges
     /// of the source, or `None` outside grid cells.
@@ -152,8 +154,7 @@ impl Extension for Plain {
 }
 
 /// archie's own extension: a fenced block whose info string starts with the
-/// word `markdown` or `md`, in any case, holds a `MarkdownBlock`, unless its
-/// content would lie deeper than the block cap.
+/// word `markdown` or `md`, in any case, holds a `MarkdownBlock`.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -176,9 +177,8 @@ impl Extension for Markdown {
             return None;
         };
         let word = block.info.split_whitespace().next()?;
-        (context.depth < BLOCK_CAP
-            && (word.eq_ignore_ascii_case("markdown") || word.eq_ignore_ascii_case("md")))
-        .then(|| context.markdown::<T>(block.content.clone()))
+        (word.eq_ignore_ascii_case("markdown") || word.eq_ignore_ascii_case("md"))
+            .then(|| context.markdown::<T>(block.content.clone()))
     }
 
     fn write<T>(node: &Self::Node<T>, _plain: Construct<'_, T>, writer: &mut Writer)
