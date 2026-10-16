@@ -89,6 +89,7 @@ where
         span: 0..source.len(),
     };
     let context = Context {
+        column: 0,
         source,
         strict: options.on_extension_error == OnExtensionError::Fail,
     };

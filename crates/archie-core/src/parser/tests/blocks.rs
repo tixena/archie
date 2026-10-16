@@ -1176,3 +1176,120 @@ More text.
 "#,
     );
 }
+
+#[test]
+fn a_markdown_block_inside_a_nested_item_keeps_its_lines_from_the_fence_column() {
+    check(
+        "- - ```markdown\n    # A\n    ```\n",
+        r##"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              List
+                Item
+                  MarkdownBlock
+                    Section
+                      Heading
+                      CodeBlock info="markdown" value="# A" claimed
+"##,
+    );
+}
+
+#[test]
+fn an_empty_item_does_not_interrupt_a_paragraph() {
+    for marker in ["*", "1."] {
+        check(
+            &format!("text\n{marker}\nmore\n"),
+            &format!(
+                r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "text"
+        Line
+          Text "{marker}"
+        Line
+          Text "more"
+"#
+            ),
+        );
+    }
+}
+
+#[test]
+fn an_empty_item_ends_at_a_blank_line_after_its_marker() {
+    check(
+        "-\n\n  foo\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+      Paragraph
+        Line
+          Text "foo"
+"#,
+    );
+    check(
+        "1.\n\n   foo\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List start=1
+        Item
+          MarkdownBlock
+      Paragraph
+        Line
+          Text "foo"
+"#,
+    );
+    check(
+        "- -\n\n  foo\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              List
+                Item
+                  MarkdownBlock
+              Paragraph
+                Line
+                  Text "foo"
+"#,
+    );
+}
+
+#[test]
+fn an_empty_item_holds_the_text_on_the_line_right_after_its_marker() {
+    check(
+        "-\n  foo\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "foo"
+"#,
+    );
+}

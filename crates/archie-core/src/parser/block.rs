@@ -11,7 +11,7 @@ use crate::parser::ast::{
 };
 use crate::parser::extension::Extension;
 use crate::parser::inline::line;
-use crate::parser::lexer::{Marker, Token, TokenKind, lex};
+use crate::parser::lexer::{Marker, Token, TokenKind, lex_from};
 use crate::parser::table::{RowToken, TableToken};
 
 /// Where a markdown block has blank lines: between two of its blocks, or at
@@ -333,11 +333,20 @@ pub fn parse<E>(source: &str, start: usize) -> MarkdownBlock<E>
 where
     E: Extension,
 {
+    parse_from(source, start, 0)
+}
+
+/// The markdown block that starts at byte `start` of `source`, each line read
+/// with at most `base` of its leading spaces left out.
+pub fn parse_from<E>(source: &str, start: usize, base: usize) -> MarkdownBlock<E>
+where
+    E: Extension,
+{
     let mut parser = Parser {
         extension: PhantomData,
         pos: 0,
         source,
-        tokens: lex(source, start),
+        tokens: lex_from(source, start, base),
     };
     let (body, _) = parser.markdown_block(start);
     MarkdownBlock {

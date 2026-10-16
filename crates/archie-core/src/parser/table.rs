@@ -5,7 +5,7 @@
 use core::ops::Range;
 
 use crate::parser::ast::{Alignment, TableFormat};
-use crate::parser::line::line_at;
+use crate::parser::line::line_from;
 
 pub struct TableToken {
     pub alignments: Vec<Alignment>,
@@ -37,14 +37,16 @@ impl TableLine {
 }
 
 /// The table whose first line holds `first`, read on from `next`. Every
-/// later line is indented at least `level` columns. Returns the table, its
-/// span, and where the line after it starts.
+/// later line is indented at least `level` columns, counted past at most
+/// `base` of its leading spaces. Returns the table, its span, and where the
+/// line after it starts.
 pub fn read(
     source: &str,
     line_start: usize,
     first: Range<usize>,
     next: usize,
     level: usize,
+    base: usize,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let head = TableLine {
         end: first.end,
@@ -52,18 +54,18 @@ pub fn read(
         next,
         start: first.start,
     };
-    pipe(source, &head, level)
-        .or_else(|| grid(source, &head, level))
-        .or_else(|| simple(source, &head, level))
+    pipe(source, &head, level, base)
+        .or_else(|| grid(source, &head, level, base))
+        .or_else(|| simple(source, &head, level, base))
 }
 
 /// The line starting at `at`, when it holds text and is indented at least
-/// `level` columns.
-fn line_after(source: &str, at: usize, level: usize) -> Option<TableLine> {
+/// `level` columns past at most `base` of its leading spaces.
+fn line_after(source: &str, at: usize, level: usize, base: usize) -> Option<TableLine> {
     if at >= source.len() {
         return None;
     }
-    let line = line_at(source, at);
+    let line = line_from(source, at, base);
     let text = &source[line.start..line.end];
     let content = text.trim_start_matches(' ');
     let indent = text.len() - content.len();
@@ -78,9 +80,14 @@ fn line_after(source: &str, at: usize, level: usize) -> Option<TableLine> {
 
 /// A header row, a delimiter row such as `|:--|--:|`, and the rows after
 /// them up to the first line without a pipe.
-fn pipe(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Range<usize>, usize)> {
+fn pipe(
+    source: &str,
+    head: &TableLine,
+    level: usize,
+    base: usize,
+) -> Option<(TableToken, Range<usize>, usize)> {
     let head_cells = pipe_cells(source, head)?;
-    let delimiter = line_after(source, head.next, level)?;
+    let delimiter = line_after(source, head.next, level, base)?;
     let delimiter_cells = pipe_cells(source, &delimiter)?;
     if delimiter_cells.len() != head_cells.len() {
         return None;
@@ -91,7 +98,7 @@ fn pipe(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Ran
         .collect::<Option<Vec<_>>>()?;
     let mut rows = Vec::new();
     let mut last = delimiter;
-    while let Some(line) = line_after(source, last.next, level) {
+    while let Some(line) = line_after(source, last.next, level, base) {
         let Some(cells) = pipe_cells(source, &line) else {
             break;
         };
@@ -155,13 +162,18 @@ fn pipe_cells(source: &str, line: &TableLine) -> Option<Vec<Range<usize>>> {
 
 /// A table drawn with `+---+` borders and `|` walls, every row one line.
 /// A `+===+` border ends the header.
-fn grid(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Range<usize>, usize)> {
+fn grid(
+    source: &str,
+    head: &TableLine,
+    level: usize,
+    base: usize,
+) -> Option<(TableToken, Range<usize>, usize)> {
     let top: Vec<char> = source[head.start..head.end].chars().collect();
     let (corners, mut alignments) = border(&top, '-')?;
     let mut head_rows = Vec::new();
     let mut rows = Vec::new();
     let mut last = head.clone();
-    while let Some(line) = line_after(source, last.next, level) {
+    while let Some(line) = line_after(source, last.next, level, base) {
         if line.indent() != head.indent() || !source[line.start..line.end].starts_with('|') {
             break;
         }
@@ -170,7 +182,7 @@ fn grid(source: &str, head: &TableLine, level: usize) -> Option<(TableToken, Ran
             cells,
             span: line.start..line.end,
         });
-        let closing = line_after(source, line.next, level)
+        let closing = line_after(source, line.next, level, base)
             .filter(|closing| closing.indent() == head.indent())?;
         let closing_chars: Vec<char> = source[closing.start..closing.end].chars().collect();
         if let Some((found, header)) = border(&closing_chars, '=') {
@@ -253,12 +265,13 @@ fn simple(
     source: &str,
     head: &TableLine,
     level: usize,
+    base: usize,
 ) -> Option<(TableToken, Range<usize>, usize)> {
-    let dashes = line_after(source, head.next, level)?;
+    let dashes = line_after(source, head.next, level, base)?;
     let groups = dash_groups(&source[dashes.line_start..dashes.end])?;
     let mut lines = vec![head.clone()];
     let mut last = dashes;
-    while let Some(line) = line_after(source, last.next, level) {
+    while let Some(line) = line_after(source, last.next, level, base) {
         lines.push(line.clone());
         last = line;
     }

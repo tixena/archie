@@ -32,7 +32,7 @@ where
     T: Extension,
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
-        let claimed = T::claim(Construct::Code(self), context);
+        let claimed = T::claim(Construct::Code(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -42,7 +42,10 @@ where
     T: Extension,
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
-        let claimed = T::claim(Construct::CodeBlock(self), context);
+        let claimed = T::claim(
+            Construct::CodeBlock(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -53,7 +56,10 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         self.body.offer(context)?;
-        let claimed = T::claim(Construct::Document(self), context);
+        let claimed = T::claim(
+            Construct::Document(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -64,7 +70,7 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.children, context)?;
-        let claimed = T::claim(Construct::Heading(self), context);
+        let claimed = T::claim(Construct::Heading(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -74,7 +80,7 @@ where
     T: Extension,
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
-        let claimed = T::claim(Construct::Image(self), context);
+        let claimed = T::claim(Construct::Image(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -99,7 +105,7 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         self.body.offer(context)?;
-        let claimed = T::claim(Construct::Item(self), context);
+        let claimed = T::claim(Construct::Item(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -110,7 +116,7 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.children, context)?;
-        let claimed = T::claim(Construct::Line(self), context);
+        let claimed = T::claim(Construct::Line(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -121,7 +127,7 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.children, context)?;
-        let claimed = T::claim(Construct::Link(self), context);
+        let claimed = T::claim(Construct::Link(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -132,7 +138,7 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.items, context)?;
-        let claimed = T::claim(Construct::List(self), context);
+        let claimed = T::claim(Construct::List(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -143,7 +149,10 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.sections, context)?;
-        let claimed = T::claim(Construct::MarkdownBlock(self), context);
+        let claimed = T::claim(
+            Construct::MarkdownBlock(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -154,7 +163,10 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.lines, context)?;
-        let claimed = T::claim(Construct::Paragraph(self), context);
+        let claimed = T::claim(
+            Construct::Paragraph(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -167,7 +179,7 @@ where
         self.heading.offer(context)?;
         each(&mut self.blocks, context)?;
         each(&mut self.subsections, context)?;
-        let claimed = T::claim(Construct::Section(self), context);
+        let claimed = T::claim(Construct::Section(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -179,7 +191,7 @@ where
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.head, context)?;
         each(&mut self.rows, context)?;
-        let claimed = T::claim(Construct::Table(self), context);
+        let claimed = T::claim(Construct::Table(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -190,7 +202,10 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         self.body.offer(context)?;
-        let claimed = T::claim(Construct::TableCell(self), context);
+        let claimed = T::claim(
+            Construct::TableCell(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -201,7 +216,10 @@ where
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
         each(&mut self.cells, context)?;
-        let claimed = T::claim(Construct::TableRow(self), context);
+        let claimed = T::claim(
+            Construct::TableRow(self),
+            &located(context, self.span.start),
+        );
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -211,7 +229,7 @@ where
     T: Extension,
 {
     fn offer(&mut self, context: &Context<'_>) -> Result<(), ParseError> {
-        let claimed = T::claim(Construct::Text(self), context);
+        let claimed = T::claim(Construct::Text(self), &located(context, self.span.start));
         settle(&mut self.kind, claimed, context)
     }
 }
@@ -233,6 +251,18 @@ where
     T: Extension,
 {
     block.offer(context)
+}
+
+/// `context` for a node whose span starts at `start`: its `column` is how far
+/// `start` is from the start of its line.
+fn located<'text>(context: &Context<'text>, start: usize) -> Context<'text> {
+    let line_start = context.source[..start]
+        .rfind('\n')
+        .map_or(0, |newline| newline + 1);
+    Context {
+        column: start - line_start,
+        ..*context
+    }
 }
 
 fn each<N>(nodes: &mut [N], context: &Context<'_>) -> Result<(), ParseError>

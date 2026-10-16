@@ -56,18 +56,21 @@ where
     Text(&'node Text<T>),
 }
 
-/// What an extension reads a construct with: the source text, and whether
-/// the parse is strict.
+/// What an extension reads a construct with: where the construct starts on
+/// its line, the source text, and whether the parse is strict.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Context<'text> {
+    /// The column the offered construct's first line starts at.
+    pub column: usize,
     pub source: &'text str,
     pub strict: bool,
 }
 
 impl Context<'_> {
     /// Reads `range` of the source as a markdown block, with the extensions
-    /// `T`. Spans count from the start of the source.
+    /// `T`, each line with at most `column` of its leading spaces left out.
+    /// Spans count from the start of the source.
     ///
     /// # Errors
     ///
@@ -77,7 +80,7 @@ impl Context<'_> {
     where
         T: Extension,
     {
-        let mut read = block::parse(&self.source[..range.end], range.start);
+        let mut read = block::parse_from(&self.source[..range.end], range.start, self.column);
         claim::markdown_block(&mut read, self)?;
         Ok(read)
     }
