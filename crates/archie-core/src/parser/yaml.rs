@@ -68,10 +68,14 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
     let Some(indent) = next_line(&mut cursor) else {
         return Ok(finish(IndexMap::new(), empty_at));
     };
-    let root = cursor.pos() + indent;
-    match cursor.peek_at(indent) {
+    let line_start = cursor.pos();
+    cursor.set_pos(line_start + indent);
+    no_tab_before_block(&mut cursor)?;
+    // A tab after the indentation separates a flow node from it.
+    cursor.skip_spaces();
+    let root = cursor.pos();
+    match cursor.peek() {
         Some(b'{') => {
-            cursor.set_pos(root);
             let mapping = flow_mapping(&mut cursor, None)?;
             end_of_line(&mut cursor)?;
             if next_line(&mut cursor).is_some() {
@@ -80,11 +84,11 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             Ok(mapping)
         }
         Some(b'[') => {
-            cursor.set_pos(root);
             let list = flow_sequence(&mut cursor, None)?;
             Err(not_a_mapping(list.span()))
         }
         Some(_) | None => {
+            cursor.set_pos(line_start);
             let mapping = block_mapping(&mut cursor, indent).map_err(|error| {
                 cursor.set_pos(root);
                 lone_value(&mut cursor, indent).map_or(error, |span| not_a_mapping(&span))
@@ -293,25 +297,27 @@ fn plain_key_length(line: &str) -> Option<usize> {
         .filter(|&at| at > 0)
 }
 
-/// Whether the cursor is on a pair that opens a mapping: an explicit key, an
-/// empty key, or a `key:` after a tag or not, whose key is plain or quoted.
+/// Whether the cursor is on a pair that opens a mapping: an explicit key, or
+/// an empty key or a `key:` after a tag or not, whose key is plain or quoted.
+/// On a tab it is not: a tab is never indentation.
 fn starts_mapping(cursor: &mut Cursor<'_>) -> bool {
-    if is_explicit_key(cursor) || is_empty_key(cursor, false) {
+    if is_explicit_key(cursor) {
         return true;
     }
     let start = cursor.pos();
     if cursor.peek() == Some(b'!') && tag(cursor).is_ok() {
         cursor.skip_spaces();
     }
-    let is_mapping = match cursor.peek() {
-        Some(b'"' | b'\'') => {
-            let is_key = key(cursor).is_ok();
-            cursor.skip_spaces();
-            is_key && cursor.peek() == Some(b':')
-        }
-        Some(b'[' | b'{' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
-        Some(_) | None => plain_key_length(cursor.rest_of_line()).is_some(),
-    };
+    let is_mapping = is_empty_key(cursor, false)
+        || match cursor.peek() {
+            Some(b'"' | b'\'') => {
+                let is_key = key(cursor).is_ok();
+                cursor.skip_spaces();
+                is_key && cursor.peek() == Some(b':')
+            }
+            Some(b'\t' | b'[' | b'{' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
+            Some(_) | None => plain_key_length(cursor.rest_of_line()).is_some(),
+        };
     cursor.set_pos(start);
     is_mapping
 }
@@ -344,9 +350,9 @@ fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<V
         cursor.set_pos(line_start);
         return Ok(Value::Mapping(block_mapping(cursor, found)?));
     }
-    let value = inline_value(cursor, context)?;
-    end_of_line(cursor)?;
-    Ok(value)
+    // A tab after the indentation separates a flow node from it.
+    cursor.skip_spaces();
+    line_value(cursor, context)
 }
 
 /// Refuses the tab at the cursor, after the indentation of a line, when a
@@ -435,7 +441,22 @@ fn compact_value(
     if indented && starts_mapping(cursor) {
         return Ok(Value::Mapping(entry_mapping(cursor, column)?));
     }
+    line_value(cursor, context)
+}
+
+/// The value that starts a line of a block or follows its `-`, `?` or `:`,
+/// up to the end of that line. A flow collection followed by `:` there is a
+/// key, and a key is a string.
+fn line_value(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
     let value = inline_value(cursor, context)?;
+    cursor.skip_spaces();
+    if matches!(value, Value::Mapping(_) | Value::Sequence(_))
+        && cursor.peek() == Some(b':')
+        && separated_at(cursor, 1)
+    {
+        let at = value.span().start;
+        return Err(ParseError::new("expected a key", at..at));
+    }
     end_of_line(cursor)?;
     Ok(value)
 }
@@ -501,7 +522,7 @@ fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value, Pa
     }
     let start = cursor.pos();
     let mut pairs = IndexMap::new();
-    flow_entry(cursor, column, &mut pairs)?;
+    flow_entry(cursor, column, true, &mut pairs)?;
     Ok(Value::Mapping(finish(pairs, start)))
 }
 
@@ -512,7 +533,7 @@ fn is_flow_pair(cursor: &mut Cursor<'_>) -> bool {
         return true;
     }
     let start = cursor.pos();
-    let is_key = flow_key(cursor).is_ok();
+    let is_key = flow_key(cursor, None).is_ok();
     cursor.skip_spaces();
     let is_pair = is_key && cursor.peek() == Some(b':');
     cursor.set_pos(start);
@@ -540,7 +561,7 @@ fn flow_mapping(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Mappin
             break;
         }
         no_empty_entry(cursor)?;
-        flow_entry(cursor, column, &mut pairs)?;
+        flow_entry(cursor, column, false, &mut pairs)?;
         skip_flow_space(cursor, column)?;
         if cursor.eat(b'}') {
             break;
@@ -562,10 +583,11 @@ fn flow_mapping(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Mappin
 fn flow_entry(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
+    in_list: bool,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
-    let name = flow_pair_key(cursor, column)?;
+    let name = flow_pair_key(cursor, column, in_list)?;
     let key_end = cursor.pos();
     skip_flow_space(cursor, column)?;
     let value = if cursor.eat(b':') {
@@ -589,8 +611,13 @@ fn flow_entry(
 }
 
 /// The key of a flow pair: the key after a `?`, or the empty key when none
-/// follows it or when the pair starts with its `:`.
-fn flow_pair_key(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<String, ParseError> {
+/// follows it or when the pair starts with its `:`. A plain key goes on over
+/// several lines inside a flow mapping, and stays on one inside a flow list.
+fn flow_pair_key(
+    cursor: &mut Cursor<'_>,
+    column: Option<usize>,
+    in_list: bool,
+) -> Result<String, ParseError> {
     let explicit = is_flow_explicit_key(cursor);
     if explicit {
         cursor.bump();
@@ -601,7 +628,7 @@ fn flow_pair_key(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Strin
     {
         return Ok(String::new());
     }
-    flow_key(cursor)
+    flow_key(cursor, (!in_list).then_some(Context::Flow(column)))
 }
 
 /// Whether the cursor is on a `?` that starts an explicit key inside a flow
@@ -618,37 +645,57 @@ fn is_empty_key(cursor: &Cursor<'_>, in_flow: bool) -> bool {
     cursor.peek() == Some(b':') && is_indicator(cursor, in_flow)
 }
 
-/// A key inside a flow mapping. A plain key ends at a `:` followed by a
-/// space or a flow indicator, at a flow indicator, or at a comment.
-fn flow_key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
+/// A key inside a flow collection. A plain key ends at a `:` followed by a
+/// space or a flow indicator, at a flow indicator, or at a comment. With a
+/// `context`, as inside a flow mapping, a plain key that runs to the end of
+/// its line goes on over the lines below as a `PLAIN` does, up to that end.
+fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, ParseError> {
     match cursor.peek() {
         Some(b'"') => double_quoted(cursor, None),
         Some(b'\'') => single_quoted(cursor, None),
-        Some(b'!') => tagged_key(cursor, flow_key),
+        Some(b'!') => tagged_key(cursor, |inner| flow_key(inner, context)),
         Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
             no_indicator(cursor, true, "key")?;
+            let start = cursor.pos();
             let line = cursor.rest_of_line();
-            let bytes = line.as_bytes();
-            let length = (0..bytes.len())
-                .find(|&at| match bytes[at] {
-                    b',' | b'[' | b']' | b'{' | b'}' => true,
-                    b':' => matches!(
-                        bytes.get(at + 1),
-                        None | Some(b' ' | b'\t' | b',' | b'[' | b']' | b'{' | b'}')
-                    ),
-                    b' ' | b'\t' => bytes.get(at + 1) == Some(&b'#'),
-                    _ => false,
-                })
-                .unwrap_or(bytes.len());
-            let text = line[..length].trim_end();
+            let key = flow_key_part(line);
+            let text = key.trim_end();
             if text.is_empty() {
                 return cursor.error("expected a key");
             }
-            cursor.set_pos(cursor.pos() + text.len());
-            Ok(text.to_owned())
+            let first_end = start + text.len();
+            let end = match context {
+                Some(within) if key.len() == line.len() => {
+                    continued_end(cursor, first_end, within, |content| {
+                        Some(flow_key_part(content))
+                    })
+                }
+                Some(_) | None => first_end,
+            };
+            cursor.set_pos(end);
+            Ok(folded(cursor.slice(start..end)))
         }
     }
+}
+
+/// The start of `line` that a plain key inside a flow collection may hold:
+/// up to a `:` followed by a space or a flow indicator, a flow indicator, or
+/// a comment.
+fn flow_key_part(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    let length = (0..bytes.len())
+        .find(|&at| match bytes[at] {
+            b',' | b'[' | b']' | b'{' | b'}' => true,
+            b':' => matches!(
+                bytes.get(at + 1),
+                None | Some(b' ' | b'\t' | b',' | b'[' | b']' | b'{' | b'}')
+            ),
+            b' ' | b'\t' => bytes.get(at + 1) == Some(&b'#'),
+            _ => false,
+        })
+        .unwrap_or(bytes.len());
+    &line[..length]
 }
 
 /// Skips the spaces, line breaks and comments between the entries of a
@@ -745,11 +792,26 @@ fn plain_part(line: &str, context: Context) -> &str {
 }
 
 /// Where a plain scalar whose first line ends at `first_end` ends: after the
-/// last line below that goes on with it. Such a line comes after nothing but
-/// blank lines, is indented more than the column of `within`, holds no
-/// `key:` and starts with no comment or flow indicator; a comment or a flow
-/// indicator after its text makes it the last.
+/// last line below that goes on with it. Such a line holds no `key:` and
+/// starts with no flow indicator; a comment or a flow indicator after its
+/// text makes it the last.
 fn plain_end(cursor: &Cursor<'_>, first_end: usize, within: Context) -> usize {
+    continued_end(cursor, first_end, within, |content| {
+        let bounded = plain_part(content, within);
+        (!holds_pair(bounded.trim_end())).then_some(bounded)
+    })
+}
+
+/// Where a plain scalar or key whose first line ends at `first_end` ends:
+/// after the last line below that goes on with it. Such a line comes after
+/// nothing but blank lines, is indented more than the column of `within`,
+/// does not start with a comment, and has text in the part of it that `part`
+/// gives, which is none when the line cannot go on with it; a part shorter
+/// than the line makes it the last.
+fn continued_end<F>(cursor: &Cursor<'_>, first_end: usize, within: Context, part: F) -> usize
+where
+    F: Fn(&str) -> Option<&str>,
+{
     let rest = cursor.slice(first_end..cursor.end());
     let Some(break_at) = rest.find('\n') else {
         return first_end;
@@ -760,12 +822,17 @@ fn plain_end(cursor: &Cursor<'_>, first_end: usize, within: Context) -> usize {
         let line = line_text(piece);
         if !is_blank(line) {
             let content = line.trim_start_matches([' ', '\t']);
-            let bounded = plain_part(content, within);
-            let text = bounded.trim_end();
             let shallow = within
                 .column()
                 .is_some_and(|column| leading_spaces(line) <= column);
-            if shallow || content.starts_with('#') || text.is_empty() || holds_pair(text) {
+            if shallow || content.starts_with('#') {
+                break;
+            }
+            let Some(bounded) = part(content) else {
+                break;
+            };
+            let text = bounded.trim_end();
+            if text.is_empty() {
                 break;
             }
             end = line_start + (line.len() - content.len()) + text.len();
@@ -999,15 +1066,20 @@ fn tagged(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError
     retag(cursor, &tag, value)
 }
 
-/// A key written after a tag, read by `read` and checked against the tag.
-fn tagged_key(
-    cursor: &mut Cursor<'_>,
-    read: fn(&mut Cursor<'_>) -> Result<String, ParseError>,
-) -> Result<String, ParseError> {
+/// A key written after a tag, read by `read` and checked against the tag. A
+/// `:` right after the tag leaves the key empty.
+fn tagged_key<F>(cursor: &mut Cursor<'_>, read: F) -> Result<String, ParseError>
+where
+    F: FnOnce(&mut Cursor<'_>) -> Result<String, ParseError>,
+{
     let tag = tag(cursor)?;
     cursor.skip_spaces();
     let start = cursor.pos();
-    let text = read(cursor)?;
+    let text = if is_empty_key(cursor, false) {
+        String::new()
+    } else {
+        read(cursor)?
+    };
     let _: Value = retag(cursor, &tag, string(start..cursor.pos(), text.clone()))?;
     Ok(text)
 }

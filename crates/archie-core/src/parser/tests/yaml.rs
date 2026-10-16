@@ -1934,3 +1934,147 @@ fn the_colon_of_a_flow_mapping_key_or_of_an_explicit_key_may_be_on_a_later_line(
 ",
     );
 }
+
+#[test]
+fn a_tab_after_the_indentation_separates_a_flow_value() {
+    check(
+        "---\na:\n  \t\"x\"\nb:\n  \t[x]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "x"
+      Pair key=b
+        Sequence
+          Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na:\n  \t{x: 1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na:\n  \t!!str x\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n-\n  \t\"x\"\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\n\t{a: 1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_plain_key_of_a_flow_mapping_goes_on_over_the_lines_below() {
+    let mapping = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=x y
+        Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\n{x\n  y: 1}\n---\n", mapping);
+    check(
+        "---\na: {x\n  y: 1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=x y
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\n{x\n  y\n  z: 1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=x y z
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_tag_followed_by_a_colon_is_a_tagged_empty_key() {
+    let empty_key = r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=
+        Scalar String "v"
+  MarkdownBlock
+"#;
+    check("---\n!!str : v\n---\n", empty_key);
+    check("---\n{!!str : v}\n---\n", empty_key);
+    check(
+        "---\na: 1\n!!str : v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+      Pair key=
+        Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na:\n  !!str : v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=
+            Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- !!str : v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=
+              Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+}

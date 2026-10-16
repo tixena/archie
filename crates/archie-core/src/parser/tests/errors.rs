@@ -153,6 +153,7 @@ fn a_tag_with_no_value_after_it_or_under_it_is_checked_as_an_empty_value() {
         empty("!!map")
     );
     assert_eq!(failed("---\nn: [!!int ]\n---\n"), empty("!!int"));
+    assert_eq!(failed("---\n!!int : v\n---\n"), empty("!!int"));
 }
 
 #[test]
@@ -166,6 +167,7 @@ fn a_line_of_a_flow_collection_must_be_indented_more_than_its_key() {
     assert_eq!(refusal("---\nt: [a, [b,\nc]]\n---\n"), refused("c]]"));
     assert_eq!(refusal("---\nitems:\n- [a,\nb]\n---\n"), refused("b]"));
     assert_eq!(refusal("---\nowner:\n  t: [a,\n  b]\n---\n"), refused("b]"));
+    assert_eq!(refusal("---\nflow: {a\nb: 1}\n---\n"), refused("b: 1}"));
 }
 
 #[test]
@@ -454,6 +456,11 @@ fn a_tab_before_a_key_or_a_list_entry_is_refused_at_the_tab() {
     assert_eq!(refused("---\n\ta: 1\n---\n"), at_tab(4));
     assert_eq!(refused("---\na:\n\t- b\n---\n"), at_tab(7));
     assert_eq!(refused("---\na:\n  \tb: 1\n---\n"), at_tab(9));
+    assert_eq!(refused("---\na:\n  \t- x\n---\n"), at_tab(9));
+    assert_eq!(refused("---\n\t- a\n---\n"), at_tab(4));
+    assert_eq!(refused("---\n\t? k\n---\n"), at_tab(4));
+    assert_eq!(refused("---\n\t: v\n---\n"), at_tab(4));
+    assert_eq!(refused("---\na:\n  \t!!str : v\n---\n"), at_tab(9));
 }
 
 #[test]
@@ -462,4 +469,21 @@ fn an_implicit_key_inside_a_flow_list_keeps_its_colon_on_its_line() {
         refusal("---\na: [x\n  : 1]\n---\n"),
         ("expected `,` or `]` in the list".to_owned(), ": 1]")
     );
+}
+
+#[test]
+fn a_collection_key_on_the_first_line_of_a_block_or_after_a_dash_is_refused() {
+    let no_key = |at: &'static str| ("expected a key".to_owned(), at);
+    assert_eq!(refusal("---\nc:\n  [x]: y\n---\n"), no_key("[x]: y"));
+    assert_eq!(
+        refusal("---\nitems:\n- {x: 1}: 12\n---\n"),
+        no_key("{x: 1}: 12")
+    );
+}
+
+#[test]
+fn the_key_of_a_pair_inside_a_flow_list_stays_on_one_line() {
+    let refused = |at: &'static str| ("expected `,` or `]` in the list".to_owned(), at);
+    assert_eq!(refusal("---\n[x\n  y: 1]\n---\n"), refused("y: 1]"));
+    assert_eq!(refusal("---\na: [x\n  y: 1]\n---\n"), refused("y: 1]"));
 }
