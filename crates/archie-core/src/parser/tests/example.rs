@@ -3,10 +3,11 @@
 
 use core::ops::Range;
 
+use chrono::NaiveDate;
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Block, Date, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line, Link,
+    Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line, Link,
     LinkForm, List, Mapping, MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section,
     Sequence, Text, Value,
 };
@@ -101,11 +102,7 @@ fn content(start: usize, covered: &str, blocks: Vec<Block>) -> MarkdownBlock {
 }
 
 fn frontmatter() -> Frontmatter {
-    let due = ScalarValue::Date(Date {
-        day: 10,
-        month: 10,
-        year: 2026,
-    });
+    let due = ScalarValue::Date(NaiveDate::from_ymd_opt(2026, 10, 10).unwrap());
     let tags = Value::Sequence(Sequence {
         items: vec![
             string(span(43, r#""parser""#), "parser"),

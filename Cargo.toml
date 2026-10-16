@@ -16,6 +16,9 @@ thiserror = "2"
 # Insertion-ordered map
 indexmap = "2"
 
+# Dates and times, with no clock
+chrono = { version = "0.4.45", default-features = false, features = ["alloc"] }
+
 # Unicode full case folding, for link labels
 unicase = "2.10"
 

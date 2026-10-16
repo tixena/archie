@@ -211,25 +211,27 @@ A value's type comes from how it is written:
 | `true`, `false` | Boolean |
 | `2026-10-10`, when that day exists in the calendar; `2026-02-30` is not a value | Date |
 | `07:32:00`, optionally with a fraction such as `.250` | Time |
-| A date, then `T`, `t` or one space, then a time, then optionally `Z`, `z` or an offset such as `-04:00` | DateTime |
+| A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | DateTime |
+| A date, then `T`, `t` or one space, then a time, with no offset | LocalDateTime |
 | An optional sign and digits; or `0x`, `0o`, `0b` and digits in that base | Integer, 64 bits |
 | Digits with a fraction, an exponent or both; `inf` and `nan`, with an optional sign | Float |
 
 ## YAML frontmatter
 
 ```text
-yaml          := mapping?
+yaml          := mapping? | flow_mapping
 mapping       := entry+
 entry         := key ":" ( node | NEWLINE block? )
-sequence      := ( "-" ( node | mapping | NEWLINE ) )+
+sequence      := ( "-" ( node | mapping | NEWLINE indented? ) )+
 node          := TAG? inline NEWLINE
                | TAG? BLOCK_SCALAR
                | TAG NEWLINE block?
-block         := INDENT mapping DEDENT
+block         := indented | sequence
+indented      := INDENT mapping DEDENT
                | INDENT sequence DEDENT
-               | sequence
 inline        := flow_sequence | flow_mapping | double_quoted | single_quoted | PLAIN
-flow_sequence := "[" ( flow_node ( "," flow_node )* ","? )? "]"
+flow_sequence := "[" ( flow_entry ( "," flow_entry )* ","? )? "]"
+flow_entry    := flow_key ":" flow_node? | flow_node
 flow_mapping  := "{" ( flow_pair ( "," flow_pair )* ","? )? "}"
 flow_pair     := flow_key ( ":" flow_node? )?
 flow_node     := TAG? inline
@@ -237,13 +239,16 @@ key           := TAG? ( double_quoted | single_quoted | PLAIN_KEY )
 flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
 ```
 
+- The frontmatter is a block mapping, or one flow mapping with nothing but comments
+  after it. A frontmatter that is a list or a scalar fails the file with
+  `the frontmatter must be a mapping`.
 - `INDENT` is a line indented more than the key above it; `DEDENT` is the return to
   an earlier indentation. Every key of one mapping starts at the same column.
 - A `block` may be a sequence written at the same column as its key (its third
   form).
 - A key with nothing after its colon and no block under it is null, and so is a `-`
-  with nothing after it, and a pair of a flow mapping with no `:` or nothing after
-  it.
+  with nothing after it and no block indented under it, and a pair of a flow
+  mapping with no `:` or nothing after it.
 - A list entry whose line goes on with a plain `key:` holds a mapping. Its first key is on
   the `-` line, and its other keys start at that key's column on the lines below.
 - `PLAIN_KEY` runs to the first `:` followed by a space or by the end of the line.
@@ -253,11 +258,24 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
   flow collection it stops at `,`, `[`, `]`, `{` or `}`. It cannot hold `: ` or end
   with `:`; such a value fails the file with ``a plain value cannot hold `: `; quote
   it``.
+- Outside a flow collection, a `PLAIN` whose line has no comment goes on over each
+  following line that is indented more than its key or `-`, is not a comment and
+  holds no `key:`; blank lines may sit between them, and a comment ends the last
+  one. The lines are folded by YAML 1.2.2: each loses the spaces around it, a line
+  break between two lines of text is a space, and each blank line between them is
+  a `\n`. `title: a long` then `  title` is `"a long title"`.
 - A flow collection may run over several lines: line breaks and comments may sit
-  between its entries, and a `,` may follow the last one.
+  between its entries, and a `,` may follow the last one. A `,` where an entry
+  should start fails the file with ``expected a value before `,` ``.
+- A `flow_entry` of a flow list that is a key followed by `:` is a mapping of one
+  pair: `[a: b, c]` is a list holding `{a: b}` and `c`.
 - `double_quoted` reads the escapes `\0 \a \b \t \n \v \f \r \e \" \/ \\`, a
   backslash before a space, `\xXX`, `\uXXXX` and `\UXXXXXXXX`. Inside
   `single_quoted`, `''` is one quote.
+- A quoted value, but not a quoted key, may go on over several lines, folded as a
+  `PLAIN` is; inside `double_quoted`, a `\` at the end of a line removes the line
+  break. Outside a flow collection, each of its lines must be indented more than
+  its key or `-`.
 - Blank lines and lines holding only a comment are skipped.
 - A key written more than once becomes one key holding a list of every value
   written for it, by the same rule as in TOML: `tags: [a, b]` then `tags: c` is
@@ -305,7 +323,7 @@ A `PLAIN` value's type comes from how it is written:
 | An optional sign and digits; or `0x`, `0o` and digits in that base | Integer, 64 bits |
 | Digits with a fraction, an exponent or both; `.inf` and `.nan` | Float |
 | `2026-10-10`, when that day exists in the calendar | Date |
-| A date-time, written as in TOML, whose date exists in the calendar | DateTime |
+| A date-time, written as in TOML, whose date exists in the calendar | DateTime, or LocalDateTime when it has no offset |
 | Anything else | String |
 
 ## What each node's span covers
@@ -385,15 +403,12 @@ between the two lines.
 
 1. Anchors and aliases are refused, and so is every tag other than the eight above.
    Each is refused with an error that names it.
-2. A plain value continued on a more indented line, and a quoted string continued
-   on a second line, are refused.
-3. A pair written inside a flow list, such as `[a: b]`, is refused instead of read
-   as a mapping.
-4. A key written more than once becomes one key holding a list of its values. YAML
+2. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
-5. An unquoted date or date-time whose day exists in the calendar is a Date or a
-   DateTime. The YAML 1.2.2 core schema has no date type and reads it as a string.
-6. A number written with nothing before the dot, such as `.5`, is a string. YAML
+3. An unquoted date or date-time whose day exists in the calendar is a Date, a
+   DateTime or a LocalDateTime. The YAML 1.2.2 core schema has no date type and
+   reads it as a string.
+4. A number written with nothing before the dot, such as `.5`, is a string. YAML
    reads it as a float.
 
 ## Extensions

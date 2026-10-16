@@ -674,6 +674,7 @@ never: 2026-04-31
 century: 1900-02-29
 millennium: 2000-02-29
 at: 2026-02-30T10:00:00Z
+local: 2026-10-10 07:32:00
 ---
 ",
         r#"Document
@@ -691,6 +692,8 @@ at: 2026-02-30T10:00:00Z
         Scalar Date 2000-02-29
       Pair key=at
         Scalar String "2026-02-30T10:00:00Z"
+      Pair key=local
+        Scalar LocalDateTime 2026-10-10T07:32:00
   MarkdownBlock
 "#,
     );
@@ -812,6 +815,321 @@ fn a_block_scalar_spans_from_its_indicator_to_its_last_text() {
             ("Scalar Integer 1", "1"),
             ("Pair key=tag", "tag: !!str x"),
             (r#"Scalar String "x""#, "x"),
+            ("MarkdownBlock", ""),
+        ],
+    );
+}
+
+#[test]
+fn the_frontmatter_may_be_one_flow_mapping() {
+    check(
+        "---\n{\"a\": 1, b: [x]}\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+      Pair key=b
+        Sequence
+          Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\n# owner\n  {name: Ada,\n   role: host}  # flow\n\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=name
+        Scalar String "Ada"
+      Pair key=role
+        Scalar String "host"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_plain_value_goes_on_over_the_lines_indented_more_than_its_key() {
+    check(
+        "\
+---
+title: a long
+  title
+folded: one
+
+  two
+
+
+  three
+owner:
+  name: Ada
+    Lovelace
+  role: host
+items:
+- first
+ entry
+- second # a comment ends it
+signs: b - c
+  [d] {e} \"f\" g:h
+after: 1
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=title
+        Scalar String "a long title"
+      Pair key=folded
+        Scalar String "one\ntwo\n\nthree"
+      Pair key=owner
+        Mapping
+          Pair key=name
+            Scalar String "Ada Lovelace"
+          Pair key=role
+            Scalar String "host"
+      Pair key=items
+        Sequence
+          Scalar String "first entry"
+          Scalar String "second"
+      Pair key=signs
+        Scalar String "b - c [d] {e} \"f\" g:h"
+      Pair key=after
+        Scalar Integer 1
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_plain_value_over_several_lines_is_typed_by_its_folded_text() {
+    check(
+        "\
+---
+at: 2026-10-10
+  07:32:00
+text: !!str 2026-10-10
+  07:32:00
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=at
+        Scalar LocalDateTime 2026-10-10T07:32:00
+      Pair key=text
+        Scalar String "2026-10-10 07:32:00"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_quoted_value_goes_on_over_several_lines_and_folds_them() {
+    check(
+        r#"---
+double: "a long
+  title"
+single: 'a long
+  title'
+blank: "one
+
+  two"
+spaces: 'it''s   
+   folded  '
+joined: "no \
+  space, a\
+  b"
+escaped: "tab\t
+  kept"
+item:
+- "first
+  entry"
+---
+"#,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=double
+        Scalar String "a long title"
+      Pair key=single
+        Scalar String "a long title"
+      Pair key=blank
+        Scalar String "one\ntwo"
+      Pair key=spaces
+        Scalar String "it's folded  "
+      Pair key=joined
+        Scalar String "no space, ab"
+      Pair key=escaped
+        Scalar String "tab\t kept"
+      Pair key=item
+        Sequence
+          Scalar String "first entry"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_pair_inside_a_flow_list_is_a_mapping_of_one_pair() {
+    check(
+        r#"---
+t: [a: b, c]
+forms: ["q": 1, k : v, empty: , bare:, http://x.com, a :b, !!str n: 2]
+nested: [a: {b: [c: d]}]
+---
+"#,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=t
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar String "b"
+          Scalar String "c"
+      Pair key=forms
+        Sequence
+          Mapping
+            Pair key=q
+              Scalar Integer 1
+          Mapping
+            Pair key=k
+              Scalar String "v"
+          Mapping
+            Pair key=empty
+              Scalar Null
+          Mapping
+            Pair key=bare
+              Scalar Null
+          Scalar String "http://x.com"
+          Scalar String "a :b"
+          Mapping
+            Pair key=n
+              Scalar Integer 2
+      Pair key=nested
+        Sequence
+          Mapping
+            Pair key=a
+              Mapping
+                Pair key=b
+                  Sequence
+                    Mapping
+                      Pair key=c
+                        Scalar String "d"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_list_entry_with_nothing_on_its_line_holds_the_block_under_it() {
+    check(
+        "\
+---
+items:
+-
+  a: 1
+- 
+  - x
+- # a comment
+  b: 2
+  c: 3
+-
+- last
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar Integer 1
+          Sequence
+            Scalar String "x"
+          Mapping
+            Pair key=b
+              Scalar Integer 2
+            Pair key=c
+              Scalar Integer 3
+          Scalar Null
+          Scalar String "last"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn one_trailing_comma_ends_a_flow_list() {
+    check(
+        "---\nt: [a, b,]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=t
+        Sequence
+          Scalar String "a"
+          Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn the_yaml_forms_read_together() {
+    check(
+        "---\ntitle: a long\n  title\nitems:\n-\n  a: 1\nt: [a: b, c]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=title
+        Scalar String "a long title"
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar Integer 1
+      Pair key=t
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar String "b"
+          Scalar String "c"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_value_over_several_lines_spans_from_its_first_text_to_its_last() {
+    let whole = "---\nt: a\n\n  b # c\nq: \"x\n  y\"\nl: [k: v]\ni:\n-\n  - z\n---\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            (
+                "Frontmatter format=Yaml",
+                "---\nt: a\n\n  b # c\nq: \"x\n  y\"\nl: [k: v]\ni:\n-\n  - z\n---",
+            ),
+            (
+                "Mapping",
+                "t: a\n\n  b # c\nq: \"x\n  y\"\nl: [k: v]\ni:\n-\n  - z",
+            ),
+            ("Pair key=t", "t: a\n\n  b"),
+            (r#"Scalar String "a\nb""#, "a\n\n  b"),
+            ("Pair key=q", "q: \"x\n  y\""),
+            (r#"Scalar String "x y""#, "\"x\n  y\""),
+            ("Pair key=l", "l: [k: v]"),
+            ("Sequence", "[k: v]"),
+            ("Mapping", "k: v"),
+            ("Pair key=k", "k: v"),
+            (r#"Scalar String "v""#, "v"),
+            ("Pair key=i", "i:\n-\n  - z"),
+            ("Sequence", "-\n  - z"),
+            ("Sequence", "- z"),
+            (r#"Scalar String "z""#, "z"),
             ("MarkdownBlock", ""),
         ],
     );

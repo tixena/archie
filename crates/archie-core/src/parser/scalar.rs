@@ -2,7 +2,9 @@
 
 use core::str::FromStr;
 
-use crate::parser::ast::{Date, DateTime, ScalarValue, Time};
+use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
+
+use crate::parser::ast::ScalarValue;
 
 const TOML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8), ("0b", 2)];
 const YAML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8)];
@@ -18,7 +20,6 @@ pub fn toml(text: &str) -> Option<ScalarValue> {
         _ => {
             let number = text.replace('_', "");
             date_time(text)
-                .map(ScalarValue::DateTime)
                 .or_else(|| date(text).map(ScalarValue::Date))
                 .or_else(|| time(text).map(ScalarValue::Time))
                 .or_else(|| integer(&number, TOML_RADIXES).map(ScalarValue::Integer))
@@ -40,7 +41,7 @@ pub fn yaml(text: &str) -> ScalarValue {
         _ => integer(text, YAML_RADIXES)
             .map(ScalarValue::Integer)
             .or_else(|| float(text).map(ScalarValue::Float))
-            .or_else(|| date_time(text).map(ScalarValue::DateTime))
+            .or_else(|| date_time(text))
             .or_else(|| date(text).map(ScalarValue::Date))
             .unwrap_or_else(|| ScalarValue::String(text.to_owned())),
     }
@@ -50,34 +51,25 @@ pub fn is_date(text: &str) -> bool {
     date(text).is_some()
 }
 
-fn date(text: &str) -> Option<Date> {
+/// A date such as `2026-10-10`, when that day exists in the calendar.
+fn date(text: &str) -> Option<NaiveDate> {
     let [_, _, _, _, b'-', _, _, b'-', _, _] = text.as_bytes() else {
         return None;
     };
     if !text.is_ascii() {
         return None;
     }
-    let date = Date {
-        day: digits(&text[8..10])?,
-        month: digits(&text[5..7])?,
-        year: digits(&text[0..4])?,
-    };
-    let days = match date.month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap(date.year) => 29,
-        2 => 28,
-        _ => return None,
-    };
-    (1..=days).contains(&date.day).then_some(date)
+    NaiveDate::from_ymd_opt(
+        digits(&text[0..4])?,
+        digits(&text[5..7])?,
+        digits(&text[8..10])?,
+    )
 }
 
-/// Gregorian: every fourth year, except centuries not divisible by 400.
-const fn is_leap(year: u16) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
-fn time(text: &str) -> Option<Time> {
+/// A time of day such as `07:32:00`, with an optional fraction. Second 60 is
+/// a leap second, which chrono holds as second 59 plus one more second of
+/// nanoseconds.
+fn time(text: &str) -> Option<NaiveTime> {
     let (clock, fraction) = text
         .split_once('.')
         .map_or((text, None), |(clock, fraction)| (clock, Some(fraction)));
@@ -87,13 +79,17 @@ fn time(text: &str) -> Option<Time> {
     if !clock.is_ascii() {
         return None;
     }
-    let time = Time {
-        hour: digits(&clock[0..2])?,
-        minute: digits(&clock[3..5])?,
-        nanosecond: fraction.map_or(Some(0), nanoseconds)?,
-        second: digits(&clock[6..8])?,
+    let fraction_nanoseconds = fraction.map_or(Some(0), nanoseconds)?;
+    let (second, nanosecond) = match digits(&clock[6..8])? {
+        60 => (59, fraction_nanoseconds + 1_000_000_000),
+        written => (written, fraction_nanoseconds),
     };
-    (time.hour < 24 && time.minute < 60 && time.second <= 60).then_some(time)
+    NaiveTime::from_hms_nano_opt(
+        digits(&clock[0..2])?,
+        digits(&clock[3..5])?,
+        second,
+        nanosecond,
+    )
 }
 
 fn nanoseconds(fraction: &str) -> Option<u32> {
@@ -107,16 +103,22 @@ fn nanoseconds(fraction: &str) -> Option<u32> {
     padded.parse().ok()
 }
 
-fn date_time(text: &str) -> Option<DateTime> {
+/// A date, then `T`, `t` or a space, then a time: a `DateTime` when an offset
+/// follows, a `LocalDateTime` when none does.
+fn date_time(text: &str) -> Option<ScalarValue> {
     if !text.is_ascii() || text.len() < 19 || !matches!(text.as_bytes()[10], b'T' | b't' | b' ') {
         return None;
     }
-    let (clock, offset) = split_offset(&text[11..])?;
-    Some(DateTime {
-        date: date(&text[..10])?,
-        offset,
-        time: time(clock)?,
-    })
+    let (clock, minutes) = split_offset(&text[11..])?;
+    let local = NaiveDateTime::new(date(&text[..10])?, time(clock)?);
+    let Some(east) = minutes else {
+        return Some(ScalarValue::LocalDateTime(local));
+    };
+    let offset = FixedOffset::east_opt(i32::from(east) * 60)?;
+    local
+        .and_local_timezone(offset)
+        .single()
+        .map(ScalarValue::DateTime)
 }
 
 /// Splits `07:32:00-04:00` into the time and its offset in minutes.

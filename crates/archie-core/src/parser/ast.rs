@@ -6,6 +6,7 @@
 
 use core::ops::Range;
 
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
 
 use crate::parser::extension::{Extension, Markdown};
@@ -110,43 +111,17 @@ pub struct Scalar {
 #[non_exhaustive]
 pub enum ScalarValue {
     Boolean(bool),
-    Date(Date),
-    DateTime(DateTime),
+    Date(NaiveDate),
+    /// A date and time with its offset from UTC.
+    DateTime(DateTime<FixedOffset>),
     Float(f64),
     Integer(i64),
+    /// A date and time with no offset.
+    LocalDateTime(NaiveDateTime),
     /// YAML only: TOML has no null.
     Null,
     String(String),
-    Time(Time),
-}
-
-/// A calendar date, such as `2026-10-10`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Date {
-    pub day: u8,
-    pub month: u8,
-    pub year: u16,
-}
-
-/// A time of day, such as `07:32:00`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Time {
-    pub hour: u8,
-    pub minute: u8,
-    pub nanosecond: u32,
-    pub second: u8,
-}
-
-/// A date with a time, such as `2026-10-10T07:32:00-04:00`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct DateTime {
-    pub date: Date,
-    /// Minutes east of UTC; `None` when the value names no offset.
-    pub offset: Option<i16>,
-    pub time: Time,
+    Time(NaiveTime),
 }
 
 /// A stretch of markdown read by the same rules: the body, a list item's

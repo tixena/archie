@@ -158,12 +158,56 @@ fn a_plain_value_cannot_hold_a_colon_and_a_space() {
         )
     );
     assert_eq!(
-        refusal("---\ntags: [a: b]\n---\n"),
+        refusal("---\ntags: [a: b: c]\n---\n"),
         (
             "a plain value cannot hold `: `; quote it".to_owned(),
-            "a: b]"
+            "b: c]"
         )
     );
+}
+
+#[test]
+fn an_empty_entry_of_a_flow_collection_is_refused_at_its_comma() {
+    let refused = |source: &str| {
+        let error = parse(source).unwrap_err();
+        (error.message, error.span)
+    };
+    let before_comma = |at: usize| ("expected a value before `,`".to_owned(), at..at + 1);
+    assert_eq!(refused("---\nt: [a,,b]\n---\n"), before_comma(10));
+    assert_eq!(refused("---\nt: [,]\n---\n"), before_comma(8));
+    assert_eq!(refused("---\nt: [a,,]\n---\n"), before_comma(10));
+    assert_eq!(refused("---\nt: {a,,b}\n---\n"), before_comma(10));
+    assert_eq!(refused("---\nt: {,}\n---\n"), before_comma(8));
+}
+
+#[test]
+fn a_frontmatter_that_is_not_a_mapping_is_refused() {
+    let not_a_mapping = |at: &str| named("the frontmatter must be a mapping", at);
+    assert_eq!(failed("---\n[a, b]\n---\n"), not_a_mapping("[a, b]"));
+    assert_eq!(failed("---\nhello\n---\n"), not_a_mapping("hello"));
+    assert_eq!(
+        failed("---\n\"a\n  b\"\n---\n"),
+        not_a_mapping("\"a\n  b\"")
+    );
+    assert_eq!(failed("---\n- a\n---\n"), not_a_mapping("- a"));
+    assert_eq!(
+        refusal("---\n{a: 1}\nb: 2\n---\n"),
+        (
+            "expected the end of the frontmatter after the mapping".to_owned(),
+            "b: 2"
+        )
+    );
+}
+
+#[test]
+fn a_line_inside_a_quoted_string_must_be_indented_more_than_its_key() {
+    let refused = (
+        "a line inside a quoted string must be indented more than its key or `-`".to_owned(),
+        "b\"",
+    );
+    assert_eq!(refusal("---\nt: \"a\nb\"\n---\n"), refused);
+    assert_eq!(refusal("---\nowner:\n  t: 'a\n  b'\n---\n").0, refused.0);
+    assert_eq!(refusal("---\nitems:\n- \"a\nb\"\n---\n"), refused);
 }
 
 #[test]
@@ -202,6 +246,25 @@ fn a_toml_date_that_does_not_exist_is_refused() {
     assert_eq!(
         failed("+++\nat = 2026-04-31 10:00:00\n+++\n"),
         named("`2026-04-31` is not a value", "2026-04-31")
+    );
+    assert_eq!(
+        failed("+++\ncentury = 1900-02-29\n+++\n"),
+        named("`1900-02-29` is not a value", "1900-02-29")
+    );
+}
+
+#[test]
+fn a_toml_time_or_offset_out_of_range_is_refused() {
+    assert_eq!(
+        failed("+++\nat = 24:00:00\n+++\n"),
+        named("`24:00:00` is not a value", "24:00:00")
+    );
+    assert_eq!(
+        failed("+++\nat = 2026-10-10T07:32:00+24:00\n+++\n"),
+        named(
+            "`2026-10-10T07:32:00+24:00` is not a value",
+            "2026-10-10T07:32:00+24:00"
+        )
     );
 }
 

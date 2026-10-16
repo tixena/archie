@@ -5,7 +5,7 @@ use core::ops::Range;
 
 use super::{Rows, outline};
 use crate::parser::ast::{
-    Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Value,
+    Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, ScalarValue, TableCell, Value,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, With};
@@ -141,6 +141,30 @@ impl Extension for Fences {
     }
 }
 
+/// Claims every table cell, as the markdown block its span reads as.
+#[derive(Debug, Clone, PartialEq)]
+struct CellText;
+
+impl Extension for CellText {
+    type Node<T>
+        = MarkdownBlock<T>
+    where
+        T: Extension;
+
+    fn claim<T>(
+        construct: Construct<'_, T>,
+        context: &Context<'_>,
+    ) -> Option<Result<MarkdownBlock<T>, ParseError>>
+    where
+        T: Extension,
+    {
+        let Construct::TableCell(cell) = construct else {
+            return None;
+        };
+        Some(context.markdown::<T>(cell.span.clone()))
+    }
+}
+
 /// Claims every block quote, HTML block and thematic break, as a label.
 #[derive(Debug, Clone, PartialEq)]
 struct Raw;
@@ -205,26 +229,40 @@ where
     T: Extension,
 {
     let refused = || ParseError::new(NO_HEADER, block.content.clone());
+    let lines = content_lines(&block.content, context);
+    let fence = |line: &Range<usize>| context.source[line.clone()].trim() == "---";
+    if !lines.first().is_some_and(fence) {
+        return Err(refused());
+    }
+    let close = lines.iter().skip(1).position(fence).ok_or_else(refused)? + 1;
+    let header = &lines[1..close];
+    let header_range = header.first().zip(header.last()).map_or_else(
+        || lines[close].start..lines[close].start,
+        |(first, last)| first.start..last.end,
+    );
+    Ok(Comment {
+        body: context.markdown::<T>(lines[close].end..block.content.end)?,
+        header: read_yaml(context.source, header_range)?,
+    })
+}
+
+/// The lines of `range`: in a grid cell, its parts on the cell's lines;
+/// elsewhere, each line of the source it covers, with its line ending.
+fn content_lines(range: &Range<usize>, context: &Context<'_>) -> Vec<Range<usize>> {
+    if let Some(cell) = context.lines {
+        return cell
+            .iter()
+            .filter(|line| line.start <= range.end && range.start <= line.end)
+            .map(|line| line.start.max(range.start)..line.end.min(range.end))
+            .collect();
+    }
     let mut lines = Vec::new();
-    let mut at = block.content.start;
-    for line in context.source[block.content.clone()].split_inclusive('\n') {
+    let mut at = range.start;
+    for line in context.source[range.clone()].split_inclusive('\n') {
         lines.push(at..at + line.len());
         at += line.len();
     }
-    let fence = |line: &Range<usize>| context.source[line.clone()].trim() == "---";
-    let open = lines
-        .first()
-        .filter(|line| fence(line))
-        .ok_or_else(refused)?;
-    let close = lines
-        .iter()
-        .skip(1)
-        .find(|line| fence(line))
-        .ok_or_else(refused)?;
-    Ok(Comment {
-        body: context.markdown::<T>(close.end..block.content.end)?,
-        header: read_yaml(context.source, open.end..close.start)?,
-    })
+    lines
 }
 
 /// The code blocks among the blocks of the top-level sections of
@@ -285,6 +323,43 @@ where
             | Block::ThematicBreak(_) => None,
         })
         .unwrap()
+}
+
+/// The first cell of the first table among the blocks of the first section
+/// of `markdown`.
+fn first_cell<T>(markdown: &MarkdownBlock<T>) -> &TableCell<T>
+where
+    T: Extension,
+{
+    markdown.sections[0]
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::Table(table) => table.head.iter().chain(&table.rows).next()?.cells.first(),
+            Block::BlockQuote(_)
+            | Block::CodeBlock(_)
+            | Block::Html(_)
+            | Block::List(_)
+            | Block::Paragraph(_)
+            | Block::ThematicBreak(_) => None,
+        })
+        .unwrap()
+}
+
+/// A grid table of one row: `text` in its first cell, and `x` on each line
+/// of its second.
+fn in_grid_cell(text: &str) -> String {
+    let width = text.lines().map(str::len).max().unwrap_or_default();
+    let border = format!("+{}+---+\n", "-".repeat(width + 2));
+    let mut grid = border.clone();
+    for line in text.lines() {
+        grid.push_str("| ");
+        grid.push_str(line);
+        grid.push_str(&" ".repeat(width - line.len()));
+        grid.push_str(" | x |\n");
+    }
+    grid.push_str(&border);
+    grid
 }
 
 /// `text` with every line that holds text indented by `indent`.
@@ -820,4 +895,157 @@ fn an_extension_may_claim_emphasis_strong_inline_html_or_a_line_break() {
             Some("break")
         ]
     );
+}
+
+#[test]
+fn a_markdown_block_in_a_grid_cell_reads_only_that_cells_text() {
+    let source = "\
++-----------+---+
+| ```md     | x |
+| # A       | y |
+| text      | z |
+| ```       |   |
++-----------+---+
+";
+    let document = parse(source).unwrap();
+    let block = code_blocks(&first_cell(&document.body).body)[0];
+    assert_eq!(block.value, "# A\ntext");
+    let claimed = block.kind.0.as_deref().unwrap();
+    assert_eq!(
+        block_outline(claimed),
+        r#"MarkdownBlock
+  Section
+    Heading
+      Text "A"
+    Paragraph
+      Line
+        Text "text"
+"#
+    );
+    let spans = block_spans(source, claimed);
+    let expected = [
+        ("MarkdownBlock", "# A       | y |\n| text"),
+        ("Section", "# A       | y |\n| text"),
+        ("Heading", "# A"),
+        (r#"Text "A""#, "A"),
+        ("Paragraph", "text"),
+        ("Line", "text"),
+        (r#"Text "text""#, "text"),
+    ];
+    assert_eq!(
+        spans
+            .iter()
+            .map(|(label, text)| (label.as_str(), *text))
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
+fn a_markdown_block_in_a_grid_cell_counts_its_columns_from_the_cell() {
+    let grid = in_grid_cell("```md\n    code\n```");
+    let in_item = format!("- {}", &indented(&grid, "  ")[2..]);
+    for (source, in_list) in [(grid, false), (in_item, true)] {
+        let document = parse(&source).unwrap();
+        let body = if in_list {
+            first_item(&document.body)
+        } else {
+            &document.body
+        };
+        let block = code_blocks(&first_cell(body).body)[0];
+        assert_eq!(
+            block_outline(block.kind.0.as_deref().unwrap()),
+            r#"MarkdownBlock
+  Section
+    Heading
+    CodeBlock info="" value="code"
+"#,
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn a_comment_in_a_grid_cell_has_the_same_body_as_at_the_root() {
+    let body = "---\nid: abc\n---\n# Title\n\n- point\n\n      code\n";
+    let root = format!("```remargin\n{body}```\n");
+    let grid = in_grid_cell(&format!("```remargin\n{body}```"));
+    let options = ParseOptions::strict();
+    let root_document = parse_with::<Comments>(&root, &options).unwrap();
+    let grid_document = parse_with::<Comments>(&grid, &options).unwrap();
+    let at_root = code_blocks(&root_document.body)[0]
+        .kind
+        .0
+        .as_deref()
+        .and_then(second)
+        .unwrap();
+    let in_cell = code_blocks(&first_cell(&grid_document.body).body)[0]
+        .kind
+        .0
+        .as_deref()
+        .and_then(second)
+        .unwrap();
+    assert!(block_outline(&at_root.body).contains("Text \"Title\""));
+    assert_eq!(block_outline(&in_cell.body), block_outline(&at_root.body));
+    let header = |comment: &Comment<With<Comments>>| {
+        let mut rows = Rows::default();
+        rows.mapping(0, &comment.header);
+        outline(&rows.rows)
+    };
+    assert_eq!(header(in_cell), header(at_root));
+}
+
+#[test]
+fn a_markdown_block_in_a_pipe_cell_is_read_from_the_source() {
+    let source = "| ```md | x |\n|---|---|\n";
+    let document = parse(source).unwrap();
+    let block = code_blocks(&first_cell(&document.body).body)[0];
+    assert_eq!(block.content, 7..7);
+    let claimed = block.kind.0.as_deref().unwrap();
+    assert_eq!(block_outline(claimed), "MarkdownBlock\n");
+    assert_eq!(claimed.span, block.content);
+}
+
+#[test]
+fn a_markdown_block_in_a_grid_cell_inside_a_markdown_block_in_a_grid_cell_reads_its_own_cell() {
+    let inner = in_grid_cell("```md\n# B\ntext\n```");
+    let source = in_grid_cell(&format!("```md\n{inner}```"));
+    let document = parse(&source).unwrap();
+    let outer = code_blocks(&first_cell(&document.body).body)[0]
+        .kind
+        .0
+        .as_deref()
+        .unwrap();
+    let block = code_blocks(&first_cell(outer).body)[0];
+    assert_eq!(
+        block_outline(block.kind.0.as_deref().unwrap()),
+        r#"MarkdownBlock
+  Section
+    Heading
+      Text "B"
+    Paragraph
+      Line
+        Text "text"
+"#
+    );
+}
+
+#[test]
+fn an_extension_that_claims_a_grid_cell_reads_only_that_cells_text() {
+    let source = in_grid_cell("# A\n\ntext");
+    let document = parse_with::<CellText>(&source, &ParseOptions::default()).unwrap();
+    let cell = first_cell(&document.body);
+    let read = cell.kind.0.as_deref().and_then(second).unwrap();
+    assert_eq!(
+        block_outline(read),
+        r#"MarkdownBlock
+  Section
+    Heading
+      Text "A"
+    Paragraph
+      Line
+        Text "text"
+"#
+    );
+    assert_eq!(block_outline(read), block_outline(&cell.body));
 }

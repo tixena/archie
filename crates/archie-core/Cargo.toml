@@ -17,6 +17,9 @@ thiserror.workspace = true
 # Insertion-ordered map
 indexmap.workspace = true
 
+# Dates and times, with no clock
+chrono.workspace = true
+
 # Unicode full case folding, for link labels
 unicase.workspace = true
 
