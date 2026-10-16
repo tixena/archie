@@ -221,14 +221,17 @@ A value's type comes from how it is written:
 ```text
 yaml          := mapping? | flow_mapping
 mapping       := entry+
-entry         := key ":" ( node | NEWLINE block? )
-sequence      := ( "-" ( node | mapping | NEWLINE indented? ) )+
+entry         := key ":" value
+               | "?" value ( ":" value )?
+value         := node | NEWLINE block?
+sequence      := ( "-" ( node | mapping | sequence | NEWLINE indented? ) )+
 node          := TAG? inline NEWLINE
                | TAG? BLOCK_SCALAR
                | TAG NEWLINE block?
 block         := indented | sequence
 indented      := INDENT mapping DEDENT
                | INDENT sequence DEDENT
+               | INDENT node DEDENT
 inline        := flow_sequence | flow_mapping | double_quoted | single_quoted | PLAIN
 flow_sequence := "[" ( flow_entry ( "," flow_entry )* ","? )? "]"
 flow_entry    := flow_key ":" flow_node? | flow_node
@@ -246,27 +249,64 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
   an earlier indentation. Every key of one mapping starts at the same column.
 - A `block` may be a sequence written at the same column as its key (its third
   form).
+- After a key or a bare `-`, the next line indented more than it may hold any
+  value: a mapping, a list, a scalar, a quoted string, a flow collection, a block
+  scalar or a tagged value. `title:` then `  Notes` is `"Notes"`.
 - A key with nothing after its colon and no block under it is null, and so is a `-`
   with nothing after it and no block indented under it, and a pair of a flow
   mapping with no `:` or nothing after it.
-- A list entry whose line goes on with a plain `key:` holds a mapping. Its first key is on
-  the `-` line, and its other keys start at that key's column on the lines below.
+- In a list entry, a tag that ends its line takes only the block indented more than
+  the `-`. With nothing there, its empty value is checked against the tag:
+  `- !!seq` then `- x` fails the file with
+  ``an empty value is not a value of the tag `!!seq` ``.
+- A list entry whose line goes on with a plain, quoted or tagged `key:`, or with an
+  explicit key, holds a mapping. Its first key is on the `-` line, and its other keys
+  start at that key's column on the lines below. `- !!str k: v` then `  m: n` is
+  `[{k: v, m: n}]`.
+- A list entry whose line goes on with `-` and a space, or with a `-` that ends the
+  line, holds a list. Its first entry is on the `-` line, and its other entries
+  start at the second `-`'s column on the lines below. `- - a` then `  - b` then
+  `- c` is `[[a, b], c]`.
+- An explicit key is written after `?` and a space or a tab, or after a `?` that
+  ends its line, at the column of the mapping's keys. The key is a scalar, plain,
+  quoted or tagged, on the `?` line or on the lines indented under it. A mapping or
+  a list there fails the file with `expected a key`: a key is a string. An optional
+  next line at the `?`'s column that starts with `:` and a space or a tab, or with
+  a `:` that ends the line, gives the pair's value, read as the value after a
+  key's `:` is. With no such line, the value is null. `? k` then `: v` is
+  `{k: v}`, and `? k` alone is `{k: null}`.
 - `PLAIN_KEY` runs to the first `:` followed by a space or by the end of the line.
   `FLOW_KEY` runs to the first `:` followed by a space or by one of `, [ ] { }`, or
   to the first of `, [ ] { }`.
-- `PLAIN` runs to the end of the line, or to a comment (a space then `#`); inside a
-  flow collection it stops at `,`, `[`, `]`, `{` or `}`. It cannot hold `: ` or end
-  with `:`; such a value fails the file with ``a plain value cannot hold `: `; quote
-  it``.
+- Spaces may sit between a quoted key and its `:`: `"a" : 1` is `{a: 1}`.
+- Outside a flow collection, a space, a tab or the end of the line must follow the
+  `:` of a key. `"a":1` fails the file with ``expected a space after the `:` ``,
+  and `{"a":1}` is `{a: 1}`.
+- A comment starts at a `#` that follows a space or a tab.
+- `PLAIN` runs to the end of the line, or to a comment; inside a flow collection it
+  stops at `,`, `[`, `]`, `{` or `}`. It cannot hold `: ` or end with `:`; such a
+  value fails the file with ``a plain value cannot hold `: `; quote it``.
+- A `PLAIN` cannot start with `@`, `` ` ``, `%`, `,`, `]` or `}`, nor with `?`, `:`
+  or `-` followed by a space, a tab or the end of the line. Such a value fails the
+  file with ``a plain value cannot start with `@`; quote it``, naming the
+  character, or with ``a plain value cannot start with `-` and a space; quote it``
+  when a space or a tab follows. `?x`, `:x` and `-x` are text. Inside a flow
+  collection, `,`, `]` and `}` end the entry instead.
 - Outside a flow collection, a `PLAIN` whose line has no comment goes on over each
   following line that is indented more than its key or `-`, is not a comment and
   holds no `key:`; blank lines may sit between them, and a comment ends the last
-  one. The lines are folded by YAML 1.2.2: each loses the spaces around it, a line
-  break between two lines of text is a space, and each blank line between them is
-  a `\n`. `title: a long` then `  title` is `"a long title"`.
+  one. Inside a flow collection, a `PLAIN` goes on over the following lines in the
+  same way, up to the next `,`, `[`, `]`, `{` or `}`. The lines are folded by
+  YAML 1.2.2: each loses the spaces around it, a line break between two lines of
+  text is a space, and each blank line between them is a `\n`. `title: a long`
+  then `  title` is `"a long title"`.
 - A flow collection may run over several lines: line breaks and comments may sit
   between its entries, and a `,` may follow the last one. A `,` where an entry
   should start fails the file with ``expected a value before `,` ``.
+- Each line of a flow collection must be indented more than its key or `-`, the
+  line of its closing bracket too; a line indented less fails the file with
+  `a line of a flow collection must be indented more than its key`. Inside a flow
+  mapping that is the whole frontmatter, a line may start at any column.
 - A `flow_entry` of a flow list that is a key followed by `:` is a mapping of one
   pair: `[a: b, c]` is a list holding `{a: b}` and `c`.
 - `double_quoted` reads the escapes `\0 \a \b \t \n \v \f \r \e \" \/ \\`, a
@@ -274,12 +314,14 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
   `single_quoted`, `''` is one quote.
 - A quoted value, but not a quoted key, may go on over several lines, folded as a
   `PLAIN` is; inside `double_quoted`, a `\` at the end of a line removes the line
-  break. Outside a flow collection, each of its lines must be indented more than
-  its key or `-`.
-- Blank lines and lines holding only a comment are skipped.
+  break. Each of its lines must be indented more than its key or `-`, inside a flow
+  collection too, except inside a flow mapping that is the whole frontmatter.
+- Blank lines and lines holding only a comment are skipped. A line holding only a
+  comment may have tabs before its `#`.
 - A key written more than once becomes one key holding a list of every value
   written for it, by the same rule as in TOML: `tags: [a, b]` then `tags: c` is
-  `tags: [a, b, c]`.
+  `tags: [a, b, c]`. An explicit key counts as written: `? k` then `: a` then
+  `k: b` is `k: [a, b]`.
 - An anchor (`&name`) or an alias (`*name`), on a value or on a key, fails the file
   with `anchors and aliases are not read`.
 
@@ -335,12 +377,13 @@ A `PLAIN` value's type comes from how it is written:
 | `Mapping` written as lines | The first key | The end of the last value written |
 | `Mapping` with no pairs | Empty, on the line after the opening delimiter | |
 | `Mapping` written as `{ ... }` | `{` | `}` |
-| `Pair` | Its key | The end of its value, where the key is first written; `repeats` holds the same range for each later occurrence |
+| `Pair` | Its key, or the `?` of an explicit key | The end of its value, where the key is first written; `repeats` holds the same range for each later occurrence |
 | `Sequence` written as `[ ... ]` | `[` | `]` |
 | `Sequence` of the values of a key written more than once | The first value's start | The first value's end |
 | `Sequence` written as `-` lines | The first `-` | The end of the last value |
 | `Scalar` | Its first character, quotes included | Its last |
 | `Scalar` that is null because nothing is written | Empty, right after the `:` or the `-` | |
+| `Scalar` that is null because an explicit key has no `:` line | Empty, at the end of the key | |
 | `Scalar` written as a block scalar | `\|` or `>` | The end of its last line of text, or of its header when it has none |
 | `Scalar`, `Mapping` or `Sequence` after a tag | The value, without its tag | |
 | `Body` | The line after the frontmatter, or the first byte of a file with none | The last byte of the file |

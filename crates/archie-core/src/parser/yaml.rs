@@ -100,8 +100,13 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
 /// The span of the value at the cursor when it fills its line, as a scalar
 /// or a list does and a key does not.
 fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Range<usize>> {
-    let value = inline_value(cursor, Context::Key(indent)).ok()?;
-    end_of_line(cursor).ok()?;
+    let value = if is_dash(cursor, 0) {
+        block_sequence(cursor, cursor.pos() - indent, indent).ok()?
+    } else {
+        let value = inline_value(cursor, Context::Key(indent)).ok()?;
+        end_of_line(cursor).ok()?;
+        value
+    };
     Some(value.span().clone())
 }
 
@@ -168,25 +173,56 @@ fn entry_mapping(cursor: &mut Cursor<'_>, column: usize) -> Result<Mapping, Pars
     Ok(finish(pairs, empty_at))
 }
 
+/// One pair of a block mapping whose keys are at column `indent`: a `key:`
+/// and its value, or an explicit key after `?`.
 fn entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
+    if is_explicit_key(cursor) {
+        return explicit_entry(cursor, indent, pairs);
+    }
     let start = cursor.pos();
     let name = key(cursor)?;
+    cursor.skip_spaces();
     if !cursor.eat(b':') {
         return cursor.error("expected `:` after the key");
     }
-    let after_colon = cursor.pos();
-    cursor.skip_spaces();
-    let value = if at_line_end(cursor) {
-        end_of_line(cursor)?;
-        nested(cursor, Context::Key(indent), after_colon)?
+    if !separated_at(cursor, 0) {
+        return cursor.error("expected a space after the `:`");
+    }
+    let value = indicated_value(cursor, indent)?;
+    let pair = Pair {
+        repeats: Vec::new(),
+        span: start..value.span().end,
+        value,
+    };
+    insert(pairs, name, pair);
+    Ok(())
+}
+
+/// A pair whose key follows a `?` at column `indent`. Its value follows a
+/// `:` at that column on the next line with content; with none, it is null
+/// at the end of the key.
+fn explicit_entry(
+    cursor: &mut Cursor<'_>,
+    indent: usize,
+    pairs: &mut IndexMap<String, Pair>,
+) -> Result<(), ParseError> {
+    let start = cursor.pos();
+    cursor.bump();
+    let key = indicated_value(cursor, indent)?;
+    let key_end = key.span().end;
+    let name = explicit_key(cursor, key)?;
+    let value = if next_line(cursor) == Some(indent)
+        && cursor.peek_at(indent) == Some(b':')
+        && separated_at(cursor, indent + 1)
+    {
+        cursor.set_pos(cursor.pos() + indent + 1);
+        indicated_value(cursor, indent)?
     } else {
-        let inline = inline_value(cursor, Context::Key(indent))?;
-        end_of_line(cursor)?;
-        inline
+        null(key_end)
     };
     let pair = Pair {
         repeats: Vec::new(),
@@ -195,6 +231,31 @@ fn entry(
     };
     insert(pairs, name, pair);
     Ok(())
+}
+
+/// The text of an explicit key, which must be a scalar.
+fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Result<String, ParseError> {
+    let span = match key {
+        Value::Scalar(scalar) => return Ok(scalar_text(cursor, scalar.value, &scalar.span)),
+        Value::Mapping(mapping) => mapping.span,
+        Value::Sequence(sequence) => sequence.span,
+    };
+    Err(ParseError::new("expected a key", span.start..span.start))
+}
+
+/// The value after the `:` of a key at column `indent`, or after a `?`
+/// there, with the cursor right after the indicator: the rest of the line,
+/// what the lines under it hold, or null right after the indicator.
+fn indicated_value(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, ParseError> {
+    let after = cursor.pos();
+    cursor.skip_spaces();
+    if at_line_end(cursor) {
+        end_of_line(cursor)?;
+        return nested(cursor, Context::Key(indent), after);
+    }
+    let value = inline_value(cursor, Context::Key(indent))?;
+    end_of_line(cursor)?;
+    Ok(value)
 }
 
 fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
@@ -223,31 +284,33 @@ fn plain_key_length(line: &str) -> Option<usize> {
         .filter(|&at| at > 0)
 }
 
-/// Whether the cursor is on a `key:` that opens a mapping: a plain key, or
-/// a quoted one followed by `:`.
+/// Whether the cursor is on a pair that opens a mapping: an explicit key, or
+/// a `key:` after a tag or not, whose key is plain or quoted.
 fn starts_mapping(cursor: &mut Cursor<'_>) -> bool {
-    match cursor.peek() {
-        Some(b'"' | b'\'') => {
-            let start = cursor.pos();
-            let is_key = key(cursor).is_ok() && cursor.peek() == Some(b':');
-            cursor.set_pos(start);
-            is_key
-        }
-        Some(b'[' | b'{' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
-        Some(_) | None => plain_key_length(cursor.rest_of_line()).is_some(),
+    if is_explicit_key(cursor) {
+        return true;
     }
-}
-
-/// Whether the cursor is on a `key:` that opens a mapping, after a tag or
-/// not.
-fn starts_block_mapping(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
     if cursor.peek() == Some(b'!') && tag(cursor).is_ok() {
         cursor.skip_spaces();
     }
-    let is_mapping = starts_mapping(cursor);
+    let is_mapping = match cursor.peek() {
+        Some(b'"' | b'\'') => {
+            let is_key = key(cursor).is_ok();
+            cursor.skip_spaces();
+            is_key && cursor.peek() == Some(b':')
+        }
+        Some(b'[' | b'{' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
+        Some(_) | None => plain_key_length(cursor.rest_of_line()).is_some(),
+    };
     cursor.set_pos(start);
     is_mapping
+}
+
+/// Whether the cursor is on a `?` that starts an explicit key: one followed
+/// by a space, a tab or the end of the line.
+fn is_explicit_key(cursor: &Cursor<'_>) -> bool {
+    cursor.peek() == Some(b'?') && separated_at(cursor, 1)
 }
 
 /// The value of a key or a list entry with nothing after it on its line:
@@ -262,12 +325,12 @@ fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<V
     if !compact && context.column().is_some_and(|column| found <= column) {
         return Ok(null(null_at));
     }
-    if is_list {
-        return block_sequence(cursor, found);
-    }
     let line_start = cursor.pos();
+    if is_list {
+        return block_sequence(cursor, line_start, found);
+    }
     cursor.set_pos(line_start + found);
-    if starts_block_mapping(cursor) {
+    if starts_mapping(cursor) {
         cursor.set_pos(line_start);
         return Ok(Value::Mapping(block_mapping(cursor, found)?));
     }
@@ -276,38 +339,62 @@ fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<V
     Ok(value)
 }
 
-fn block_sequence(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, ParseError> {
-    let start = cursor.pos() + indent;
-    let mut end = start;
+/// A block list whose first `-` is at column `indent` of the line starting
+/// at `line_start`, and whose other entries are the lines below with a `-`
+/// at that column.
+fn block_sequence(
+    cursor: &mut Cursor<'_>,
+    line_start: usize,
+    indent: usize,
+) -> Result<Value, ParseError> {
+    let start = line_start + indent;
+    let mut entry_line = line_start;
     let mut items = Vec::new();
-    while let Some(found) = next_line(cursor) {
+    loop {
+        items.push(list_entry(cursor, entry_line, indent)?);
+        let Some(found) = next_line(cursor) else {
+            break;
+        };
         if found > indent {
             return cursor.error("this line is indented more than the list above it");
         }
         if found < indent || !is_dash(cursor, found) {
             break;
         }
-        let line_start = cursor.pos();
-        cursor.set_pos(line_start + indent + 1);
-        let after_dash = cursor.pos();
-        cursor.skip_spaces();
-        let item = if at_line_end(cursor) {
-            end_of_line(cursor)?;
-            nested(cursor, Context::Entry(indent), after_dash)?
-        } else if starts_mapping(cursor) {
-            Value::Mapping(entry_mapping(cursor, cursor.pos() - line_start)?)
-        } else {
-            let value = inline_value(cursor, Context::Entry(indent))?;
-            end_of_line(cursor)?;
-            value
-        };
-        end = item.span().end;
-        items.push(item);
+        entry_line = cursor.pos();
     }
+    let end = items.last().map_or(start, |item| item.span().end);
     Ok(Value::Sequence(Sequence {
         items,
         span: start..end,
     }))
+}
+
+/// The value of the list entry whose `-` is at column `indent` of the line
+/// starting at `line_start`. A `-` after it starts a list at its own column,
+/// and a `key:` or a `?` there a mapping.
+fn list_entry(
+    cursor: &mut Cursor<'_>,
+    line_start: usize,
+    indent: usize,
+) -> Result<Value, ParseError> {
+    cursor.set_pos(line_start + indent + 1);
+    let after_dash = cursor.pos();
+    cursor.skip_spaces();
+    let column = cursor.pos() - line_start;
+    if at_line_end(cursor) {
+        end_of_line(cursor)?;
+        return nested(cursor, Context::Entry(indent), after_dash);
+    }
+    if is_dash(cursor, 0) {
+        return block_sequence(cursor, line_start, column);
+    }
+    if starts_mapping(cursor) {
+        return Ok(Value::Mapping(entry_mapping(cursor, column)?));
+    }
+    let value = inline_value(cursor, Context::Entry(indent))?;
+    end_of_line(cursor)?;
+    Ok(value)
 }
 
 /// A value that starts at the cursor. It ends on its own line, except a flow
@@ -516,6 +603,7 @@ fn skip_flow_space(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<(),
 /// runs to its end goes on over the lines below it that are indented more
 /// than its key or `-`.
 fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
+    no_indicator(cursor, context)?;
     let start = cursor.pos();
     let line = cursor.rest_of_line();
     let bounded = plain_part(line, context);
@@ -534,6 +622,33 @@ fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError>
         span: start..end,
         value: scalar::yaml(&folded(cursor.slice(start..end))),
     }))
+}
+
+/// Refuses a plain scalar that starts with `@`, a backtick, `%`, `,`, `]` or
+/// `}`, or with `?`, `:` or `-` followed by a space, a tab or the end of the
+/// line. Inside a flow collection, `,`, `]` and `}` end the entry instead.
+fn no_indicator(cursor: &Cursor<'_>, context: Context) -> Result<(), ParseError> {
+    let Some(first) = cursor.peek() else {
+        return Ok(());
+    };
+    let refused = match first {
+        b',' | b']' | b'}' => !matches!(context, Context::Flow(_)),
+        b'@' | b'`' | b'%' => true,
+        b'?' | b':' | b'-' => separated_at(cursor, 1),
+        _ => false,
+    };
+    if !refused {
+        return Ok(());
+    }
+    let spaced =
+        matches!(first, b'?' | b':' | b'-') && matches!(cursor.peek_at(1), Some(b' ' | b'\t'));
+    let and_space = if spaced { " and a space" } else { "" };
+    let message = format!(
+        "a plain value cannot start with `{}`{and_space}; quote it",
+        char::from(first)
+    );
+    let at = cursor.pos();
+    Err(ParseError::new(&message, at..at + 1))
 }
 
 /// The start of `line` that a plain scalar may hold: up to a comment, and
@@ -853,17 +968,7 @@ fn retag(cursor: &Cursor<'_>, tag: &Tag, value: Value) -> Result<Value, ParseErr
         Value::Sequence(sequence) => return Err(misfit("a list", name, sequence.span)),
         Value::Scalar(scalar) => scalar,
     };
-    let text = match scalar.value {
-        ScalarValue::String(text) => text,
-        ScalarValue::Boolean(_)
-        | ScalarValue::Date(_)
-        | ScalarValue::DateTime(_)
-        | ScalarValue::Float(_)
-        | ScalarValue::Integer(_)
-        | ScalarValue::LocalDateTime(_)
-        | ScalarValue::Null
-        | ScalarValue::Time(_) => folded(cursor.slice(scalar.span.clone())),
-    };
+    let text = scalar_text(cursor, scalar.value, &scalar.span);
     let Some(typed) = typed(name, &text) else {
         if scalar.span.is_empty() {
             return Err(misfit("an empty value", name, tag.span.clone()));
@@ -874,6 +979,22 @@ fn retag(cursor: &Cursor<'_>, tag: &Tag, value: Value) -> Result<Value, ParseErr
         span: scalar.span,
         value: typed,
     }))
+}
+
+/// A scalar's text: a string's own, or the text any other value is written
+/// as at `span`.
+fn scalar_text(cursor: &Cursor<'_>, value: ScalarValue, span: &Range<usize>) -> String {
+    match value {
+        ScalarValue::String(text) => text,
+        ScalarValue::Boolean(_)
+        | ScalarValue::Date(_)
+        | ScalarValue::DateTime(_)
+        | ScalarValue::Float(_)
+        | ScalarValue::Integer(_)
+        | ScalarValue::LocalDateTime(_)
+        | ScalarValue::Null
+        | ScalarValue::Time(_) => folded(cursor.slice(span.clone())),
+    }
 }
 
 /// The value `text` has under the scalar tag `!!name`, read by the rules of
@@ -1039,6 +1160,15 @@ fn is_dash(cursor: &Cursor<'_>, offset: usize) -> bool {
             cursor.peek_at(offset + 1),
             None | Some(b' ' | b'\n' | b'\r')
         )
+}
+
+/// Whether a space, a tab or the end of the line is `offset` bytes after the
+/// cursor.
+fn separated_at(cursor: &Cursor<'_>, offset: usize) -> bool {
+    matches!(
+        cursor.peek_at(offset),
+        None | Some(b' ' | b'\t' | b'\n' | b'\r')
+    )
 }
 
 fn at_line_end(cursor: &Cursor<'_>) -> bool {

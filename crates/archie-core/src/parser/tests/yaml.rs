@@ -1351,3 +1351,257 @@ fn a_value_over_several_lines_spans_from_its_first_text_to_its_last() {
         ],
     );
 }
+
+#[test]
+fn a_plain_value_may_start_with_a_question_mark_a_colon_or_a_dash_before_its_text() {
+    check(
+        "---\na: ?x\nb: :x\nc: -x\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "?x"
+      Pair key=b
+        Scalar String ":x"
+      Pair key=c
+        Scalar String "-x"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_list_entry_may_hold_a_mapping_whose_first_key_is_tagged() {
+    check(
+        "---\nitems:\n- !!str k: v\n  m: n\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=k
+              Scalar String "v"
+            Pair key=m
+              Scalar String "n"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_list_entry_may_hold_a_list_that_starts_on_its_dash_line() {
+    check(
+        "---\nitems:\n- - a\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Scalar String "a"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- - a\n  - b\n- c\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Scalar String "a"
+            Scalar String "b"
+          Scalar String "c"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- - - a\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Sequence
+              Scalar String "a"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n-   - a\n    - b\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Scalar String "a"
+            Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- - a: 1\n    b: 2\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Mapping
+              Pair key=a
+                Scalar Integer 1
+              Pair key=b
+                Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn spaces_may_sit_between_a_quoted_key_and_its_colon() {
+    let one = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\n\"a\" : 1\n---\n", one);
+    check("---\n'a' :  1\n---\n", one);
+    check("---\n\"a\" :\n  1\n---\n", one);
+    check(
+        "---\nitems:\n- \"a\" : 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_value_may_follow_a_quoted_key_colon_with_no_space_inside_a_flow_mapping() {
+    check(
+        "---\nt: {\"a\":1}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=t
+        Mapping
+          Pair key=a
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn an_explicit_key_takes_its_value_from_the_colon_line_under_it() {
+    check(
+        "---\n? k\n: v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\n? k\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Scalar Null
+  MarkdownBlock
+",
+    );
+    check(
+        "---\n? \"a b\"\n: 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a b
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\n? k\n:\n  - x\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Sequence
+          Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na:\n  ? k\n  : v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=k
+            Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\nitems:\n- ? k\n  : v\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=k
+              Scalar String "v"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn an_explicit_key_written_again_as_a_plain_key_holds_a_list_of_both_values() {
+    check(
+        "---\n? k\n: a\nk: b\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k repeats=1
+        Sequence
+          Scalar String "a"
+          Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn an_explicit_key_pair_spans_from_its_question_mark_to_its_value() {
+    let whole = "---\n? k\n: v\n---\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("Frontmatter format=Yaml", "---\n? k\n: v\n---"),
+            ("Mapping", "? k\n: v"),
+            ("Pair key=k", "? k\n: v"),
+            (r#"Scalar String "v""#, "v"),
+            ("MarkdownBlock", ""),
+        ],
+    );
+}
