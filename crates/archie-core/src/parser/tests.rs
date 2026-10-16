@@ -50,6 +50,10 @@ impl Rows<'_> {
         E: Extension,
     {
         match block {
+            Block::BlockQuote(block_quote) => {
+                let label = format!("BlockQuote {:?}", block_quote.value);
+                self.push(depth, label, &block_quote.span);
+            }
             Block::CodeBlock(code_block) => {
                 let claimed = if code_block.kind.0.is_some() {
                     " claimed"
@@ -61,6 +65,9 @@ impl Rows<'_> {
                     code_block.info, code_block.value
                 );
                 self.push(depth, label, &code_block.span);
+            }
+            Block::Html(html) => {
+                self.push(depth, format!("Html {:?}", html.value), &html.span);
             }
             Block::List(list) => {
                 let start = list
@@ -111,6 +118,9 @@ impl Rows<'_> {
                         self.markdown_block(depth + 3, &cell.body);
                     }
                 }
+            }
+            Block::ThematicBreak(thematic_break) => {
+                self.push(depth, "ThematicBreak".to_owned(), &thematic_break.span);
             }
         }
     }

@@ -2,13 +2,7 @@ Document
   MarkdownBlock
     Section
       Heading
-      Paragraph
-        Line
-          Text "<p align=\"center\">"
-        Line
-          Text "<img src=\"logo.svg\" width=\"120\" alt=\"logo\">"
-        Line
-          Text "</p>"
+      Html "<p align=\"center\">\n  <img src=\"logo.svg\" width=\"120\" alt=\"logo\">\n</p>"
     Section
       Heading
         Text "quill"

@@ -31,15 +31,7 @@ Document
           Text "Admonitions are not read; these lines stay text."
         Line
           Text ":::"
-      Paragraph
-        Line
-          Text "<Tabs>"
-        Line
-          Text "<TabItem value=\"toml\" label=\"TOML\">TOML frontmatter</TabItem>"
-        Line
-          Text "<TabItem value=\"yaml\" label=\"YAML\">YAML frontmatter</TabItem>"
-        Line
-          Text "</Tabs>"
+      Html "<Tabs>\n  <TabItem value=\"toml\" label=\"TOML\">TOML frontmatter</TabItem>\n  <TabItem value=\"yaml\" label=\"YAML\">YAML frontmatter</TabItem>\n</Tabs>"
       Paragraph
         Line
           Text "Read the "

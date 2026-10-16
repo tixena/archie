@@ -229,3 +229,41 @@ fn toml_header_dotted_key_and_multi_line_string_spans() {
         ],
     );
 }
+
+#[test]
+fn a_block_quote_a_break_and_html_span_their_lines_and_a_heading_its_underline() {
+    let whole = "> a\n> b\n\nT\n===\n\n***\n\n<div>\nx\n</div>\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "> a\n> b"),
+            ("Heading", ""),
+            (r#"BlockQuote "a\nb""#, "> a\n> b"),
+            ("Section", "T\n===\n\n***\n\n<div>\nx\n</div>"),
+            ("Heading", "T\n==="),
+            (r#"Text "T""#, "T"),
+            ("ThematicBreak", "***"),
+            (r#"Html "<div>\nx\n</div>""#, "<div>\nx\n</div>"),
+        ],
+    );
+}
+
+#[test]
+fn the_text_of_a_heading_over_two_lines_spans_both() {
+    let whole = "first\n  second `code`\n---\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", "first\n  second `code`\n---"),
+            ("Heading", ""),
+            ("Section", "first\n  second `code`\n---"),
+            ("Heading", "first\n  second `code`\n---"),
+            (r#"Text "first second ""#, "first\n  second "),
+            (r#"Code "code""#, "`code`"),
+        ],
+    );
+}

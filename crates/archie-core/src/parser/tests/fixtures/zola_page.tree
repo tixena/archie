@@ -34,9 +34,7 @@ Document
       Paragraph
         Line
           Text "Short introduction shown in listings."
-      Paragraph
-        Line
-          Text "<!-- more -->"
+      Html "<!-- more -->"
     Section
       Heading
         Text "Releases"

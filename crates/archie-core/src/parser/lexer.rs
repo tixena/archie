@@ -1,9 +1,12 @@
 //! Body lines into tokens. The indentation that says which list item a line
-//! belongs to becomes explicit item starts and ends, and a code block is read
-//! whole, so the grammar over the tokens is context-free.
+//! belongs to becomes explicit item starts and ends, and a code block, a block
+//! quote, an HTML block and a link definition are each read whole, so the
+//! grammar over the tokens is context-free.
 
 use core::ops::Range;
 
+use crate::parser::definition;
+use crate::parser::html::{self, End};
 use crate::parser::line::{line_at, line_from};
 use crate::parser::table::{self, TableToken};
 
@@ -66,19 +69,56 @@ pub struct Token {
 
 pub enum TokenKind {
     Blank,
+    BlockQuote {
+        value: String,
+    },
     CodeBlock {
         content: Range<usize>,
         info: String,
         value: String,
     },
+    /// A link reference definition: its label as written and its
+    /// destination.
+    Definition {
+        label: String,
+        target: String,
+    },
     Heading {
         level: u8,
         text: Range<usize>,
+    },
+    Html {
+        value: String,
     },
     ItemEnd,
     ItemStart(Marker),
     Table(TableToken),
     Text,
+    ThematicBreak,
+    /// `===` or `---` under text: the level of the heading it makes.
+    Underline(u8),
+}
+
+/// The block a line starts, other than a paragraph.
+enum Start {
+    Break,
+    Fence(usize),
+    Heading {
+        level: u8,
+        text_at: usize,
+    },
+    Html(html::Start),
+    Item {
+        marker: Marker,
+        width: usize,
+    },
+    Quote,
+    Table {
+        next: usize,
+        span: Range<usize>,
+        table: TableToken,
+    },
+    Underline(u8),
 }
 
 struct Lexer<'src> {
@@ -92,6 +132,31 @@ struct Lexer<'src> {
 }
 
 impl Lexer<'_> {
+    /// Reads a block quote whose first `>` is at `at`: that line, then each
+    /// line whose text starts with `>` within three columns of the
+    /// enclosing item's text. Each line loses its `>` and one space after it.
+    fn block_quote(&mut self, at: usize) {
+        let source = self.source;
+        let level = self.level();
+        let first = line_at(source, at);
+        let mut lines = vec![unquote(&source[at..first.end])];
+        let mut end = first.end;
+        while self.pos < source.len() {
+            let line = line_from(source, self.pos, self.base);
+            let text = &source[line.start..line.end];
+            let content = text.trim_start_matches(' ');
+            let indent = text.len() - content.len();
+            if indent < level || indent >= level + 4 || !content.starts_with('>') {
+                break;
+            }
+            lines.push(unquote(content));
+            end = line.end;
+            self.pos = line.next;
+        }
+        let value = lines.join("\n");
+        self.push(TokenKind::BlockQuote { value }, at..end);
+    }
+
     /// Ends every open item whose content column is to the right of `column`.
     fn close_items(&mut self, column: usize, at: usize) {
         while self.levels.last().is_some_and(|&level| level > column) {
@@ -154,44 +219,143 @@ impl Lexer<'_> {
             }
             return;
         }
-        let rest = &self.source[at..end];
-        if let Some((heading_level, text_at)) = heading(rest) {
-            let text = at + text_at..end;
-            let kind = TokenKind::Heading {
+        match self.start(line_start, at..end, self.pos, continues) {
+            Some(Start::Break) => self.push(TokenKind::ThematicBreak, at..end),
+            Some(Start::Fence(ticks)) => self.code_block(column, at, end, ticks),
+            Some(Start::Heading {
                 level: heading_level,
-                text,
-            };
-            self.push(kind, at..end);
-        } else if let Some(ticks) = fence(rest) {
-            self.code_block(column, at, end, ticks);
-        } else if let Some((marker, width)) = list_marker(rest).filter(|&(marker, width)| {
-            // An empty item never interrupts a paragraph.
-            !continues || (marker.interrupts() && !rest[width..].trim_start_matches(' ').is_empty())
-        }) {
-            let after = &rest[width..];
-            let inner = after.trim_start_matches(' ');
-            let spaces = after.len() - inner.len();
-            // One to four spaces set the content column; none, or five or
-            // more, put it one space past the marker.
-            let gap = if spaces == 0 || spaces > 4 { 1 } else { spaces };
-            self.push(TokenKind::ItemStart(marker), at..at + width);
-            self.levels.push(column + width + gap);
-            if !inner.is_empty() {
-                self.content(line_start, end - inner.len(), end, false);
+                text_at,
+            }) => {
+                let kind = TokenKind::Heading {
+                    level: heading_level,
+                    text: at + text_at..end,
+                };
+                self.push(kind, at..end);
             }
-        } else if let Some((table, span, next)) = table::read(
-            self.source,
-            line_start,
-            at..end,
-            self.pos,
-            self.level(),
-            self.base,
-        ) {
-            self.pos = next;
-            self.push(TokenKind::Table(table), span);
-        } else {
-            self.push(TokenKind::Text, at..end);
+            Some(Start::Html(start)) => self.html(line_start, at, start),
+            Some(Start::Item { marker, width }) => {
+                let after = &self.source[at + width..end];
+                let inner = after.trim_start_matches(' ');
+                let spaces = after.len() - inner.len();
+                // One to four spaces set the content column; none, or five or
+                // more, put it one space past the marker.
+                let gap = if spaces == 0 || spaces > 4 { 1 } else { spaces };
+                self.push(TokenKind::ItemStart(marker), at..at + width);
+                self.levels.push(column + width + gap);
+                if !inner.is_empty() {
+                    self.content(line_start, end - inner.len(), end, false);
+                }
+            }
+            Some(Start::Quote) => self.block_quote(at),
+            Some(Start::Table { next, span, table }) => {
+                self.pos = next;
+                self.push(TokenKind::Table(table), span);
+            }
+            Some(Start::Underline(heading_level)) => {
+                self.push(TokenKind::Underline(heading_level), at..end);
+            }
+            None => {
+                if continues || !self.definition(at, end) {
+                    self.push(TokenKind::Text, at..end);
+                }
+            }
         }
+    }
+
+    /// The line at `at`, from its text to its end, and where the next line
+    /// starts, when it would continue a paragraph.
+    fn continuation(&self, at: usize) -> Option<(Range<usize>, usize)> {
+        let source = self.source;
+        let level = self.level();
+        let line = line_from(source, at, self.base);
+        let content = source[line.start..line.end].trim_start_matches(' ');
+        let from = line.end - content.len();
+        let text = from..from + content.trim_end().len();
+        let indent = from - line.start;
+        let continues = !text.is_empty()
+            && (indent >= level + 4
+                || (indent >= level
+                    && self
+                        .start(line.start, text.clone(), line.next, true)
+                        .is_none()));
+        continues.then_some((text, line.next))
+    }
+
+    /// Reads a link reference definition that starts at `at`, over its line
+    /// and as many lines after it as it needs that would continue a
+    /// paragraph. Gives whether there was one.
+    fn definition(&mut self, at: usize, end: usize) -> bool {
+        let source = self.source;
+        if !source[at..end].starts_with('[') {
+            return false;
+        }
+        let mut text = source[at..end].to_owned();
+        let mut ends = vec![(end, self.pos)];
+        let read = loop {
+            let reading = definition::read(&text);
+            let next = ends.last().map_or(self.pos, |&(_, next)| next);
+            let more = if reading.open && next < source.len() {
+                self.continuation(next)
+            } else {
+                None
+            };
+            let Some((line, after)) = more else {
+                break reading.definition;
+            };
+            text.push('\n');
+            text.push_str(&source[line.clone()]);
+            ends.push((line.end, after));
+        };
+        let Some(found) = read else {
+            return false;
+        };
+        let (last, next) = ends[found.lines - 1];
+        self.pos = next;
+        let kind = TokenKind::Definition {
+            label: found.label,
+            target: found.target,
+        };
+        self.push(kind, at..last);
+        true
+    }
+
+    /// Reads an HTML block whose first line starts at `line_start` and whose
+    /// text starts at `at`, up to the line that ends it by `start`, the end
+    /// of the enclosing list item, or the end of the file. Its lines are kept
+    /// as written, past the item's text column.
+    fn html(&mut self, line_start: usize, at: usize, start: html::Start) {
+        let source = self.source;
+        let level = self.level();
+        let first = line_at(source, at);
+        let from = line_start + level;
+        let mut lines = vec![&source[from..first.end]];
+        let mut block_end = first.end;
+        let mut blanks = Vec::new();
+        let mut scan = self.pos;
+        let mut open = !start.end.closes(&source[at + start.opening..first.end]);
+        while open && scan < source.len() {
+            let line = line_from(source, scan, self.base);
+            let text = &source[line.start..line.end];
+            let content = text.trim_start_matches(' ');
+            let indent = text.len() - content.len();
+            if content.trim_end().is_empty() {
+                if matches!(start.end, End::Blank) {
+                    break;
+                }
+                blanks.push(&text[indent.min(level)..]);
+            } else if indent < level {
+                break;
+            } else {
+                lines.append(&mut blanks);
+                lines.push(&text[level..]);
+                block_end = line.end;
+                self.pos = line.next;
+                open = !start.end.closes(text);
+            }
+            scan = line.next;
+        }
+        let value = lines.join("\n");
+        self.push(TokenKind::Html { value }, from..block_end);
     }
 
     /// Reads an indented code block whose first line starts at `line_start`
@@ -268,6 +432,51 @@ impl Lexer<'_> {
     fn push(&mut self, kind: TokenKind, span: Range<usize>) {
         self.tokens.push(Token { kind, span });
     }
+
+    /// The block that the text at `text`, on the line starting at
+    /// `line_start`, starts, read on from `next`, tried in the order of
+    /// precedence `CommonMark` gives them. `continues` is set when the line
+    /// would continue a paragraph, which only some blocks may interrupt.
+    fn start(
+        &self,
+        line_start: usize,
+        text: Range<usize>,
+        next: usize,
+        continues: bool,
+    ) -> Option<Start> {
+        let rest = &self.source[text.clone()];
+        if continues && let Some(level) = underline(rest) {
+            return Some(Start::Underline(level));
+        }
+        if let Some(ticks) = fence(rest) {
+            return Some(Start::Fence(ticks));
+        }
+        if is_thematic_break(rest) {
+            return Some(Start::Break);
+        }
+        if let Some((level, text_at)) = heading(rest) {
+            return Some(Start::Heading { level, text_at });
+        }
+        if rest.starts_with('>') {
+            return Some(Start::Quote);
+        }
+        if let Some(start) = html::start(rest).filter(|start| !continues || start.interrupts) {
+            return Some(Start::Html(start));
+        }
+        if let Some((marker, width)) = list_marker(rest).filter(|&(marker, width)| {
+            // An empty item never interrupts a paragraph.
+            !continues || (marker.interrupts() && !rest[width..].trim_start_matches(' ').is_empty())
+        }) {
+            return Some(Start::Item { marker, width });
+        }
+        table::read(self.source, line_start, text, next, self.level(), self.base).map(
+            |(table, span, after)| Start::Table {
+                next: after,
+                span,
+                table,
+            },
+        )
+    }
 }
 
 /// The tokens of `source` from byte `start`, each line read with at most
@@ -309,7 +518,7 @@ fn fence(rest: &str) -> Option<usize> {
 
 /// The list marker `rest` starts with, and its width: a bullet, or one to
 /// nine digits and a `.` or `)`, followed by a space or by the end of the
-/// line. A thematic break is not a bullet.
+/// line.
 fn list_marker(rest: &str) -> Option<(Marker, usize)> {
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     let (marker, width) = match digits {
@@ -318,9 +527,6 @@ fn list_marker(rest: &str) -> Option<(Marker, usize)> {
                 .chars()
                 .next()
                 .filter(|bullet| matches!(bullet, '-' | '*' | '+'))?;
-            if is_thematic_break(rest) {
-                return None;
-            }
             (Marker::Bullet(bullet), 1)
         }
         1..=9 => {
@@ -345,6 +551,26 @@ fn is_thematic_break(rest: &str) -> bool {
     rest.chars()
         .all(|character| character == mark || character == ' ')
         && rest.chars().filter(|character| *character == mark).count() >= 3
+}
+
+/// The level of the heading that `rest`, a run of `=` or of `-` under
+/// paragraph text, underlines: 1 for `=`, 2 for `-`.
+fn underline(rest: &str) -> Option<u8> {
+    let mark = rest.chars().next()?;
+    let level = match mark {
+        '=' => 1,
+        '-' => 2,
+        _ => return None,
+    };
+    rest.chars()
+        .all(|character| character == mark)
+        .then_some(level)
+}
+
+/// A quoted line without its `>` and one space after it.
+fn unquote(line: &str) -> &str {
+    let rest = line.strip_prefix('>').unwrap_or(line);
+    rest.strip_prefix(' ').unwrap_or(rest)
 }
 
 /// Reads `lines`, ranges of `source`, as consecutive lines of one text, the
@@ -382,7 +608,18 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>]) -> Vec<Token> {
                 text: range,
             } => *range = place(range.start)..place(range.end),
             TokenKind::Table(table) => table.place(&place),
-            TokenKind::Blank | TokenKind::ItemEnd | TokenKind::ItemStart(_) | TokenKind::Text => {}
+            TokenKind::Blank
+            | TokenKind::BlockQuote { value: _ }
+            | TokenKind::Definition {
+                label: _,
+                target: _,
+            }
+            | TokenKind::Html { value: _ }
+            | TokenKind::ItemEnd
+            | TokenKind::ItemStart(_)
+            | TokenKind::Text
+            | TokenKind::ThematicBreak
+            | TokenKind::Underline(_) => {}
         }
     }
     tokens

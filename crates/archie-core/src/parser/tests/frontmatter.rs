@@ -16,7 +16,7 @@ fn a_file_with_no_delimiter_on_its_first_line_has_no_frontmatter() {
 }
 
 #[test]
-fn an_opening_delimiter_with_no_closing_one_is_body_text() {
+fn an_opening_delimiter_with_no_closing_one_is_a_thematic_break() {
     check(
         "\
 ---
@@ -28,9 +28,8 @@ No closing line.
   MarkdownBlock
     Section
       Heading
+      ThematicBreak
       Paragraph
-        Line
-          Text "---"
         Line
           Text "title: x"
       Paragraph
@@ -62,7 +61,7 @@ Body.
 }
 
 #[test]
-fn a_delimiter_after_the_first_line_is_body_text() {
+fn a_delimiter_after_the_first_line_is_a_thematic_break() {
     check(
         "\
 Text.
@@ -78,9 +77,7 @@ More.
       Paragraph
         Line
           Text "Text."
-      Paragraph
-        Line
-          Text "---"
+      ThematicBreak
       Paragraph
         Line
           Text "More."
@@ -168,13 +165,10 @@ Document
   MarkdownBlock
     Section
       Heading
-      Paragraph
-        Line
-          Text "---"
-        Line
+      ThematicBreak
+      Section
+        Heading
           Text "a: 1"
-        Line
-          Text "---"
 "#,
     );
 }

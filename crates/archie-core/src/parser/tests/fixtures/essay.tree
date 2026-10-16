@@ -16,9 +16,7 @@ Document
           Text "line as code; another reads it as the end of a list. Neither is wrong, because"
         Line
           Text "nothing says which is right."
-      Paragraph
-        Line
-          Text "> A format with no grammar is a format with as many grammars as it has readers."
+      BlockQuote "A format with no grammar is a format with as many grammars as it has readers."
       Paragraph
         Line
           Text "The rest of this essay is about living with that."

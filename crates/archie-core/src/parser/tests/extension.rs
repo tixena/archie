@@ -139,6 +139,33 @@ impl Extension for Fences {
     }
 }
 
+/// Claims every block quote, HTML block and thematic break, as a label.
+#[derive(Debug, Clone, PartialEq)]
+struct Raw;
+
+impl Extension for Raw {
+    type Node<T>
+        = String
+    where
+        T: Extension;
+
+    fn claim<T>(
+        construct: Construct<'_, T>,
+        _context: &Context<'_>,
+    ) -> Option<Result<String, ParseError>>
+    where
+        T: Extension,
+    {
+        if let Construct::BlockQuote(quote) = construct {
+            return Some(Ok(format!("quote {}", quote.value)));
+        }
+        if let Construct::Html(html) = construct {
+            return Some(Ok(format!("html {}", html.value)));
+        }
+        matches!(construct, Construct::ThematicBreak(_)).then(|| Ok("break".to_owned()))
+    }
+}
+
 /// A `---` line, the YAML header, a `---` line, then the body.
 fn comment<T>(block: &CodeBlock<T>, context: &Context<'_>) -> Result<Comment<T>, ParseError>
 where
@@ -179,7 +206,12 @@ where
         .flat_map(|section| &section.blocks)
         .filter_map(|block| match block {
             Block::CodeBlock(code_block) => Some(code_block),
-            Block::List(_) | Block::Paragraph(_) | Block::Table(_) => None,
+            Block::BlockQuote(_)
+            | Block::Html(_)
+            | Block::List(_)
+            | Block::Paragraph(_)
+            | Block::Table(_)
+            | Block::ThematicBreak(_) => None,
         })
         .collect()
 }
@@ -212,7 +244,12 @@ where
         .iter()
         .find_map(|block| match block {
             Block::List(list) => list.items.first().map(|item| &item.body),
-            Block::CodeBlock(_) | Block::Paragraph(_) | Block::Table(_) => None,
+            Block::BlockQuote(_)
+            | Block::CodeBlock(_)
+            | Block::Html(_)
+            | Block::Paragraph(_)
+            | Block::Table(_)
+            | Block::ThematicBreak(_) => None,
         })
         .unwrap()
 }
@@ -683,4 +720,25 @@ fn a_comment_inside_a_nested_item_has_the_same_body_as_at_the_root() {
 "#
     );
     assert_eq!(block_outline(&in_item.body), block_outline(&at_root.body));
+}
+
+#[test]
+fn an_extension_may_claim_a_block_quote_an_html_block_or_a_thematic_break() {
+    let document = parse_with::<Raw>("> q\n\n<div>\n\n***\n", &ParseOptions::default()).unwrap();
+    let labels: Vec<Option<&str>> = document.body.sections[0]
+        .blocks
+        .iter()
+        .map(|block| {
+            let kind = match block {
+                Block::BlockQuote(quote) => &quote.kind,
+                Block::Html(html) => &html.kind,
+                Block::ThematicBreak(thematic_break) => &thematic_break.kind,
+                Block::CodeBlock(_) | Block::List(_) | Block::Paragraph(_) | Block::Table(_) => {
+                    return None;
+                }
+            };
+            kind.0.as_deref().and_then(second).map(String::as_str)
+        })
+        .collect();
+    assert_eq!(labels, [Some("quote q"), Some("html <div>"), Some("break")]);
 }

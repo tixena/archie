@@ -1,14 +1,15 @@
-//! Body tokens into blocks: sections, paragraphs, lists, tables and code
-//! blocks.
+//! Body tokens into blocks: sections, paragraphs, lists, tables, code
+//! blocks, block quotes, HTML blocks and thematic breaks.
 
 use core::iter;
 use core::marker::PhantomData;
 use core::mem;
 use core::ops::Range;
+use std::collections::HashMap;
 
 use crate::parser::ast::{
-    Block, CodeBlock, Heading, Item, Kind, List, MarkdownBlock, Paragraph, Section, Table,
-    TableCell, TableRow,
+    Block, BlockQuote, CodeBlock, Heading, Html, Inline, Item, Kind, Line, List, MarkdownBlock,
+    Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak,
 };
 use crate::parser::extension::Extension;
 use crate::parser::inline::line;
@@ -23,7 +24,19 @@ struct Blanks {
     trailing: bool,
 }
 
+/// A paragraph's lines, or the heading they make when an underline ends
+/// them.
+enum Lines<E>
+where
+    E: Extension,
+{
+    Heading { heading: Heading<E>, level: u8 },
+    Paragraph(Paragraph<E>),
+}
+
 struct Parser<'src, E> {
+    /// Each link definition's destination, by its folded label.
+    definitions: HashMap<String, String>,
     extension: PhantomData<E>,
     pos: usize,
     source: &'src str,
@@ -49,6 +62,7 @@ where
     fn cell(&self, cell: &Cell) -> TableCell<E> {
         let span = cell.span();
         let mut parser = Self {
+            definitions: self.definitions.clone(),
             extension: PhantomData,
             pos: 0,
             source: self.source,
@@ -138,6 +152,11 @@ where
                     blanks.trailing = true;
                     continue;
                 }
+                TokenKind::BlockQuote { value } => Some(Block::BlockQuote(BlockQuote {
+                    kind: Kind(None),
+                    span: token.span,
+                    value,
+                })),
                 TokenKind::ItemEnd => continue,
                 TokenKind::CodeBlock {
                     content,
@@ -150,18 +169,38 @@ where
                     span: token.span,
                     value,
                 })),
+                TokenKind::Definition {
+                    label: _,
+                    target: _,
+                } => None,
                 TokenKind::Heading { level, text } => {
                     let heading = self.heading(text, &token.span);
                     sections.open(usize::from(level), heading, token.span);
                     None
                 }
+                TokenKind::Html { value } => Some(Block::Html(Html {
+                    kind: Kind(None),
+                    span: token.span,
+                    value,
+                })),
                 TokenKind::ItemStart(marker) => {
                     let (list, ends_blank) = self.list(marker, token.span);
                     trailing = ends_blank;
                     Some(Block::List(list))
                 }
                 TokenKind::Table(table) => Some(Block::Table(self.table(table, token.span))),
-                TokenKind::Text => Some(Block::Paragraph(self.paragraph(token.span))),
+                TokenKind::Text | TokenKind::Underline(_) => match self.paragraph(token.span) {
+                    Lines::Heading { heading, level } => {
+                        let written = heading.span.clone();
+                        sections.open(usize::from(level), heading, written);
+                        None
+                    }
+                    Lines::Paragraph(paragraph) => Some(Block::Paragraph(paragraph)),
+                },
+                TokenKind::ThematicBreak => Some(Block::ThematicBreak(ThematicBreak {
+                    kind: Kind(None),
+                    span: token.span,
+                })),
             };
             blanks.between |= read && blanks.trailing;
             blanks.trailing = trailing;
@@ -202,7 +241,9 @@ where
         Some((span, blanks > 0))
     }
 
-    fn paragraph(&mut self, first: Range<usize>) -> Paragraph<E> {
+    /// The paragraph whose first line is `first`, with the text lines after
+    /// it, or the heading they make when an underline follows them.
+    fn paragraph(&mut self, first: Range<usize>) -> Lines<E> {
         let start = first.start;
         let mut end = first.end;
         let mut lines = vec![line(self.source, first)];
@@ -213,11 +254,22 @@ where
             lines.push(line(self.source, token.span.clone()));
             self.pos += 1;
         }
-        Paragraph {
+        if let Some(token) = self.tokens.get(self.pos)
+            && let TokenKind::Underline(level) = token.kind
+        {
+            self.pos += 1;
+            let heading = Heading {
+                children: joined(lines),
+                kind: Kind(None),
+                span: start..token.span.end,
+            };
+            return Lines::Heading { heading, level };
+        }
+        Lines::Paragraph(Paragraph {
             kind: Kind(None),
             lines,
             span: start..end,
-        }
+        })
     }
 
     /// A row of `width` cells: a row with fewer gets empty cells at its end.
@@ -333,8 +385,9 @@ where
 }
 
 /// The markdown block that starts at byte `start` of `source`, with no node
-/// claimed yet. It spans everything from `start` to the end of `source`.
-pub fn parse<E>(source: &str, start: usize) -> MarkdownBlock<E>
+/// claimed yet, and its link definitions. It spans everything from `start`
+/// to the end of `source`.
+pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, HashMap<String, String>)
 where
     E: Extension,
 {
@@ -342,22 +395,89 @@ where
 }
 
 /// The markdown block that starts at byte `start` of `source`, each line read
-/// with at most `base` of its leading spaces left out.
-pub fn parse_from<E>(source: &str, start: usize, base: usize) -> MarkdownBlock<E>
+/// with at most `base` of its leading spaces left out, and its link
+/// definitions: each destination by its label, folded.
+pub fn parse_from<E>(
+    source: &str,
+    start: usize,
+    base: usize,
+) -> (MarkdownBlock<E>, HashMap<String, String>)
 where
     E: Extension,
 {
+    let tokens = lex_from(source, start, base);
     let mut parser = Parser {
+        definitions: definitions(&tokens),
         extension: PhantomData,
         pos: 0,
         source,
-        tokens: lex_from(source, start, base),
+        tokens,
     };
     let (body, _) = parser.markdown_block(start);
-    MarkdownBlock {
+    let block = MarkdownBlock {
         kind: Kind(None),
         sections: body.sections,
         span: start..source.len(),
+    };
+    (block, parser.definitions)
+}
+
+/// The link definitions among `tokens`, each destination by its label
+/// folded as `CommonMark` matches labels: in lower case, with each run of
+/// whitespace one space. The first definition of a label wins.
+fn definitions(tokens: &[Token]) -> HashMap<String, String> {
+    let mut definitions = HashMap::new();
+    for token in tokens {
+        if let TokenKind::Definition { label, target } = &token.kind {
+            let folded = label
+                .split_ascii_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase();
+            definitions.entry(folded).or_insert_with(|| target.clone());
+        }
+    }
+    definitions
+}
+
+/// The inline nodes of `lines` as those of one line, with a space where
+/// each line ends.
+fn joined<E>(lines: Vec<Line<E>>) -> Vec<Inline<E>>
+where
+    E: Extension,
+{
+    let mut children = Vec::new();
+    let mut previous_end = None;
+    for line in lines {
+        if let Some(end) = previous_end {
+            push_text(&mut children, " ", end..line.span.start);
+        }
+        previous_end = Some(line.span.end);
+        for child in line.children {
+            match child {
+                Inline::Text(text) => push_text(&mut children, &text.value, text.span),
+                Inline::Code(_) | Inline::Image(_) | Inline::Link(_) => children.push(child),
+            }
+        }
+    }
+    children
+}
+
+/// Adds `value`, written at `span`, to the text node that ends `children`,
+/// or as a new text node.
+fn push_text<E>(children: &mut Vec<Inline<E>>, value: &str, span: Range<usize>)
+where
+    E: Extension,
+{
+    if let Some(Inline::Text(last)) = children.last_mut() {
+        last.value.push_str(value);
+        last.span.end = span.end;
+    } else {
+        children.push(Inline::Text(Text {
+            kind: Kind(None),
+            span,
+            value: value.to_owned(),
+        }));
     }
 }
 

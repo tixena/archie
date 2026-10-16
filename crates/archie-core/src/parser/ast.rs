@@ -144,10 +144,13 @@ pub enum Block<E = Markdown>
 where
     E: Extension,
 {
+    BlockQuote(BlockQuote<E>),
     CodeBlock(CodeBlock<E>),
+    Html(Html<E>),
     List(List<E>),
     Paragraph(Paragraph<E>),
     Table(Table<E>),
+    ThematicBreak(ThematicBreak<E>),
 }
 
 impl<E> Block<E>
@@ -158,12 +161,50 @@ where
     #[must_use]
     pub const fn span(&self) -> &Range<usize> {
         match self {
+            Self::BlockQuote(block_quote) => &block_quote.span,
             Self::CodeBlock(code_block) => &code_block.span,
+            Self::Html(html) => &html.span,
             Self::List(list) => &list.span,
             Self::Paragraph(paragraph) => &paragraph.span,
             Self::Table(table) => &table.span,
+            Self::ThematicBreak(thematic_break) => &thematic_break.span,
         }
     }
+}
+
+/// Quoted text, without its `>` marks. Nothing inside it is read.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct BlockQuote<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
+    pub span: Range<usize>,
+    pub value: String,
+}
+
+/// A raw HTML block, as written.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Html<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
+    pub span: Range<usize>,
+    pub value: String,
+}
+
+/// A line of three or more `-`, `*` or `_`, such as `---`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ThematicBreak<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
+    pub span: Range<usize>,
 }
 
 /// A heading, the blocks under it, then its subsections. Its level is its

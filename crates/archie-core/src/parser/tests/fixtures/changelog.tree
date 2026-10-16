@@ -67,10 +67,3 @@ Document
         Paragraph
           Line
             Text "Maintenance release."
-        Paragraph
-          Line
-            Text "[Unreleased]: https://example.com/compare/2.3.0...HEAD"
-          Line
-            Text "[2.3.0]: https://example.com/compare/2.2.0...2.3.0"
-          Line
-            Text "[2.2.0]: https://example.com/releases/tag/2.2.0"

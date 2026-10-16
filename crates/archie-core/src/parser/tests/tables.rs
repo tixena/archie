@@ -848,7 +848,7 @@ X Linus   maintains
 }
 
 #[test]
-fn a_simple_table_with_no_rows_is_text() {
+fn a_simple_table_with_no_rows_is_not_a_table() {
     check(
         "\
 Name    Role
@@ -861,8 +861,7 @@ Name    Role
       Paragraph
         Line
           Text "Name    Role"
-        Line
-          Text "----    ----"
+      ThematicBreak
 "#,
     );
 }
