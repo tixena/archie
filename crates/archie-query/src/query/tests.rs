@@ -226,3 +226,9 @@ fn an_offset_with_sixty_minutes_is_refused() {
     Query::parse("fm.at == 2031-05-01T10:00:00+05:60").unwrap_err();
     Query::parse("fm.at == 2031-05-01T10:00:00+05:59").unwrap();
 }
+
+#[test]
+fn an_underscore_or_a_leading_plus_is_not_a_number() {
+    Query::parse("fm.n == 1_000").unwrap_err();
+    Query::parse("fm.n == +5").unwrap_err();
+}

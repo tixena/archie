@@ -108,7 +108,8 @@ pub fn read_literal(text: &str) -> Option<Field> {
 }
 
 /// archie folds `+05:60` into 360 minutes, so the written minutes of a
-/// numeric offset are checked on the text. `Z` and a missing offset pass.
+/// numeric offset are checked on the text. `Z` and a missing offset pass. It relies on archie having already
+/// validated the text as a datetime, so it only looks at the offset's shape.
 fn offset_minutes_in_range(text: &str) -> bool {
     let Some((_, clock)) = text.split_once(['T', 't']) else {
         return true;
