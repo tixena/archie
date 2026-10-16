@@ -4,9 +4,18 @@ use super::{check, on_two_megabytes};
 use crate::parser::ast::{Block, Document, Inline, MarkdownBlock, Section};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
+use crate::parser::inline::INLINE_CAP;
 use crate::parser::lexer::BLOCK_CAP;
-use crate::parser::parse;
+use crate::parser::{from_json, parse, to_json};
 use crate::writer::{WriteOptions, write};
+
+/// A container that `headed_containers` nests.
+#[derive(Clone, Copy)]
+enum Container {
+    Grid,
+    List,
+    Markdown,
+}
 
 #[test]
 fn a_paragraph_is_a_set_of_lines_and_a_blank_line_ends_it() {
@@ -2213,5 +2222,79 @@ fn lists_markdown_blocks_and_grid_tables_in_turn_nest_the_block_cap_deep_togethe
         let document = parse(&mixed_containers(1000)).unwrap();
         assert_eq!(innermost(&document.body).0, BLOCK_CAP);
         assert_eq!(container_depth(&document.body), BLOCK_CAP);
+    });
+}
+
+/// `BLOCK_CAP` containers around emphasis `INLINE_CAP` deep, each inside the
+/// one before and each holding the headings `# h` to `###### h` before it:
+/// those of `cycle` in turn, from the outside in.
+fn headed_containers(cycle: &[Container]) -> String {
+    let marks = "*".repeat(2 * INLINE_CAP);
+    let mut lines = vec![format!("{marks}a{marks}")];
+    let mut fence = 2_usize;
+    for level in (0..BLOCK_CAP).rev() {
+        let headed = (1..=6)
+            .map(|count| format!("{} h", "#".repeat(count)))
+            .chain(lines);
+        lines = match cycle[level % cycle.len()] {
+            Container::Grid => {
+                let rows: Vec<String> = headed.collect();
+                let width = rows.iter().map(String::len).max().unwrap_or_default();
+                let border = format!("+{}+", "-".repeat(width + 2));
+                iter::once(border.clone())
+                    .chain(rows.iter().map(|line| format!("| {line:<width$} |")))
+                    .chain(iter::once(border))
+                    .collect()
+            }
+            Container::List => headed
+                .enumerate()
+                .map(|(index, line)| {
+                    if index == 0 {
+                        format!("- {line}")
+                    } else {
+                        format!("  {line}")
+                    }
+                })
+                .collect(),
+            Container::Markdown => {
+                fence += 1;
+                let mark = "`".repeat(fence);
+                iter::once(format!("{mark}markdown"))
+                    .chain(headed)
+                    .chain(iter::once(mark))
+                    .collect()
+            }
+        };
+    }
+    let mut source = lines.join("\n");
+    source.push('\n');
+    source
+}
+
+#[test]
+fn containers_that_hold_headings_of_every_level_nest_the_block_cap_deep() {
+    on_two_megabytes(|| {
+        let shapes: [&[Container]; 4] = [
+            &[Container::List],
+            &[Container::Markdown],
+            &[Container::Grid],
+            &[Container::List, Container::Markdown, Container::Grid],
+        ];
+        for cycle in shapes {
+            let document = parse(&headed_containers(cycle)).unwrap();
+            assert_eq!(container_depth(&document.body), BLOCK_CAP);
+            let written = write(&document, &WriteOptions::default()).unwrap();
+            assert_eq!(written.matches("###### h").count(), BLOCK_CAP);
+            let copy = document.clone();
+            assert_eq!(copy, document);
+            let printed = format!("{document:?}");
+            assert_eq!(printed.matches("Section {").count(), 1 + 6 * BLOCK_CAP);
+            drop(copy);
+            let json = to_json(&document).unwrap();
+            let back: Document = from_json(&json).unwrap();
+            assert_eq!(to_json(&back).unwrap(), json);
+            drop(back);
+            drop(document);
+        }
     });
 }
