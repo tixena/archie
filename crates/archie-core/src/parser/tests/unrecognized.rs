@@ -7,9 +7,6 @@ fn what_the_parser_does_not_recognize_stays_as_paragraph_text() {
 > quoted line
 > - not a list
 
-1. ordered item
-2. second
-
 *emphasis* and **strong** stay as written.
 
 - - -
@@ -26,11 +23,6 @@ Setext heading
           Text "> quoted line"
         Line
           Text "> - not a list"
-      Paragraph
-        Line
-          Text "1. ordered item"
-        Line
-          Text "2. second"
       Paragraph
         Line
           Text "*emphasis* and **strong** stay as written."

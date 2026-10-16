@@ -1,5 +1,5 @@
 use super::check_spans;
-use crate::parser::ast::Heading;
+use crate::parser::ast::{Heading, Kind};
 use crate::parser::parse;
 
 #[test]
@@ -68,6 +68,7 @@ fn an_empty_heading_has_an_empty_span_at_the_start_of_its_section() {
             section.heading,
             Heading {
                 children: Vec::new(),
+                kind: Kind(None),
                 span: start..start,
             }
         );
@@ -171,6 +172,32 @@ fn toml_frontmatter_spans() {
             ("Pair key=a", "a = 2"),
             ("Scalar Integer 2", "2"),
             ("MarkdownBlock", ""),
+        ],
+    );
+}
+
+#[test]
+fn an_indented_code_block_spans_from_its_code_column_to_its_last_line() {
+    let whole = "- a\n\n        code\n\n      more\n\n";
+    let item = "- a\n\n        code\n\n      more";
+    let content = "a\n\n        code\n\n      more";
+    let code = "  code\n\n      more";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("MarkdownBlock", whole),
+            ("Section", item),
+            ("Heading", ""),
+            ("List loose", item),
+            ("Item", item),
+            ("MarkdownBlock", content),
+            ("Section", content),
+            ("Heading", ""),
+            ("Paragraph", "a"),
+            ("Line", "a"),
+            (r#"Text "a""#, "a"),
+            (r#"CodeBlock info="" value="  code\n\nmore""#, code),
         ],
     );
 }

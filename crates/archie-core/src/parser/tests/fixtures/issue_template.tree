@@ -23,12 +23,22 @@ Document
       Paragraph
         Line
           Text "**Steps to reproduce**"
-      Paragraph
-        Line
-          Text "1. Run "
-          Code "quill check"
-        Line
-          Text "2. See the error"
+      List start=1
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "Run "
+                  Code "quill check"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "See the error"
       Paragraph
         Line
           Text "**Expected**"

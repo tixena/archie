@@ -19,23 +19,36 @@ Document
       Section
         Heading
           Text "Steps"
-        Paragraph
-          Line
-            Text "1. **Invoke the activity tool.** Call "
-            Code "mcp__remargin__activity"
-            Text " with "
-            Code "path"
-            Text " (the argument, or omit for cwd) and "
-            Code "pretty: true"
-            Text ". Do not pass "
-            Code "since"
-            Text " unless the user explicitly asked for a specific cutoff — the default per-file caller-last-action cutoff is the point of this tool."
-        Paragraph
-          Line
-            Text "2. **Surface the output verbatim.** Paste the pretty-printed activity timeline into the response. Do not paraphrase, summarize, or reformat."
-        Paragraph
-          Line
-            Text "3. **Decide whether to react.** After surfacing the output, briefly call out anything actionable: comments addressed to the caller that are pending, edits on files the caller is staging, sandbox-adds by other identities the caller might want to look at. Keep this short — one or two sentences. The user (or the next agent step) decides what to do with it."
+        List start=1 loose
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "**Invoke the activity tool.** Call "
+                    Code "mcp__remargin__activity"
+                    Text " with "
+                    Code "path"
+                    Text " (the argument, or omit for cwd) and "
+                    Code "pretty: true"
+                    Text ". Do not pass "
+                    Code "since"
+                    Text " unless the user explicitly asked for a specific cutoff — the default per-file caller-last-action cutoff is the point of this tool."
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "**Surface the output verbatim.** Paste the pretty-printed activity timeline into the response. Do not paraphrase, summarize, or reformat."
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "**Decide whether to react.** After surfacing the output, briefly call out anything actionable: comments addressed to the caller that are pending, edits on files the caller is staging, sandbox-adds by other identities the caller might want to look at. Keep this short — one or two sentences. The user (or the next agent step) decides what to do with it."
       Section
         Heading
           Text "Constraints"

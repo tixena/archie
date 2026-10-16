@@ -6,13 +6,21 @@ use core::mem;
 use core::ops::Range;
 
 use crate::parser::ast::{
-    Block, CodeBlock, Extension, FencedCode, Heading, Item, List, MarkdownBlock, Paragraph,
-    Section, Table, TableCell, TableRow,
+    Block, CodeBlock, Heading, Item, Kind, List, MarkdownBlock, Paragraph, Section, Table,
+    TableCell, TableRow,
 };
-use crate::parser::error::ParseError;
+use crate::parser::extension::Extension;
 use crate::parser::inline::line;
-use crate::parser::lexer::{Token, TokenKind, lex};
+use crate::parser::lexer::{Marker, Token, TokenKind, lex};
 use crate::parser::table::{RowToken, TableToken};
+
+/// Where a markdown block has blank lines: between two of its blocks, or at
+/// its end. A list is loose by them.
+#[derive(Clone, Copy, Default)]
+struct Blanks {
+    between: bool,
+    trailing: bool,
+}
 
 struct Parser<'src, E> {
     extension: PhantomData<E>,
@@ -42,34 +50,38 @@ where
         let mut sections = Sections::new();
         if !range.is_empty() {
             sections.block(Block::Paragraph(Paragraph {
+                kind: Kind(None),
                 lines: vec![line(self.source, range.clone())],
                 span: range.clone(),
             }));
         }
         TableCell {
             body: MarkdownBlock {
+                kind: Kind(None),
                 sections: sections.finish(),
                 span: range.clone(),
             },
+            kind: Kind(None),
             span: range,
         }
     }
 
     /// The heading of the heading line at `written`, whose text is at `text`.
     /// A line with no text gives an empty heading at its start.
-    fn heading(&self, text: Range<usize>, written: &Range<usize>) -> Heading {
+    fn heading(&self, text: Range<usize>, written: &Range<usize>) -> Heading<E> {
         if text.is_empty() {
             empty_heading(written.start)
         } else {
             Heading {
                 children: line(self.source, text).children,
+                kind: Kind(None),
                 span: written.clone(),
             }
         }
     }
 
-    fn item(&mut self, marker: Range<usize>) -> Result<Item<E>, ParseError> {
-        let body = self.markdown_block(marker.end)?;
+    fn item(&mut self, marker: Range<usize>) -> (Item<E>, Blanks) {
+        let (body, blanks) = self.markdown_block(marker.end);
         if self
             .tokens
             .get(self.pos)
@@ -81,97 +93,120 @@ where
             .sections
             .last()
             .map_or(marker.end, |section| section.span.end);
-        Ok(Item {
+        let item = Item {
             body,
+            kind: Kind(None),
             span: marker.start..end,
-        })
+        };
+        (item, blanks)
     }
 
-    /// Consecutive items make one list. Blank lines between them do not
-    /// end it.
-    fn list(&mut self, marker: Range<usize>) -> Result<List<E>, ParseError> {
-        let start = marker.start;
-        let mut items = vec![self.item(marker)?];
-        while let Some(next) = self.next_item() {
-            items.push(self.item(next)?);
+    /// Consecutive items whose markers have the same bullet character, or
+    /// the same delimiter, make one list; blank lines between them do not
+    /// end it. Gives the list and whether it ends with a blank line.
+    fn list(&mut self, marker: Marker, span: Range<usize>) -> (List<E>, bool) {
+        let from = span.start;
+        let (first, mut blanks) = self.item(span);
+        let mut loose = blanks.between;
+        let mut items = vec![first];
+        while let Some((next, skipped)) = self.next_item(marker) {
+            let (item, item_blanks) = self.item(next);
+            loose |= blanks.trailing || skipped || item_blanks.between;
+            blanks = item_blanks;
+            items.push(item);
         }
-        let end = items.last().map_or(start, |item| item.span.end);
-        Ok(List {
+        let end = items.last().map_or(from, |item| item.span.end);
+        let list = List {
             items,
-            span: start..end,
-        })
+            kind: Kind(None),
+            loose,
+            span: from..end,
+            start: marker.start(),
+        };
+        (list, blanks.trailing)
     }
 
     /// The sections up to the end of the enclosing list item, or of the
     /// tokens. It spans its sections, or is empty at `at` when it has none.
-    fn markdown_block(&mut self, at: usize) -> Result<MarkdownBlock<E>, ParseError> {
+    fn markdown_block(&mut self, at: usize) -> (MarkdownBlock<E>, Blanks) {
         let mut sections = Sections::new();
+        let mut blanks = Blanks::default();
+        let mut read = false;
         while !self.stops() {
             let Some(token) = self.take() else {
                 break;
             };
+            let mut trailing = false;
             let found = match token.kind {
-                TokenKind::Blank | TokenKind::ItemEnd => None,
+                TokenKind::Blank => {
+                    blanks.trailing = true;
+                    continue;
+                }
+                TokenKind::ItemEnd => continue,
                 TokenKind::CodeBlock {
                     content,
                     info,
                     value,
-                } => {
-                    let fenced = FencedCode {
-                        content,
-                        info: &info,
-                        source: self.source,
-                        value: &value,
-                    };
-                    let kind = E::code_block(&fenced).transpose()?;
-                    Some(Block::CodeBlock(CodeBlock {
-                        info,
-                        kind,
-                        span: token.span,
-                        value,
-                    }))
-                }
+                } => Some(Block::CodeBlock(CodeBlock {
+                    content,
+                    info,
+                    kind: Kind(None),
+                    span: token.span,
+                    value,
+                })),
                 TokenKind::Heading { level, text } => {
                     let heading = self.heading(text, &token.span);
                     sections.open(usize::from(level), heading, token.span);
                     None
                 }
-                TokenKind::ItemStart => Some(Block::List(self.list(token.span)?)),
+                TokenKind::ItemStart(marker) => {
+                    let (list, ends_blank) = self.list(marker, token.span);
+                    trailing = ends_blank;
+                    Some(Block::List(list))
+                }
                 TokenKind::Table(table) => Some(Block::Table(self.table(table, token.span))),
                 TokenKind::Text => Some(Block::Paragraph(self.paragraph(token.span))),
             };
+            blanks.between |= read && blanks.trailing;
+            blanks.trailing = trailing;
+            read = true;
             if let Some(block) = found {
                 sections.block(block);
             }
         }
-        let read = sections.finish();
-        let span = read
+        let finished = sections.finish();
+        let span = finished
             .first()
-            .zip(read.last())
+            .zip(finished.last())
             .map_or(at..at, |(first, last)| first.span.start..last.span.end);
-        Ok(MarkdownBlock {
-            sections: read,
+        let block = MarkdownBlock {
+            kind: Kind(None),
+            sections: finished,
             span,
-        })
+        };
+        (block, blanks)
     }
 
-    /// The marker of the next item of the list being read, past any blank
-    /// lines before it.
-    fn next_item(&mut self) -> Option<Range<usize>> {
+    /// The marker of the next item of the list whose items carry `marker`,
+    /// past any blank lines before it, and whether there were any.
+    fn next_item(&mut self, marker: Marker) -> Option<(Range<usize>, bool)> {
         let blanks = self.tokens[self.pos..]
             .iter()
             .take_while(|token| matches!(token.kind, TokenKind::Blank))
             .count();
         let token = self.tokens.get(self.pos + blanks)?;
-        if !matches!(token.kind, TokenKind::ItemStart) {
+        let TokenKind::ItemStart(next) = token.kind else {
+            return None;
+        };
+        if !marker.same_list(next) {
             return None;
         }
-        let marker = token.span.clone();
+        let span = token.span.clone();
         self.pos += blanks + 1;
-        Some(marker)
+        Some((span, blanks > 0))
     }
 
-    fn paragraph(&mut self, first: Range<usize>) -> Paragraph {
+    fn paragraph(&mut self, first: Range<usize>) -> Paragraph<E> {
         let start = first.start;
         let mut end = first.end;
         let mut lines = vec![line(self.source, first)];
@@ -183,6 +218,7 @@ where
             self.pos += 1;
         }
         Paragraph {
+            kind: Kind(None),
             lines,
             span: start..end,
         }
@@ -191,6 +227,7 @@ where
     fn row(&self, row: RowToken) -> TableRow<E> {
         TableRow {
             cells: row.cells.into_iter().map(|cell| self.cell(cell)).collect(),
+            kind: Kind(None),
             span: row.span,
         }
     }
@@ -208,6 +245,7 @@ where
             alignments: table.alignments,
             format: table.format,
             head: table.head.into_iter().map(|row| self.row(row)).collect(),
+            kind: Kind(None),
             rows: table.rows.into_iter().map(|row| self.row(row)).collect(),
             span,
         }
@@ -270,7 +308,7 @@ where
     /// Opens the section of a heading `level` marks deep: closes every open
     /// section at that depth or deeper, and fills a skipped level with a
     /// section whose heading is empty. `written` is the heading line.
-    fn open(&mut self, level: usize, heading: Heading, written: Range<usize>) {
+    fn open(&mut self, level: usize, heading: Heading<E>, written: Range<usize>) {
         while self.open.len() >= level
             && let Some(section) = self.open.pop()
         {
@@ -282,15 +320,16 @@ where
         self.open.push(Section {
             blocks: Vec::new(),
             heading,
+            kind: Kind(None),
             span: written,
             subsections: Vec::new(),
         });
     }
 }
 
-/// The body that starts at byte `start` of `source`, with code block
-/// subtypes from `E`. It spans everything after the frontmatter.
-pub fn parse<E>(source: &str, start: usize) -> Result<MarkdownBlock<E>, ParseError>
+/// The markdown block that starts at byte `start` of `source`, with no node
+/// claimed yet. It spans everything from `start` to the end of `source`.
+pub fn parse<E>(source: &str, start: usize) -> MarkdownBlock<E>
 where
     E: Extension,
 {
@@ -300,17 +339,22 @@ where
         source,
         tokens: lex(source, start),
     };
-    let body = parser.markdown_block(start)?;
-    Ok(MarkdownBlock {
+    let (body, _) = parser.markdown_block(start);
+    MarkdownBlock {
+        kind: Kind(None),
         sections: body.sections,
         span: start..source.len(),
-    })
+    }
 }
 
 /// An empty heading at `at`: no children and an empty span.
-const fn empty_heading(at: usize) -> Heading {
+const fn empty_heading<E>(at: usize) -> Heading<E>
+where
+    E: Extension,
+{
     Heading {
         children: Vec::new(),
+        kind: Kind(None),
         span: at..at,
     }
 }
@@ -323,6 +367,7 @@ where
     Section {
         blocks: Vec::new(),
         heading: empty_heading(at),
+        kind: Kind(None),
         span: at..at,
         subsections: Vec::new(),
     }

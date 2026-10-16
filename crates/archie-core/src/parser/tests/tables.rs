@@ -308,7 +308,7 @@ fn a_table_may_sit_inside_a_list_item() {
   MarkdownBlock
     Section
       Heading
-      List
+      List loose
         Item
           MarkdownBlock
             Section

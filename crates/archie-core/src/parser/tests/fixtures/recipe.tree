@@ -29,15 +29,30 @@ Document
       Section
         Heading
           Text "Steps"
-        Paragraph
-          Line
-            Text "1. Soak the beans overnight."
-          Line
-            Text "2. Simmer for 40 minutes."
-          Line
-            Text "Stir now and then."
-          Line
-            Text "3. Season and serve."
+        List start=1
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Soak the beans overnight."
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Simmer for 40 minutes."
+                  Line
+                    Text "Stir now and then."
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Season and serve."
       Section
         Heading
           Text "Notes"

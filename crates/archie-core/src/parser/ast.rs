@@ -1,60 +1,33 @@
 //! The document tree a markdown file parses into.
 //!
-//! Every node carries `span`, the byte range it covers in the source file.
-//! The frontmatter nodes hold values, whichever syntax they were written in.
+//! Every node carries `span`, the byte range it covers in the source file,
+//! and `kind`, the type an extension gave it. The frontmatter nodes hold
+//! values, whichever syntax they were written in.
 
-use core::convert::Infallible;
-use core::fmt::Debug;
 use core::ops::Range;
 
 use indexmap::IndexMap;
 
-use crate::parser::error::ParseError;
+use crate::parser::extension::{Extension, Markdown};
 
-/// What a consumer of archie adds to the tree. The consumer owns each type
-/// it declares here, and archie asks for it while parsing.
-pub trait Extension {
-    /// The subtype a claimed fenced code block carries.
-    type CodeBlock: Debug + Clone + PartialEq;
-
-    /// The subtype of `block`, or `None` to leave it a plain code block. An
-    /// error fails the whole parse.
-    fn code_block(block: &FencedCode<'_>) -> Option<Result<Self::CodeBlock, ParseError>>;
-}
-
-/// archie's own extension: it claims nothing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The type an extension gave a node, or `None`. Boxed, because a markdown
+/// block can hold a markdown block.
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Plain;
-
-impl Extension for Plain {
-    type CodeBlock = Infallible;
-
-    fn code_block(_block: &FencedCode<'_>) -> Option<Result<Infallible, ParseError>> {
-        None
-    }
-}
-
-/// A fenced code block as an extension sees it. `content` is the range of
-/// the lines between the fences, `value` those lines as the block holds them.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub struct FencedCode<'text> {
-    pub content: Range<usize>,
-    pub info: &'text str,
-    pub source: &'text str,
-    pub value: &'text str,
-}
+pub struct Kind<E>(pub Option<Box<E::Node<E>>>)
+where
+    E: Extension;
 
 /// A whole markdown file.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Document<E = Plain>
+pub struct Document<E = Markdown>
 where
     E: Extension,
 {
     pub body: MarkdownBlock<E>,
     pub frontmatter: Option<Frontmatter>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
@@ -177,13 +150,14 @@ pub struct DateTime {
 }
 
 /// A stretch of markdown read by the same rules: the body, a list item's
-/// content, a table cell's content.
+/// content, a table cell's content, a markdown code block's content.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct MarkdownBlock<E = Plain>
+pub struct MarkdownBlock<E = Markdown>
 where
     E: Extension,
 {
+    pub kind: Kind<E>,
     pub sections: Vec<Section<E>>,
     pub span: Range<usize>,
 }
@@ -191,13 +165,13 @@ where
 /// A node that stands on its own lines.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Block<E = Plain>
+pub enum Block<E = Markdown>
 where
     E: Extension,
 {
     CodeBlock(CodeBlock<E>),
     List(List<E>),
-    Paragraph(Paragraph),
+    Paragraph(Paragraph<E>),
     Table(Table<E>),
 }
 
@@ -221,74 +195,100 @@ where
 /// depth in the `MarkdownBlock`. An empty heading has no children.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Section<E = Plain>
+pub struct Section<E = Markdown>
 where
     E: Extension,
 {
     pub blocks: Vec<Block<E>>,
-    pub heading: Heading,
+    pub heading: Heading<E>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
     pub subsections: Vec<Self>,
 }
 
 /// A heading line, such as `# Ship parser`. An empty heading has no children
 /// and an empty span at the start of its section.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Heading {
-    pub children: Vec<Inline>,
+pub struct Heading<E = Markdown>
+where
+    E: Extension,
+{
+    pub children: Vec<Inline<E>>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// A set of lines, ended by a blank line.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Paragraph {
-    pub lines: Vec<Line>,
+pub struct Paragraph<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
+    pub lines: Vec<Line<E>>,
     pub span: Range<usize>,
 }
 
 /// One line of a paragraph and the inline nodes written on it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Line {
-    pub children: Vec<Inline>,
+pub struct Line<E = Markdown>
+where
+    E: Extension,
+{
+    pub children: Vec<Inline<E>>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
-/// A bulleted list.
+/// A bullet or ordered list.
+///
+/// Its items have the same bullet character, or the same delimiter after
+/// their number. `start` is an ordered list's first number, `None` for a
+/// bullet list. `loose` is set when a blank line separates two items, or two
+/// blocks of one item.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct List<E = Plain>
+pub struct List<E = Markdown>
 where
     E: Extension,
 {
     pub items: Vec<Item<E>>,
+    pub kind: Kind<E>,
+    pub loose: bool,
     pub span: Range<usize>,
+    pub start: Option<u64>,
 }
 
 /// One entry of a list.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Item<E = Plain>
+pub struct Item<E = Markdown>
 where
     E: Extension,
 {
     pub body: MarkdownBlock<E>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
-/// Lines between two fences of backticks. `info` is the text after the
-/// opening fence; `value` is the lines between the fences.
+/// Lines between two fences of backticks, or indented four columns past
+/// their parent's.
+///
+/// `content` is the range of those lines in the source, `info` the text after
+/// the opening fence, empty for an indented block, and `value` the lines as
+/// the block holds them.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct CodeBlock<E = Plain>
+pub struct CodeBlock<E = Markdown>
 where
     E: Extension,
 {
+    pub content: Range<usize>,
     pub info: String,
-    /// The subtype an extension gave the block; `None` when none claims it.
-    pub kind: Option<E::CodeBlock>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
 }
@@ -297,13 +297,14 @@ where
 /// header rows, `rows` the rest.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Table<E = Plain>
+pub struct Table<E = Markdown>
 where
     E: Extension,
 {
     pub alignments: Vec<Alignment>,
     pub format: TableFormat,
     pub head: Vec<TableRow<E>>,
+    pub kind: Kind<E>,
     pub rows: Vec<TableRow<E>>,
     pub span: Range<usize>,
 }
@@ -311,22 +312,24 @@ where
 /// One row of a table.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct TableRow<E = Plain>
+pub struct TableRow<E = Markdown>
 where
     E: Extension,
 {
     pub cells: Vec<TableCell<E>>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
 /// One cell of a table row.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct TableCell<E = Plain>
+pub struct TableCell<E = Markdown>
 where
     E: Extension,
 {
     pub body: MarkdownBlock<E>,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
 }
 
@@ -353,16 +356,22 @@ pub enum TableFormat {
 }
 
 /// A node inside a line of text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Inline {
-    Code(Code),
-    Image(Image),
-    Link(Link),
-    Text(Text),
+pub enum Inline<E = Markdown>
+where
+    E: Extension,
+{
+    Code(Code<E>),
+    Image(Image<E>),
+    Link(Link<E>),
+    Text(Text<E>),
 }
 
-impl Inline {
+impl<E> Inline<E>
+where
+    E: Extension,
+{
     /// The byte range the node covers.
     #[must_use]
     pub const fn span(&self) -> &Range<usize> {
@@ -376,20 +385,28 @@ impl Inline {
 }
 
 /// Plain text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Text {
+pub struct Text<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
 }
 
 /// A link: `[text](target)`, `[[target]]` or `[[target|text]]`. `children`
 /// are the text shown, and are empty for `[[target]]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Link {
-    pub children: Vec<Inline>,
+pub struct Link<E = Markdown>
+where
+    E: Extension,
+{
+    pub children: Vec<Inline<E>>,
     pub form: LinkForm,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
     pub target: String,
 }
@@ -406,19 +423,27 @@ pub enum LinkForm {
 
 /// An embed: `![alt](target)`, `![[target]]` or `![[target|alt]]`. `alt` is
 /// empty when none is written.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Image {
+pub struct Image<E = Markdown>
+where
+    E: Extension,
+{
     pub alt: String,
     pub form: LinkForm,
+    pub kind: Kind<E>,
     pub span: Range<usize>,
     pub target: String,
 }
 
 /// Text between backticks, such as `` `archie check` ``.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Code {
+pub struct Code<E = Markdown>
+where
+    E: Extension,
+{
+    pub kind: Kind<E>,
     pub span: Range<usize>,
     pub value: String,
 }

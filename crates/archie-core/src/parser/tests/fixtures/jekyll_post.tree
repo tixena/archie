@@ -32,13 +32,28 @@ Document
         Paragraph
           Line
             Text "Three things get in the way:"
-        Paragraph
-          Line
-            Text "1. Indentation decides which block a line belongs to."
-          Line
-            Text "2. A reference link depends on a definition elsewhere."
-          Line
-            Text "3. Emphasis follows rules about the characters around it."
+        List start=1
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Indentation decides which block a line belongs to."
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "A reference link depends on a definition elsewhere."
+          Item
+            MarkdownBlock
+              Section
+                Heading
+                Paragraph
+                  Line
+                    Text "Emphasis follows rules about the characters around it."
         Paragraph
           Line
             Text "{% highlight ruby %}"

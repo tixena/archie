@@ -45,4 +45,4 @@ Document
         Paragraph
           Line
             Text "To show a fence inside a fence, use a longer one:"
-        CodeBlock info="markdown" value="```rust\nfn main() {}\n```"
+        CodeBlock info="markdown" value="```rust\nfn main() {}\n```" claimed

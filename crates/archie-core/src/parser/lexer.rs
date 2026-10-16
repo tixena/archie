@@ -1,11 +1,63 @@
 //! Body lines into tokens. The indentation that says which list item a line
-//! belongs to becomes explicit item starts and ends, and a fenced code block
-//! is read whole, so the grammar over the tokens is context-free.
+//! belongs to becomes explicit item starts and ends, and a code block is read
+//! whole, so the grammar over the tokens is context-free.
 
 use core::ops::Range;
 
 use crate::parser::line::line_at;
 use crate::parser::table::{self, TableToken};
+
+/// The marker that starts a list item.
+#[derive(Clone, Copy)]
+pub enum Marker {
+    /// `-`, `*` or `+`.
+    Bullet(char),
+    /// `1.` or `1)`: the number and the delimiter.
+    Ordered { delimiter: char, number: u64 },
+}
+
+impl Marker {
+    /// Whether an item with this marker may start a list on a line that
+    /// would otherwise continue a paragraph: a bullet, or an ordered marker
+    /// numbered 1.
+    const fn interrupts(self) -> bool {
+        match self {
+            Self::Bullet(_) => true,
+            Self::Ordered {
+                delimiter: _,
+                number,
+            } => number == 1,
+        }
+    }
+
+    /// Whether an item with `other` belongs to the list this marker is in:
+    /// the same bullet character, or the same delimiter.
+    pub const fn same_list(self, other: Self) -> bool {
+        self.symbol() == other.symbol()
+    }
+
+    /// The first number of the list this marker starts, `None` for a bullet.
+    pub const fn start(self) -> Option<u64> {
+        match self {
+            Self::Bullet(_) => None,
+            Self::Ordered {
+                delimiter: _,
+                number,
+            } => Some(number),
+        }
+    }
+
+    /// The bullet character, or the delimiter of an ordered marker.
+    const fn symbol(self) -> char {
+        match self {
+            Self::Bullet(bullet) => bullet,
+            Self::Ordered {
+                delimiter,
+                number: _,
+            } => delimiter,
+        }
+    }
+}
 
 pub struct Token {
     pub kind: TokenKind,
@@ -24,7 +76,7 @@ pub enum TokenKind {
         text: Range<usize>,
     },
     ItemEnd,
-    ItemStart,
+    ItemStart(Marker),
     Table(TableToken),
     Text,
 }
@@ -87,21 +139,42 @@ impl Lexer<'_> {
     }
 
     /// Classifies what is written from `at` to `end` on the line starting at
-    /// `line_start`.
-    fn content(&mut self, line_start: usize, at: usize, end: usize) {
+    /// `line_start`. `continues` is set when the line would continue a
+    /// paragraph.
+    fn content(&mut self, line_start: usize, at: usize, end: usize, continues: bool) {
+        let column = at - line_start;
+        let level = self.level();
+        if column >= level + 4 {
+            if continues {
+                self.push(TokenKind::Text, at..end);
+            } else {
+                self.indented_code(line_start, level + 4);
+            }
+            return;
+        }
         let rest = &self.source[at..end];
-        if let Some((level, text_at)) = heading(rest) {
+        if let Some((heading_level, text_at)) = heading(rest) {
             let text = at + text_at..end;
-            self.push(TokenKind::Heading { level, text }, at..end);
+            let kind = TokenKind::Heading {
+                level: heading_level,
+                text,
+            };
+            self.push(kind, at..end);
         } else if let Some(ticks) = fence(rest) {
-            self.code_block(at - line_start, at, end, ticks);
-        } else if is_bullet(rest) {
-            self.push(TokenKind::ItemStart, at..at + 1);
-            self.levels.push(at - line_start + 2);
-            let after = &rest[1..];
+            self.code_block(column, at, end, ticks);
+        } else if let Some((marker, width)) =
+            list_marker(rest).filter(|&(marker, _)| !continues || marker.interrupts())
+        {
+            let after = &rest[width..];
             let inner = after.trim_start_matches(' ');
+            let spaces = after.len() - inner.len();
+            // One to four spaces set the content column; none, or five or
+            // more, put it one space past the marker.
+            let gap = if spaces == 0 || spaces > 4 { 1 } else { spaces };
+            self.push(TokenKind::ItemStart(marker), at..at + width);
+            self.levels.push(column + width + gap);
             if !inner.is_empty() {
-                self.content(line_start, end - inner.len(), end);
+                self.content(line_start, end - inner.len(), end, false);
             }
         } else if let Some((table, span, next)) =
             table::read(self.source, line_start, at..end, self.pos, self.level())
@@ -111,6 +184,42 @@ impl Lexer<'_> {
         } else {
             self.push(TokenKind::Text, at..end);
         }
+    }
+
+    /// Reads an indented code block whose first line starts at `line_start`
+    /// and whose text starts at `column`: that line, then every line
+    /// indented at least as far, with the blank lines between them.
+    fn indented_code(&mut self, line_start: usize, column: usize) {
+        let source = self.source;
+        let first = line_at(source, line_start);
+        let start = line_start + column;
+        let mut lines = vec![&source[start..first.end]];
+        let mut block_end = first.end;
+        let mut blanks = Vec::new();
+        let mut scan = self.pos;
+        while scan < source.len() {
+            let line = line_at(source, scan);
+            let text = &source[line.start..line.end];
+            let content = text.trim_start_matches(' ');
+            let indent = text.len() - content.len();
+            if content.trim_end().is_empty() {
+                blanks.push(&text[indent.min(column)..]);
+            } else if indent >= column {
+                lines.append(&mut blanks);
+                lines.push(&text[column..]);
+                block_end = line.end;
+                self.pos = line.next;
+            } else {
+                break;
+            }
+            scan = line.next;
+        }
+        let kind = TokenKind::CodeBlock {
+            content: start..block_end,
+            info: String::new(),
+            value: lines.join("\n"),
+        };
+        self.push(kind, start..block_end);
     }
 
     /// The content column of the innermost open item, or zero.
@@ -129,8 +238,14 @@ impl Lexer<'_> {
             return;
         }
         let at = line.start + (text.len() - content.len());
+        let open = self.levels.len();
+        let after_text = self
+            .tokens
+            .last()
+            .is_some_and(|token| matches!(token.kind, TokenKind::Text));
         self.close_items(at - line.start, line.start);
-        self.content(line.start, at, at + trimmed.len());
+        let continues = after_text && self.levels.len() == open;
+        self.content(line.start, at, at + trimmed.len(), continues);
     }
 
     fn push(&mut self, kind: TokenKind, span: Range<usize>) {
@@ -172,11 +287,33 @@ fn fence(rest: &str) -> Option<usize> {
     (ticks >= 3 && !info.contains('`')).then_some(ticks)
 }
 
-fn is_bullet(rest: &str) -> bool {
-    let mut characters = rest.chars();
-    matches!(characters.next(), Some('-' | '*' | '+'))
-        && matches!(characters.next(), None | Some(' '))
-        && !is_thematic_break(rest)
+/// The list marker `rest` starts with, and its width: a bullet, or one to
+/// nine digits and a `.` or `)`, followed by a space or by the end of the
+/// line. A thematic break is not a bullet.
+fn list_marker(rest: &str) -> Option<(Marker, usize)> {
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let (marker, width) = match digits {
+        0 => {
+            let bullet = rest
+                .chars()
+                .next()
+                .filter(|bullet| matches!(bullet, '-' | '*' | '+'))?;
+            if is_thematic_break(rest) {
+                return None;
+            }
+            (Marker::Bullet(bullet), 1)
+        }
+        1..=9 => {
+            let delimiter = rest[digits..]
+                .chars()
+                .next()
+                .filter(|delimiter| matches!(delimiter, '.' | ')'))?;
+            let number = rest[..digits].parse().ok()?;
+            (Marker::Ordered { delimiter, number }, digits + 1)
+        }
+        _ => return None,
+    };
+    matches!(rest[width..].chars().next(), None | Some(' ')).then_some((marker, width))
 }
 
 /// Three or more of the same `-`, `*` or `_`, with nothing but spaces

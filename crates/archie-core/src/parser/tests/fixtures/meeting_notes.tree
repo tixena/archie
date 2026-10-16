@@ -29,7 +29,7 @@ Document
       Section
         Heading
           Text "Agenda"
-        List
+        List loose
           Item
             MarkdownBlock
               Section
