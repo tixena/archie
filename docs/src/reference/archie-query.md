@@ -43,7 +43,7 @@ through something that is not a mapping, names no field.
 | Float | `1.5`, `-0.25` | |
 | Boolean | `true`, `false` | |
 | Date | `2031-05-01` | The day must exist in that month. |
-| Datetime | `2031-05-01T09:30:00Z` | RFC 3339: `Z` or `+HH:MM` or `-HH:MM`, optional fraction. With no offset, the time is local. |
+| Datetime | `2031-05-01T09:30:00Z` | RFC 3339: `Z` or `+HH:MM` or `-HH:MM`, optional fraction. With no offset, the time counts as UTC. |
 
 A date or datetime is written bare, without quotes. `fm.due < "2031-05-01"`
 compares as a string and never matches a date field.
@@ -81,7 +81,7 @@ A value only compares with a value of its own type:
 
 - Strings compare by their bytes.
 - Integers and floats compare with each other exactly, without rounding. A float
-  `NaN` is equal to and ordered against nothing.
+  `NaN` is equal to and ordered against nothing, so `!=` is true.
 - Booleans compare with booleans.
 - Types that do not compare, such as a string field and an integer value, are
   never equal and never ordered. `==`, `<`, `<=`, `>`, and `>=` are false, and
@@ -102,8 +102,10 @@ including a time of day. The comparison works on instants:
 Open issues of a bug:
 
 ```
-fm.type == "issue" and fm.kind == "bug" and fm.status == "open"
+fm.type == "issue" and fm.bug == "B-12" and fm.status != "closed"
 ```
+
+The `!=` also matches issues that have no `status`.
 
 Tasks due before a date. A task with no `due` field does not match:
 
