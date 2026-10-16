@@ -1,0 +1,13 @@
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=title
+        Scalar String "Shipping the parser"
+      Pair key=description
+        Scalar String "The parser reads a file\nin two stages."
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "Body."

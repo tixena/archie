@@ -1,52 +1,261 @@
-//! TOML frontmatter: `key = value` lines into a mapping.
+//! TOML frontmatter: `key = value` lines and `[table]` headers into a
+//! mapping.
 
 use core::ops::Range;
+use core::{iter, mem};
 
 use indexmap::IndexMap;
+use indexmap::map::Entry;
 
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{finish, insert};
+use crate::parser::frontmatter::{append, extent, finish, insert};
 use crate::parser::scalar;
+
+/// One part of a key, such as `name` in `owner.name`, and where it starts.
+type Part = (String, usize);
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
     let empty_at = content.start;
     let mut cursor = Cursor::new(source, content);
-    let mut pairs = IndexMap::new();
+    let mut root = IndexMap::new();
+    // The path of the open table; empty is the root.
+    let mut current: Vec<String> = Vec::new();
+    // Tables made only because a deeper header named them; a header may still
+    // add to them.
+    let mut implicit: Vec<Vec<String>> = Vec::new();
     loop {
         skip_trivia(&mut cursor);
         if cursor.at_end() {
             break;
         }
         if cursor.peek() == Some(b'[') {
-            return cursor.error("table headers are not read yet");
+            current = header(&mut cursor, &mut root, &mut implicit)?;
+        } else {
+            let table = table_at(&mut root, &current);
+            let keys = entry(&mut cursor, table)?;
+            implicit.retain(|path| !dotted_through(path, &current, &keys));
         }
-        entry(&mut cursor, &mut pairs)?;
+        stretch(&mut root, &current, cursor.pos());
         end_of_line(&mut cursor)?;
     }
-    Ok(finish(pairs, empty_at))
+    Ok(finish(root, empty_at))
 }
 
-fn entry(cursor: &mut Cursor<'_>, pairs: &mut IndexMap<String, Pair>) -> Result<(), ParseError> {
+/// Reads a `[a.b]` or `[[a.b]]` header, opens the table it names and returns
+/// its path. A table written again follows the repeated-key rule; a table
+/// made only by a deeper header takes the pairs of its own header.
+fn header(
+    cursor: &mut Cursor<'_>,
+    root: &mut IndexMap<String, Pair>,
+    implicit: &mut Vec<Vec<String>>,
+) -> Result<Vec<String>, ParseError> {
     let start = cursor.pos();
-    let name = key(cursor)?;
+    cursor.bump();
+    let array = cursor.eat(b'[');
     cursor.skip_spaces();
-    if cursor.peek() == Some(b'.') {
-        return cursor.error("dotted keys are not read yet");
+    let (parents, last) = key_path(cursor)?;
+    if !(cursor.eat(b']') && (!array || cursor.eat(b']'))) {
+        return cursor.error("expected `]` to close the table header");
     }
+    let span = start..cursor.pos();
+    let path: Vec<String> = parents
+        .into_iter()
+        .chain(iter::once(last))
+        .map(|(name, _)| name)
+        .collect();
+    let mut table = root;
+    for (depth, name) in path.iter().enumerate() {
+        let prefix = &path[..=depth];
+        let named = depth + 1 == path.len();
+        let pair = match table.entry(name.clone()) {
+            Entry::Vacant(slot) => {
+                if !named {
+                    implicit.push(prefix.to_vec());
+                }
+                let value = if named && array {
+                    Value::Sequence(Sequence {
+                        items: vec![mapping_at(span.end)],
+                        span: span.clone(),
+                    })
+                } else {
+                    mapping_at(span.end)
+                };
+                slot.insert(Pair {
+                    repeats: Vec::new(),
+                    span: span.clone(),
+                    value,
+                })
+            }
+            Entry::Occupied(slot) => {
+                let pair = slot.into_mut();
+                pair.repeats.push(span.clone());
+                if named {
+                    let adds = !array
+                        && matches!(pair.value, Value::Mapping(_))
+                        && implicit.iter().any(|made| made.as_slice() == prefix);
+                    if adds {
+                        implicit.retain(|made| made.as_slice() != prefix);
+                    } else {
+                        implicit.retain(|made| !made.starts_with(prefix));
+                        append(&mut pair.value, mapping_at(span.end));
+                    }
+                }
+                pair
+            }
+        };
+        table = &mut table_of(&mut pair.value).pairs;
+    }
+    Ok(path)
+}
+
+/// The open table at `path`, into the last item of an array of tables. The
+/// walk stops early where the path names nothing.
+fn table_at<'root>(
+    root: &'root mut IndexMap<String, Pair>,
+    path: &[String],
+) -> &'root mut IndexMap<String, Pair> {
+    path.iter()
+        .fold(root, |table, name| match table.get_index_of(name) {
+            Some(index) => &mut table_of(&mut table[index].value).pairs,
+            None => table,
+        })
+}
+
+/// The table `value` holds: itself, or the last item of a list when that
+/// item is a mapping. Anything else first gets an empty mapping after it, by
+/// the repeated-key rule.
+fn table_of(value: &mut Value) -> &mut Mapping {
+    match value {
+        Value::Mapping(mapping) => mapping,
+        Value::Sequence(sequence) => {
+            if !matches!(sequence.items.last(), Some(Value::Mapping(_))) {
+                sequence.items.push(mapping_at(sequence.span.end));
+            }
+            let last = sequence.items.len() - 1;
+            table_of(&mut sequence.items[last])
+        }
+        Value::Scalar(_) => {
+            let end = value.span().end;
+            append(value, mapping_at(end));
+            table_of(value)
+        }
+    }
+}
+
+/// An empty mapping at `at`.
+fn mapping_at(at: usize) -> Value {
+    Value::Mapping(Mapping {
+        pairs: IndexMap::new(),
+        span: at..at,
+    })
+}
+
+/// Extends each table on `path` to `end`: the latest place its key is
+/// written, the list it sits in, and its mapping.
+fn stretch(pairs: &mut IndexMap<String, Pair>, path: &[String], end: usize) {
+    let Some((name, rest)) = path.split_first() else {
+        return;
+    };
+    let Some(pair) = pairs.get_mut(name) else {
+        return;
+    };
+    let latest = pair.repeats.last_mut().unwrap_or(&mut pair.span);
+    latest.end = latest.end.max(end);
+    if let Value::Sequence(sequence) = &mut pair.value {
+        sequence.span.end = sequence.span.end.max(end);
+    }
+    let table = table_of(&mut pair.value);
+    stretch(&mut table.pairs, rest, end);
+    fit(table);
+}
+
+/// Sets the span of a mapping read as lines to cover its pairs.
+fn fit(mapping: &mut Mapping) {
+    if let Some(span) = extent(&mapping.pairs) {
+        mapping.span = span;
+    }
+}
+
+/// Whether `path` is a table the dotted key `keys`, written in the table at
+/// `current`, walks through.
+fn dotted_through(path: &[String], current: &[String], keys: &[String]) -> bool {
+    path.strip_prefix(current)
+        .is_some_and(|rest| !rest.is_empty() && rest.len() < keys.len() && keys.starts_with(rest))
+}
+
+/// Reads `key = value` into `pairs` and returns the parts of the key. A
+/// dotted key adds to the tables it names, making those that do not exist.
+fn entry(
+    cursor: &mut Cursor<'_>,
+    pairs: &mut IndexMap<String, Pair>,
+) -> Result<Vec<String>, ParseError> {
+    let (parents, last) = key_path(cursor)?;
     if !cursor.eat(b'=') {
         return cursor.error("expected `=` after the key");
     }
     cursor.skip_spaces();
     let value = value(cursor)?;
-    let pair = Pair {
-        repeats: Vec::new(),
-        span: start..value.span().end,
-        value,
+    let keys = parents
+        .iter()
+        .chain(iter::once(&last))
+        .map(|(name, _)| name.clone())
+        .collect();
+    put(pairs, &parents, last, value);
+    Ok(keys)
+}
+
+/// Adds `value` under `last`, inside the tables `parents` name.
+fn put(pairs: &mut IndexMap<String, Pair>, parents: &[Part], last: Part, value: Value) {
+    let end = value.span().end;
+    let Some(((name, start), rest)) = parents.split_first() else {
+        let (name, start) = last;
+        let pair = Pair {
+            repeats: Vec::new(),
+            span: start..end,
+            value,
+        };
+        insert(pairs, name, pair);
+        return;
     };
-    insert(pairs, name, pair);
-    Ok(())
+    let span = *start..end;
+    let pair = match pairs.entry(name.clone()) {
+        Entry::Vacant(slot) => slot.insert(Pair {
+            repeats: Vec::new(),
+            span,
+            value: mapping_at(*start),
+        }),
+        Entry::Occupied(slot) => {
+            let pair = slot.into_mut();
+            pair.repeats.push(span);
+            pair
+        }
+    };
+    let table = table_of(&mut pair.value);
+    put(&mut table.pairs, rest, last, value);
+    fit(table);
+}
+
+/// A key, or a dotted key such as `owner.name` with spaces allowed around
+/// each `.`: the parts before the last, and the last.
+fn key_path(cursor: &mut Cursor<'_>) -> Result<(Vec<Part>, Part), ParseError> {
+    let mut parents = Vec::new();
+    let mut last = part(cursor)?;
+    loop {
+        cursor.skip_spaces();
+        if !cursor.eat(b'.') {
+            return Ok((parents, last));
+        }
+        cursor.skip_spaces();
+        let next = part(cursor)?;
+        parents.push(mem::replace(&mut last, next));
+    }
+}
+
+fn part(cursor: &mut Cursor<'_>) -> Result<Part, ParseError> {
+    let start = cursor.pos();
+    Ok((key(cursor)?, start))
 }
 
 fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
@@ -73,11 +282,19 @@ fn value(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
     let start = cursor.pos();
     match cursor.peek() {
         Some(b'"') => {
-            let text = basic_string(cursor)?;
+            let text = if cursor.eat_str("\"\"\"") {
+                multi_line_basic_string(cursor)?
+            } else {
+                basic_string(cursor)?
+            };
             Ok(string(start..cursor.pos(), text))
         }
         Some(b'\'') => {
-            let text = literal_string(cursor)?;
+            let text = if cursor.eat_str("'''") {
+                multi_line_literal_string(cursor)?
+            } else {
+                literal_string(cursor)?
+            };
             Ok(string(start..cursor.pos(), text))
         }
         Some(b'[') => array(cursor),
@@ -95,9 +312,6 @@ const fn string(span: Range<usize>, text: String) -> Value {
 
 fn basic_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     cursor.bump();
-    if cursor.rest().starts_with("\"\"") {
-        return cursor.error("multi-line strings are not read yet");
-    }
     let mut text = String::new();
     loop {
         text.push_str(cursor.take_until(b"\"\\\n"));
@@ -109,6 +323,71 @@ fn basic_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
         }
         text.push(escape(cursor)?);
     }
+}
+
+/// The text of a `"""` string, read from after its opening quotes. A `\` at
+/// the end of a line drops the line ending and the whitespace after it.
+fn multi_line_basic_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
+    skip_newline(cursor);
+    let mut text = String::new();
+    loop {
+        text.push_str(cursor.take_until(b"\"\\"));
+        if cursor.at_end() {
+            return cursor.error("the string is not closed");
+        }
+        if cursor.peek() == Some(b'"') {
+            if quotes(cursor, b'"', &mut text) {
+                return Ok(text);
+            }
+        } else {
+            cursor.bump();
+            if cursor.rest_of_line().trim_matches([' ', '\t']).is_empty() {
+                while matches!(cursor.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+                    cursor.bump();
+                }
+            } else {
+                text.push(escape(cursor)?);
+            }
+        }
+    }
+}
+
+/// The text of a `'''` string, read from after its opening quotes. It has no
+/// escapes.
+fn multi_line_literal_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
+    skip_newline(cursor);
+    let mut text = String::new();
+    loop {
+        text.push_str(cursor.take_until(b"'"));
+        if cursor.at_end() {
+            return cursor.error("the string is not closed");
+        }
+        if quotes(cursor, b'\'', &mut text) {
+            return Ok(text);
+        }
+    }
+}
+
+/// The line ending right after the opening quotes of a multi-line string,
+/// which is not part of its text.
+fn skip_newline(cursor: &mut Cursor<'_>) {
+    let _: bool = cursor.eat_str("\r\n") || cursor.eat(b'\n');
+}
+
+/// Reads a run of `quote` inside a multi-line string and returns whether it
+/// closes the string. Three quotes close it, and up to two more before them
+/// belong to the text.
+fn quotes(cursor: &mut Cursor<'_>, quote: u8, text: &mut String) -> bool {
+    let run = cursor
+        .rest()
+        .bytes()
+        .take_while(|&byte| byte == quote)
+        .count();
+    let closes = run >= 3;
+    let inside = if closes { (run - 3).min(2) } else { run };
+    text.extend(iter::repeat_n(char::from(quote), inside));
+    cursor.set_pos(cursor.pos() + if closes { inside + 3 } else { run });
+    closes
 }
 
 fn escape(cursor: &mut Cursor<'_>) -> Result<char, ParseError> {
@@ -133,9 +412,6 @@ fn escape(cursor: &mut Cursor<'_>) -> Result<char, ParseError> {
 
 fn literal_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     cursor.bump();
-    if cursor.rest().starts_with("''") {
-        return cursor.error("multi-line strings are not read yet");
-    }
     let text = cursor.take_until(b"'\n").to_owned();
     if !cursor.eat(b'\'') {
         return cursor.error("the string is not closed");

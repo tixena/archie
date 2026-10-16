@@ -17,7 +17,9 @@ macro_rules! document {
 
 // TOML frontmatter.
 document!(hugo_post);
+document!(hugo_post_with_table);
 document!(task);
+document!(toml_multi_line_string);
 document!(zola_page);
 
 // YAML frontmatter.

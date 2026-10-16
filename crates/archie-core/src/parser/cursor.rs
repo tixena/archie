@@ -29,6 +29,15 @@ impl<'src> Cursor<'src> {
         found
     }
 
+    /// Advances past `text` when the cursor is at it.
+    pub fn eat_str(&mut self, text: &str) -> bool {
+        let found = self.rest().starts_with(text);
+        if found {
+            self.pos += text.len();
+        }
+        found
+    }
+
     pub const fn end(&self) -> usize {
         self.end
     }

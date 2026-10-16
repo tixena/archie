@@ -312,3 +312,318 @@ owner = { name = "Ada", name = "Grace" }
 "#,
     );
 }
+
+#[test]
+fn a_header_opens_a_table_that_holds_the_pairs_after_it() {
+    check(
+        r#"+++
+title = "x"
+
+[params]
+author = "Ada"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=title
+        Scalar String "x"
+      Pair key=params
+        Mapping
+          Pair key=author
+            Scalar String "Ada"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_dotted_header_makes_the_tables_on_its_path() {
+    check(
+        "+++\n[a.b]\nx = 1\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=b
+            Mapping
+              Pair key=x
+                Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_adds_to_a_table_that_only_a_deeper_header_made() {
+    check(
+        r#"+++
+[server.tls]
+cert = "a.pem"
+
+[server]
+port = 8080
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=server repeats=1
+        Mapping
+          Pair key=tls
+            Mapping
+              Pair key=cert
+                Scalar String "a.pem"
+          Pair key=port
+            Scalar Integer 8080
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn an_array_header_adds_a_mapping_and_a_deeper_header_opens_the_last_one() {
+    check(
+        r#"+++
+[[authors]]
+name = "Ada"
+
+[[authors]]
+name = "Grace"
+
+[authors.site]
+url = "grace.dev"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=authors repeats=2
+        Sequence
+          Mapping
+            Pair key=name
+              Scalar String "Ada"
+          Mapping
+            Pair key=name
+              Scalar String "Grace"
+            Pair key=site
+              Mapping
+                Pair key=url
+                  Scalar String "grace.dev"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_table_header_written_twice_holds_a_list_of_both_tables() {
+    check(
+        "+++\n[params]\na = 1\n\n[params]\nb = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=params repeats=1
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar Integer 1
+          Mapping
+            Pair key=b
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_after_a_dotted_key_or_an_inline_table_writes_the_table_again() {
+    check(
+        r#"+++
+owner = { name = "Ada" }
+site.name = "notes"
+
+[owner]
+role = "host"
+
+[site]
+lang = "en"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=owner repeats=1
+        Sequence
+          Mapping
+            Pair key=name
+              Scalar String "Ada"
+          Mapping
+            Pair key=role
+              Scalar String "host"
+      Pair key=site repeats=1
+        Sequence
+          Mapping
+            Pair key=name
+              Scalar String "notes"
+          Mapping
+            Pair key=lang
+              Scalar String "en"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_dotted_key_writes_a_table_that_only_a_deeper_header_made() {
+    check(
+        r#"+++
+[fruit.apple.texture]
+smooth = true
+
+[fruit]
+apple.color = "red"
+
+[fruit.apple]
+taste = "sweet"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=fruit repeats=2
+        Mapping
+          Pair key=apple repeats=2
+            Sequence
+              Mapping
+                Pair key=texture
+                  Mapping
+                    Pair key=smooth
+                      Scalar Boolean true
+                Pair key=color
+                  Scalar String "red"
+              Mapping
+                Pair key=taste
+                  Scalar String "sweet"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn dotted_keys_add_to_one_table_and_a_quoted_dot_is_part_of_the_key() {
+    check(
+        r#"+++
+owner.name = "Ada"
+owner . role = "host"
+"quoted.key" = 1
+site."www.example.com".port = 80
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=owner repeats=1
+        Mapping
+          Pair key=name
+            Scalar String "Ada"
+          Pair key=role
+            Scalar String "host"
+      Pair key=quoted.key
+        Scalar Integer 1
+      Pair key=site
+        Mapping
+          Pair key=www.example.com
+            Mapping
+              Pair key=port
+                Scalar Integer 80
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn dotted_keys_are_read_under_a_header_and_inside_an_inline_table() {
+    check(
+        r#"+++
+[params]
+social.github = "ada"
+point = { x.value = 1, x.unit = "px" }
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=params
+        Mapping
+          Pair key=social
+            Mapping
+              Pair key=github
+                Scalar String "ada"
+          Pair key=point
+            Mapping
+              Pair key=x repeats=1
+                Mapping
+                  Pair key=value
+                    Scalar Integer 1
+                  Pair key=unit
+                    Scalar String "px"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_multi_line_basic_string_drops_its_first_newline_and_joins_lines_ending_in_a_backslash() {
+    check(
+        r#"+++
+text = """
+line one
+line two"""
+joined = """\
+    The parser \
+    reads a file."""
+short = """
+x \
+  y"""
+quotes = """a "quoted" word, two "" and a tab\t before one """"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=text
+        Scalar String "line one\nline two"
+      Pair key=joined
+        Scalar String "The parser reads a file."
+      Pair key=short
+        Scalar String "x y"
+      Pair key=quotes
+        Scalar String "a \"quoted\" word, two \"\" and a tab\t before one \""
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_multi_line_literal_string_keeps_its_backslashes() {
+    check(
+        r#"+++
+path = '''C:\dir\n'''
+pattern = '''
+\d+ isn't a "string"'''
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=path
+        Scalar String "C:\\dir\\n"
+      Pair key=pattern
+        Scalar String "\\d+ isn't a \"string\""
+  MarkdownBlock
+"#,
+    );
+}
