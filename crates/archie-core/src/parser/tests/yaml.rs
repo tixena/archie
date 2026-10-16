@@ -503,7 +503,7 @@ spread: {name: Ada,
 list: [
   a,  # first
   b,
-]
+  ]
 empty: {}
 bare: {key, other: }
 quoted: {"a b": 1, 'c': "d"}
@@ -1099,6 +1099,223 @@ fn the_yaml_forms_read_together() {
           Scalar String "c"
   MarkdownBlock
 "#,
+    );
+}
+
+#[test]
+fn a_value_may_start_on_the_line_after_its_key_or_its_dash() {
+    check(
+        "\
+---
+a:
+  b
+quoted:
+  \"b\"
+flow:
+  [x,
+  y]
+block:
+  |
+    b
+long:
+  b
+  c
+tagged:
+  !!str 12
+i:
+-
+  b
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "b"
+      Pair key=quoted
+        Scalar String "b"
+      Pair key=flow
+        Sequence
+          Scalar String "x"
+          Scalar String "y"
+      Pair key=block
+        Scalar String "b\n"
+      Pair key=long
+        Scalar String "b c"
+      Pair key=tagged
+        Scalar String "12"
+      Pair key=i
+        Sequence
+          Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_plain_value_inside_a_flow_collection_goes_on_over_the_lines_below() {
+    check(
+        "\
+---
+t: [a
+  b]
+m: {a: b
+  c}
+blank: [a b
+
+  c, d]
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=t
+        Sequence
+          Scalar String "a b"
+      Pair key=m
+        Mapping
+          Pair key=a
+            Scalar String "b c"
+      Pair key=blank
+        Sequence
+          Scalar String "a b\nc"
+          Scalar String "d"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_list_entry_may_hold_a_mapping_whose_first_key_is_quoted() {
+    check(
+        "\
+---
+items:
+- \"a\": 1
+single:
+- 'a': 1
+  \"b\": 2
+value:
+- \"a: b\"
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar Integer 1
+      Pair key=single
+        Sequence
+          Mapping
+            Pair key=a
+              Scalar Integer 1
+            Pair key=b
+              Scalar Integer 2
+      Pair key=value
+        Sequence
+          Scalar String "a: b"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_tag_that_ends_a_list_entry_takes_only_the_block_indented_under_the_dash() {
+    check(
+        "\
+---
+items:
+- !!seq
+  - x
+- !!map
+  k: v
+key: !!seq
+- a
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Sequence
+            Scalar String "x"
+          Mapping
+            Pair key=k
+              Scalar String "v"
+      Pair key=key
+        Sequence
+          Scalar String "a"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_comment_may_follow_a_tab() {
+    check(
+        "---\na: b\t# c\nq: \"x\"\t# c\n  \t# a comment line\nn: 1\t# c\nt: [x,\t# c\n  y]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "b"
+      Pair key=q
+        Scalar String "x"
+      Pair key=n
+        Scalar Integer 1
+      Pair key=t
+        Sequence
+          Scalar String "x"
+          Scalar String "y"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn the_six_forms_read_together() {
+    check(
+        "---\na:\n  b\nt: [x\n  y]\nitems:\n- \"k\": 1\nc: d\t# note\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "b"
+      Pair key=t
+        Sequence
+          Scalar String "x y"
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=k
+              Scalar Integer 1
+      Pair key=c
+        Scalar String "d"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_value_on_the_line_after_its_key_spans_from_its_text_and_its_pair_from_the_key() {
+    let whole = "---\na:\n  b\nt: [x\n  y]\n---\n";
+    check_spans(
+        whole,
+        &[
+            ("Document", whole),
+            ("Frontmatter format=Yaml", "---\na:\n  b\nt: [x\n  y]\n---"),
+            ("Mapping", "a:\n  b\nt: [x\n  y]"),
+            ("Pair key=a", "a:\n  b"),
+            (r#"Scalar String "b""#, "b"),
+            ("Pair key=t", "t: [x\n  y]"),
+            ("Sequence", "[x\n  y]"),
+            (r#"Scalar String "x y""#, "x\n  y"),
+            ("MarkdownBlock", ""),
+        ],
     );
 }
 

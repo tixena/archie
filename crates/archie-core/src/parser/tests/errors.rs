@@ -136,6 +136,39 @@ fn a_value_that_does_not_fit_its_tag_is_refused() {
 }
 
 #[test]
+fn a_tag_with_no_value_after_it_or_under_it_is_checked_as_an_empty_value() {
+    let empty = |name: &str| {
+        named(
+            &format!("an empty value is not a value of the tag `{name}`"),
+            name,
+        )
+    };
+    assert_eq!(failed("---\nitems:\n- !!seq\n- x\n---\n"), empty("!!seq"));
+    assert_eq!(
+        failed("---\nitems:\n-\n  !!seq\n- x\n---\n"),
+        empty("!!seq")
+    );
+    assert_eq!(
+        failed("---\nowner: !!map\nname: Ada\n---\n"),
+        empty("!!map")
+    );
+    assert_eq!(failed("---\nn: [!!int ]\n---\n"), empty("!!int"));
+}
+
+#[test]
+fn a_line_of_a_flow_collection_must_be_indented_more_than_its_key() {
+    let message = "a line of a flow collection must be indented more than its key";
+    let refused = |at: &'static str| (message.to_owned(), at);
+    assert_eq!(refusal("---\nflow: [a,\nb,\nc]\n---\n"), refused("b,"));
+    assert_eq!(refusal("---\nflow: {a: 1,\nb: 2}\n---\n"), refused("b: 2}"));
+    assert_eq!(refusal("---\nlist: [\n  a,\n]\n---\n"), refused("]"));
+    assert_eq!(refusal("---\nt: [a\nb]\n---\n"), refused("b]"));
+    assert_eq!(refusal("---\nt: [a, [b,\nc]]\n---\n"), refused("c]]"));
+    assert_eq!(refusal("---\nitems:\n- [a,\nb]\n---\n"), refused("b]"));
+    assert_eq!(refusal("---\nowner:\n  t: [a,\n  b]\n---\n"), refused("b]"));
+}
+
+#[test]
 fn anchors_and_aliases_are_refused() {
     let refused = |at: &str| named("anchors and aliases are not read", at);
     assert_eq!(failed("---\nbase: &base 1\n---\n"), refused("&"));
@@ -208,6 +241,7 @@ fn a_line_inside_a_quoted_string_must_be_indented_more_than_its_key() {
     assert_eq!(refusal("---\nt: \"a\nb\"\n---\n"), refused);
     assert_eq!(refusal("---\nowner:\n  t: 'a\n  b'\n---\n").0, refused.0);
     assert_eq!(refusal("---\nitems:\n- \"a\nb\"\n---\n"), refused);
+    assert_eq!(refusal("---\nt: [\"a\nb\"]\n---\n").0, refused.0);
 }
 
 #[test]
