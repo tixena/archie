@@ -12,3 +12,21 @@ pub enum QuerySourceError {
     #[error("{message} (at byte {})", span.start)]
     Parse { message: String, span: Range<usize> },
 }
+
+/// A query that does not parse; `span` is where, in bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message} (at byte {})", span.start)]
+#[non_exhaustive]
+pub struct QueryError {
+    pub message: String,
+    pub span: Range<usize>,
+}
+
+impl QueryError {
+    pub(crate) fn new(message: &str, span: Range<usize>) -> Self {
+        Self {
+            message: message.to_owned(),
+            span,
+        }
+    }
+}

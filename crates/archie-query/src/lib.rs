@@ -4,4 +4,5 @@
 mod adapters;
 pub mod error;
 pub mod field;
+pub mod query;
 pub mod resource;
