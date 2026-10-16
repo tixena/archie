@@ -21,3 +21,15 @@ pub fn line_at(source: &str, start: usize) -> Line {
     };
     Line { end, next, start }
 }
+
+/// The line at `start`, its `start` moved past at most `base` of its leading
+/// spaces.
+pub fn line_from(source: &str, start: usize, base: usize) -> Line {
+    let line = line_at(source, start);
+    let text = &source[line.start..line.end];
+    let indent = text.len() - text.trim_start_matches(' ').len();
+    Line {
+        start: line.start + indent.min(base),
+        ..line
+    }
+}

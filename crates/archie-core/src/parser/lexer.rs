@@ -4,7 +4,7 @@
 
 use core::ops::Range;
 
-use crate::parser::line::line_at;
+use crate::parser::line::{line_at, line_from};
 use crate::parser::table::{self, TableToken};
 
 /// The marker that starts a list item.
@@ -82,6 +82,8 @@ pub enum TokenKind {
 }
 
 struct Lexer<'src> {
+    /// How many leading spaces of each line are left out, at most.
+    base: usize,
     /// The content column of each open list item, outermost first.
     levels: Vec<usize>,
     pos: usize,
@@ -109,7 +111,7 @@ impl Lexer<'_> {
         let content_start = self.pos;
         let mut content_end = content_start;
         while self.pos < source.len() {
-            let line = line_at(source, self.pos);
+            let line = line_from(source, self.pos, self.base);
             let text = &source[line.start..line.end];
             let content = text.trim_start_matches(' ');
             let indent = text.len() - content.len();
@@ -162,9 +164,10 @@ impl Lexer<'_> {
             self.push(kind, at..end);
         } else if let Some(ticks) = fence(rest) {
             self.code_block(column, at, end, ticks);
-        } else if let Some((marker, width)) =
-            list_marker(rest).filter(|&(marker, _)| !continues || marker.interrupts())
-        {
+        } else if let Some((marker, width)) = list_marker(rest).filter(|&(marker, width)| {
+            // An empty item never interrupts a paragraph.
+            !continues || (marker.interrupts() && !rest[width..].trim_start_matches(' ').is_empty())
+        }) {
             let after = &rest[width..];
             let inner = after.trim_start_matches(' ');
             let spaces = after.len() - inner.len();
@@ -176,9 +179,14 @@ impl Lexer<'_> {
             if !inner.is_empty() {
                 self.content(line_start, end - inner.len(), end, false);
             }
-        } else if let Some((table, span, next)) =
-            table::read(self.source, line_start, at..end, self.pos, self.level())
-        {
+        } else if let Some((table, span, next)) = table::read(
+            self.source,
+            line_start,
+            at..end,
+            self.pos,
+            self.level(),
+            self.base,
+        ) {
             self.pos = next;
             self.push(TokenKind::Table(table), span);
         } else {
@@ -198,7 +206,7 @@ impl Lexer<'_> {
         let mut blanks = Vec::new();
         let mut scan = self.pos;
         while scan < source.len() {
-            let line = line_at(source, scan);
+            let line = line_from(source, scan, self.base);
             let text = &source[line.start..line.end];
             let content = text.trim_start_matches(' ');
             let indent = text.len() - content.len();
@@ -228,12 +236,21 @@ impl Lexer<'_> {
     }
 
     fn line(&mut self) {
-        let line = line_at(self.source, self.pos);
+        let line = line_from(self.source, self.pos, self.base);
         self.pos = line.next;
         let text = &self.source[line.start..line.end];
         let content = text.trim_start_matches(' ');
         let trimmed = content.trim_end();
         if trimmed.is_empty() {
+            // An item whose marker line is empty ends at a blank line after it.
+            if self
+                .tokens
+                .last()
+                .is_some_and(|token| matches!(token.kind, TokenKind::ItemStart(_)))
+            {
+                self.levels.pop();
+                self.push(TokenKind::ItemEnd, line.start..line.start);
+            }
             self.push(TokenKind::Blank, line.start..line.start);
             return;
         }
@@ -253,8 +270,11 @@ impl Lexer<'_> {
     }
 }
 
-pub fn lex(source: &str, start: usize) -> Vec<Token> {
+/// The tokens of `source` from byte `start`, each line read with at most
+/// `base` of its leading spaces left out, so its columns count from `base`.
+pub fn lex_from(source: &str, start: usize, base: usize) -> Vec<Token> {
     let mut lexer = Lexer {
+        base,
         levels: Vec::new(),
         pos: start,
         source,
@@ -348,7 +368,7 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>]) -> Vec<Token> {
             .zip(starts.get(index))
             .map_or(at, |(line, &start)| line.start + (at - start))
     };
-    let mut tokens = lex(&text, 0);
+    let mut tokens = lex_from(&text, 0, 0);
     for token in &mut tokens {
         token.span = place(token.span.start)..place(token.span.end);
         match &mut token.kind {

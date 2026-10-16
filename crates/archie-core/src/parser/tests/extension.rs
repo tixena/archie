@@ -201,6 +201,51 @@ const fn second<A, B>(node: &Either<A, B>) -> Option<&B> {
     }
 }
 
+/// The body of the first item of the first list among the blocks of the
+/// first section of `markdown`.
+fn first_item<T>(markdown: &MarkdownBlock<T>) -> &MarkdownBlock<T>
+where
+    T: Extension,
+{
+    markdown.sections[0]
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::List(list) => list.items.first().map(|item| &item.body),
+            Block::CodeBlock(_) | Block::Paragraph(_) | Block::Table(_) => None,
+        })
+        .unwrap()
+}
+
+/// `text` with every line that holds text indented by `indent`.
+fn indented(text: &str, indent: &str) -> String {
+    let mut lines = String::new();
+    for line in text.lines() {
+        if !line.is_empty() {
+            lines.push_str(indent);
+        }
+        lines.push_str(line);
+        lines.push('\n');
+    }
+    lines
+}
+
+/// Each node of `block`, with the source text its span covers.
+fn block_spans<'source, T>(
+    source: &'source str,
+    block: &MarkdownBlock<T>,
+) -> Vec<(String, &'source str)>
+where
+    T: Extension,
+{
+    let mut rows = Rows::default();
+    rows.markdown_block(0, block);
+    rows.rows
+        .into_iter()
+        .map(|row| (row.label, &source[row.span]))
+        .collect()
+}
+
 fn block_outline<T>(block: &MarkdownBlock<T>) -> String
 where
     T: Extension,
@@ -504,4 +549,138 @@ fn the_first_extension_listed_that_claims_a_construct_gets_it() {
         Some("rust")
     );
     assert!(commented[2].kind.0.as_deref().and_then(first).is_some());
+}
+
+#[test]
+fn a_markdown_block_inside_a_nested_item_holds_the_section_of_its_heading() {
+    let document = parse("- - ```markdown\n    # A\n    ```\n").unwrap();
+    let block = code_blocks(first_item(first_item(&document.body)))[0];
+    assert_eq!(
+        block_outline(block.kind.0.as_deref().unwrap()),
+        "MarkdownBlock\n  Section\n    Heading\n      Text \"A\"\n"
+    );
+}
+
+#[test]
+fn a_markdown_block_inside_a_nested_item_reads_as_it_does_at_the_root() {
+    for body in [
+        "# A\ntext\n\n## B\n",
+        "- a\n  - b\n\n    more b\n",
+        "    indented code\n\n    more code\n",
+        "```rust\nfn main() {}\n```\n",
+        "| a | b |\n|---|---|\n| 1 | 2 |\n",
+        "+---+---+\n| a | b |\n+---+---+\n",
+        "Name  Age\n----  ---\nAda   36\n",
+        "  # two columns in\n",
+    ] {
+        let root = format!("````markdown\n{body}````\n");
+        let nested = format!("- - ````markdown\n{}    ````\n", indented(body, "    "));
+        let root_document = parse(&root).unwrap();
+        let nested_document = parse(&nested).unwrap();
+        let at_root = code_blocks(&root_document.body)[0]
+            .kind
+            .0
+            .as_deref()
+            .unwrap();
+        let in_item = code_blocks(first_item(first_item(&nested_document.body)))[0]
+            .kind
+            .0
+            .as_deref()
+            .unwrap();
+        assert_eq!(block_outline(in_item), block_outline(at_root), "{body}");
+        for (label, text) in block_spans(&nested, in_item) {
+            if label.starts_with("Text ") {
+                assert_eq!(label, format!("Text {text:?}"), "{body}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_line_indented_less_than_the_fence_loses_only_the_spaces_it_has() {
+    let source = "   ```markdown\n  # A\n text\n   ```\n";
+    let document = parse(source).unwrap();
+    let block = code_blocks(&document.body)[0];
+    assert_eq!(block.value, "# A\ntext");
+    let spans = block_spans(source, block.kind.0.as_deref().unwrap());
+    let expected = [
+        ("MarkdownBlock", "  # A\n text"),
+        ("Section", "# A\n text"),
+        ("Heading", "# A"),
+        (r#"Text "A""#, "A"),
+        ("Paragraph", "text"),
+        ("Line", "text"),
+        (r#"Text "text""#, "text"),
+    ];
+    assert_eq!(
+        spans
+            .iter()
+            .map(|(label, text)| (label.as_str(), *text))
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
+fn every_span_inside_a_nested_markdown_block_covers_its_text_in_the_source() {
+    let source = "- - ```markdown\n    # A\n    text\n    ```\n";
+    let document = parse(source).unwrap();
+    let block = code_blocks(first_item(first_item(&document.body)))[0];
+    let spans = block_spans(source, block.kind.0.as_deref().unwrap());
+    let expected = [
+        ("MarkdownBlock", "    # A\n    text"),
+        ("Section", "# A\n    text"),
+        ("Heading", "# A"),
+        (r#"Text "A""#, "A"),
+        ("Paragraph", "text"),
+        ("Line", "text"),
+        (r#"Text "text""#, "text"),
+    ];
+    assert_eq!(
+        spans
+            .iter()
+            .map(|(label, text)| (label.as_str(), *text))
+            .collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[test]
+fn a_comment_inside_a_nested_item_has_the_same_body_as_at_the_root() {
+    let body = "---\nid: abc\n---\n# Title\n\n- point\n\n      code\n";
+    let root = format!("```remargin\n{body}```\n");
+    let nested = format!("- - ```remargin\n{}    ```\n", indented(body, "    "));
+    let options = ParseOptions::strict();
+    let root_document = parse_with::<Comments>(&root, &options).unwrap();
+    let nested_document = parse_with::<Comments>(&nested, &options).unwrap();
+    let at_root = code_blocks(&root_document.body)[0]
+        .kind
+        .0
+        .as_deref()
+        .and_then(second)
+        .unwrap();
+    let in_item = code_blocks(first_item(first_item(&nested_document.body)))[0]
+        .kind
+        .0
+        .as_deref()
+        .and_then(second)
+        .unwrap();
+    assert_eq!(
+        block_outline(&at_root.body),
+        r#"MarkdownBlock
+  Section
+    Heading
+      Text "Title"
+    List loose
+      Item
+        MarkdownBlock
+          Section
+            Heading
+            Paragraph
+              Line
+                Text "point"
+            CodeBlock info="" value="code"
+"#
+    );
+    assert_eq!(block_outline(&in_item.body), block_outline(&at_root.body));
 }
