@@ -11,9 +11,10 @@ use crate::parser::line::{line_at, line_from};
 use crate::parser::table::{self, TableToken};
 
 /// How deep list items, markdown blocks and table cells nest, counted
-/// together: 95 grid tables, each in the cell of the one before, around
-/// emphasis 1000 deep, overflow a 2 MB debug stack when the tree is cloned.
-pub const BLOCK_CAP: usize = 90;
+/// together: 43 grid tables, each in the cell of the one before, below the
+/// headings `#` to `######`, around emphasis 1000 deep, overflow a 2 MB debug
+/// stack when the tree is cloned.
+pub const BLOCK_CAP: usize = 40;
 
 /// The marker that starts a list item.
 #[derive(Clone, Copy)]
