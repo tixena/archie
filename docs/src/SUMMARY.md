@@ -41,6 +41,7 @@
   - [Model Context Protocol tools](reference/mcp/tools.md)
 - [Shape language](reference/shape-language.md)
 - [Query grammar](reference/query-grammar.md)
+- [archie-query](reference/archie-query.md)
 - [Validation rules](reference/validation-rules.md)
 - [Change objects](reference/change-objects.md)
 - [Configuration](reference/config.md)
