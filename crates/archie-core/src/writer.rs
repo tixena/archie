@@ -316,8 +316,9 @@ impl Writer {
         self.end_line();
     }
 
-    /// Each line of the paragraph on a line of its own, with a backslash
-    /// before a first line that would open a TOML frontmatter.
+    /// Each line of the paragraph on a line of its own, written again with
+    /// a backslash before every `|` of its text when its lines would read as
+    /// a table.
     fn paragraph<T>(&mut self, paragraph: &Paragraph<T>)
     where
         T: Extension,
@@ -326,7 +327,32 @@ impl Writer {
         for line in paragraph.lines.iter().filter(|line| line.kind.0.is_none()) {
             pieces.add(&line.children);
         }
-        let mut segments = Segments::new(&pieces);
+        let mut lines = self.paragraph_lines(paragraph, &pieces, false);
+        if inline::reads_as_table(&lines) {
+            lines = self.paragraph_lines(paragraph, &pieces, true);
+        }
+        for line in &lines {
+            self.put(line);
+            self.put("\n");
+        }
+    }
+
+    /// The lines of `paragraph`, with a backslash before a first line that
+    /// would open a TOML frontmatter, and before every `|` of the text when
+    /// `pipes` is set.
+    fn paragraph_lines<T>(
+        &self,
+        paragraph: &Paragraph<T>,
+        pieces: &Pieces,
+        pipes: bool,
+    ) -> Vec<String>
+    where
+        T: Extension,
+    {
+        let mut segments = Segments::new(pieces);
+        if pipes {
+            segments.escape_pipes();
+        }
         let mut lines = Vec::with_capacity(paragraph.lines.len());
         let mut text_led = false;
         for (index, line) in paragraph.lines.iter().enumerate() {
@@ -344,10 +370,7 @@ impl Writer {
                 first.insert(0, '\\');
             }
         }
-        for line in &lines {
-            self.put(line);
-            self.put("\n");
-        }
+        lines
     }
 
     /// The heading, written when it has text or the section has
