@@ -9,7 +9,7 @@ use crate::parser::ast::{
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, With};
-use crate::parser::{ParseOptions, parse, parse_with, read_yaml, rebuild_with};
+use crate::parser::{ParseOptions, from_json, parse, parse_with, read_yaml, rebuild_with, to_json};
 use crate::writer::{WriteOptions, Writer, write};
 
 const SOURCE: &str = "\
@@ -471,8 +471,7 @@ where
 /// `document` written to JSON, read back, and its extension nodes built
 /// again.
 fn rebuilt(document: &Document<With<Comments>>) -> Document<With<Comments>> {
-    let json = serde_json::to_string(document).unwrap();
-    let back: Document<With<Comments>> = serde_json::from_str(&json).unwrap();
+    let back: Document<With<Comments>> = from_json(&to_json(document).unwrap()).unwrap();
     rebuild_with::<Comments>(&back, &ParseOptions::strict()).unwrap()
 }
 
