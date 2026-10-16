@@ -1,39 +1,16 @@
 use super::check;
 
 #[test]
-fn what_the_parser_does_not_recognize_stays_as_paragraph_text() {
+fn emphasis_and_strong_stay_as_written() {
     check(
-        "\
-> quoted line
-> - not a list
-
-*emphasis* and **strong** stay as written.
-
-- - -
-
-Setext heading
-==============
-",
+        "*emphasis* and **strong** stay as written.\n",
         r#"Document
   MarkdownBlock
     Section
       Heading
       Paragraph
         Line
-          Text "> quoted line"
-        Line
-          Text "> - not a list"
-      Paragraph
-        Line
           Text "*emphasis* and **strong** stay as written."
-      Paragraph
-        Line
-          Text "- - -"
-      Paragraph
-        Line
-          Text "Setext heading"
-        Line
-          Text "=============="
 "#,
     );
 }
@@ -46,18 +23,12 @@ fn a_heading_or_a_fence_is_not_recognized_inside_a_block_quote() {
 > ```
 > quoted code
 ",
-        r#"Document
+        r##"Document
   MarkdownBlock
     Section
       Heading
-      Paragraph
-        Line
-          Text "> # quoted heading"
-        Line
-          Text "> ```"
-        Line
-          Text "> quoted code"
-"#,
+      BlockQuote "# quoted heading\n```\nquoted code"
+"##,
     );
 }
 
@@ -76,9 +47,6 @@ fn reference_links_autolinks_and_html_stay_text() {
       Paragraph
         Line
           Text "[label][ref] and <https://example.com> and <b>html</b>"
-      Paragraph
-        Line
-          Text "[ref]: https://example.com"
 "#,
     );
 }

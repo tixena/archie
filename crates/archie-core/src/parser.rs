@@ -8,7 +8,9 @@ pub mod extension;
 mod block;
 mod claim;
 mod cursor;
+mod definition;
 mod frontmatter;
+mod html;
 mod inline;
 mod lexer;
 mod line;
@@ -83,7 +85,7 @@ where
 {
     let (frontmatter, body_start) = frontmatter::parse(source)?;
     let mut document = Document {
-        body: block::parse(source, body_start),
+        body: block::parse(source, body_start).0,
         frontmatter,
         kind: Kind(None),
         span: 0..source.len(),

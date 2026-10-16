@@ -6,8 +6,8 @@ use core::fmt::Debug;
 use core::ops::Range;
 
 use crate::parser::ast::{
-    Code, CodeBlock, Document, Heading, Image, Item, Line, Link, List, MarkdownBlock, Paragraph,
-    Section, Table, TableCell, TableRow, Text,
+    BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Item, Line, Link, List,
+    MarkdownBlock, Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak,
 };
 use crate::parser::error::ParseError;
 use crate::parser::{block, claim};
@@ -38,10 +38,12 @@ pub enum Construct<'node, T>
 where
     T: Extension,
 {
+    BlockQuote(&'node BlockQuote<T>),
     Code(&'node Code<T>),
     CodeBlock(&'node CodeBlock<T>),
     Document(&'node Document<T>),
     Heading(&'node Heading<T>),
+    Html(&'node Html<T>),
     Image(&'node Image<T>),
     Item(&'node Item<T>),
     Line(&'node Line<T>),
@@ -54,6 +56,7 @@ where
     TableCell(&'node TableCell<T>),
     TableRow(&'node TableRow<T>),
     Text(&'node Text<T>),
+    ThematicBreak(&'node ThematicBreak<T>),
 }
 
 /// What an extension reads a construct with: where the construct starts on
@@ -80,7 +83,7 @@ impl Context<'_> {
     where
         T: Extension,
     {
-        let mut read = block::parse_from(&self.source[..range.end], range.start, self.column);
+        let (mut read, _) = block::parse_from(&self.source[..range.end], range.start, self.column);
         claim::markdown_block(&mut read, self)?;
         Ok(read)
     }

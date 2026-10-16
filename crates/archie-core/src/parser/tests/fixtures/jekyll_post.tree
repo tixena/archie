@@ -23,9 +23,7 @@ Document
       Paragraph
         Line
           Text "Markdown has no grammar. This post walks through what that means in practice."
-      Paragraph
-        Line
-          Text "<!--more-->"
+      Html "<!--more-->"
       Section
         Heading
           Text "Why it is hard"

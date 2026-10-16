@@ -1,4 +1,6 @@
 use super::check;
+use crate::parser::block;
+use crate::parser::extension::Markdown;
 
 #[test]
 fn a_paragraph_is_a_set_of_lines_and_a_blank_line_ends_it() {
@@ -1291,5 +1293,456 @@ fn an_empty_item_holds_the_text_on_the_line_right_after_its_marker() {
                 Line
                   Text "foo"
 "#,
+    );
+}
+
+#[test]
+fn a_block_quote_holds_its_lines_as_text_without_their_marks() {
+    check(
+        "\
+> # not a heading
+> - not a list
+>no space
+>
+>  two spaces
+",
+        r##"Document
+  MarkdownBlock
+    Section
+      Heading
+      BlockQuote "# not a heading\n- not a list\nno space\n\n two spaces"
+"##,
+    );
+}
+
+#[test]
+fn a_line_without_a_mark_ends_a_block_quote() {
+    check(
+        "\
+> a
+b
+
+> c
+
+> d
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      BlockQuote "a"
+      Paragraph
+        Line
+          Text "b"
+      BlockQuote "c"
+      BlockQuote "d"
+"#,
+    );
+}
+
+#[test]
+fn three_or_more_dashes_stars_or_underscores_are_a_thematic_break() {
+    check(
+        "\
+text
+
+---
+
+***
+
+___
+
+- - -
+
+* * *
+
+  _ _ _ _
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "text"
+      ThematicBreak
+      ThematicBreak
+      ThematicBreak
+      ThematicBreak
+      ThematicBreak
+      ThematicBreak
+"#,
+    );
+}
+
+#[test]
+fn dashes_on_the_first_line_open_yaml_frontmatter_and_not_a_break() {
+    check(
+        "---\na: 1\n---\n",
+        "\
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn an_underlined_line_is_a_heading_that_opens_a_section() {
+    check(
+        "\
+Title
+=====
+text
+
+Sub
+---
+more
+
+# Next
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "Title"
+      Paragraph
+        Line
+          Text "text"
+      Section
+        Heading
+          Text "Sub"
+        Paragraph
+          Line
+            Text "more"
+    Section
+      Heading
+        Text "Next"
+"#,
+    );
+}
+
+#[test]
+fn the_lines_of_an_underlined_heading_join_with_one_space() {
+    check(
+        "first\n  second `code`\n===\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "first second "
+        Code "code"
+"#,
+    );
+}
+
+#[test]
+fn only_equals_signs_and_dashes_underline_paragraph_text() {
+    check(
+        "\
+T
+***
+
+text
+-
+more
+
+a
+- - -
+
+b
+= =
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "T"
+      ThematicBreak
+      Section
+        Heading
+          Text "text"
+        Paragraph
+          Line
+            Text "more"
+        Paragraph
+          Line
+            Text "a"
+        ThematicBreak
+        Paragraph
+          Line
+            Text "b"
+          Line
+            Text "= ="
+"#,
+    );
+}
+
+#[test]
+fn an_html_block_holds_its_lines_as_written() {
+    check(
+        "<details>\n<summary>x</summary>\n</details>\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Html "<details>\n<summary>x</summary>\n</details>"
+"#,
+    );
+}
+
+#[test]
+fn each_kind_of_html_block_ends_where_commonmark_ends_it() {
+    check(
+        r#"<pre>
+
+*a*
+</pre> after
+text
+
+<!-- a
+
+b --> c
+<?php
+
+?>
+<!DOCTYPE html>
+<![CDATA[
+x
+]]>
+<div class="a">
+# not a heading
+
+<a href="x">
+y
+"#,
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Html "<pre>\n\n*a*\n</pre> after"
+      Paragraph
+        Line
+          Text "text"
+      Html "<!-- a\n\nb --> c"
+      Html "<?php\n\n?>"
+      Html "<!DOCTYPE html>"
+      Html "<![CDATA[\nx\n]]>"
+      Html "<div class=\"a\">\n# not a heading"
+      Html "<a href=\"x\">\ny"
+"#,
+    );
+}
+
+#[test]
+fn a_lone_tag_of_any_name_does_not_interrupt_a_paragraph() {
+    check(
+        "\
+a
+<div>
+b
+
+c
+<span>
+d
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "a"
+      Html "<div>\nb"
+      Paragraph
+        Line
+          Text "c"
+        Line
+          Text "<span>"
+        Line
+          Text "d"
+"#,
+    );
+}
+
+#[test]
+fn a_line_holding_one_whole_tag_starts_an_html_block() {
+    check(
+        "\
+<a b='c' d=e f>
+
+</a >
+
+<a/ >
+
+<a b=c=d>
+",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Html "<a b='c' d=e f>"
+      Html "</a >"
+      Paragraph
+        Line
+          Text "<a/ >"
+      Paragraph
+        Line
+          Text "<a b=c=d>"
+"#,
+    );
+}
+
+#[test]
+fn a_link_definition_gives_no_node_and_the_parser_keeps_its_destination() {
+    let source = "\
+[1]: https://example.com/guide
+[Guide  Two]: <https://example.com/guide> \"Title\"
+[guide two]: /later
+[a]:
+/next-line
+  'title'
+";
+    check(source, "Document\n  MarkdownBlock\n");
+    let (_, definitions) = block::parse::<Markdown>(source, 0);
+    let mut found: Vec<(&str, &str)> = definitions
+        .iter()
+        .map(|(label, target)| (label.as_str(), target.as_str()))
+        .collect();
+    found.sort_unstable();
+    assert_eq!(
+        found,
+        [
+            ("1", "https://example.com/guide"),
+            ("a", "/next-line"),
+            ("guide two", "https://example.com/guide"),
+        ]
+    );
+}
+
+#[test]
+fn a_definition_does_not_interrupt_a_paragraph_and_nothing_may_follow_it() {
+    let source = "\
+text
+[a]: /u
+
+[b]: /u \"t\" more
+
+[c]: /u
+\"t\" more
+";
+    check(
+        source,
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "text"
+        Line
+          Text "[a]: /u"
+      Paragraph
+        Line
+          Text "[b]: /u \"t\" more"
+      Paragraph
+        Line
+          Text "\"t\" more"
+"#,
+    );
+    let (_, definitions) = block::parse::<Markdown>(source, 0);
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(definitions.get("c").map(String::as_str), Some("/u"));
+}
+
+#[test]
+fn inside_a_list_item_each_construct_counts_columns_from_the_item_text() {
+    let source = "\
+- > q
+  > r
+- a
+  ---
+- <div>
+  x
+  </div>
+- [x]: /u
+-    ***
+";
+    check(
+        source,
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              BlockQuote "q\nr"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Section
+                Heading
+                  Text "a"
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Html "<div>\nx\n</div>"
+        Item
+          MarkdownBlock
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              ThematicBreak
+"#,
+    );
+    let (_, definitions) = block::parse::<Markdown>(source, 0);
+    assert_eq!(definitions.get("x").map(String::as_str), Some("/u"));
+}
+
+#[test]
+fn a_quoted_line_left_of_the_item_text_ends_the_item() {
+    check(
+        "- > q\n> r\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              BlockQuote "q"
+      BlockQuote "r"
+"#,
+    );
+}
+
+#[test]
+fn a_block_quote_an_underlined_heading_a_break_and_html_read_together() {
+    check(
+        "> # quoted\n\nTitle\n=====\n\n***\n\n<div>\nraw\n</div>\n",
+        r##"Document
+  MarkdownBlock
+    Section
+      Heading
+      BlockQuote "# quoted"
+    Section
+      Heading
+        Text "Title"
+      ThematicBreak
+      Html "<div>\nraw\n</div>"
+"##,
     );
 }

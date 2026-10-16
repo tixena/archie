@@ -467,7 +467,7 @@ fn a_simple_table_takes_each_alignment_from_where_its_header_sits() {
 }
 
 #[test]
-fn a_simple_table_with_a_word_across_a_column_edge_or_no_rows_is_text() {
+fn a_simple_table_with_a_word_across_a_column_edge_or_no_rows_is_not_a_table() {
     check(
         "\
 Name    Role
@@ -485,8 +485,8 @@ Name    Role
       Paragraph
         Line
           Text "Name    Role"
-        Line
-          Text "----    ----"
+      ThematicBreak
+      Paragraph
         Line
           Text "Ada     host"
         Line
@@ -494,8 +494,7 @@ Name    Role
       Paragraph
         Line
           Text "Name    Role"
-        Line
-          Text "----    ----"
+      ThematicBreak
 "#,
     );
 }

@@ -29,11 +29,7 @@ Document
           Text ". See also "
           Link form=Wiki target="grammar#Body"
           Text "."
-      Paragraph
-        Line
-          Text "> [!note] Open point"
-        Line
-          Text "> The tree and the grammar change together."
+      BlockQuote "[!note] Open point\nThe tree and the grammar change together."
       Section
         Heading
           Text "Decisions"
