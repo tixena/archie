@@ -1,16 +1,18 @@
 //! The claim pass: every node of a built tree offered to the extensions,
 //! children before parents.
 
+use core::mem;
 use core::ops::Range;
 
 use crate::parser::ast::{
-    Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Inline, Item,
-    Kind, Line, LineBreak, Link, List, MarkdownBlock, Paragraph, Section, Strong, Table, TableCell,
-    TableRow, Text, ThematicBreak,
+    Block, BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Inline, Item, Kind, Line,
+    LineBreak, List, MarkdownBlock, Paragraph, Section, Table, TableCell, TableRow, Text,
+    ThematicBreak,
 };
 use crate::parser::block::Cells;
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension};
+use crate::parser::inline::children_mut;
 
 /// What the pass carries down the tree: the context of the nodes it offers,
 /// and each grid cell's lines, by the cell's span.
@@ -116,17 +118,6 @@ where
     }
 }
 
-impl<T> Offer for Emphasis<T>
-where
-    T: Extension,
-{
-    fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
-        each(&mut self.children, pass)?;
-        let claimed = T::claim(Construct::Emphasis(self), &pass.at(self.span.start));
-        settle(&mut self.kind, claimed, pass)
-    }
-}
-
 impl<T> Offer for Heading<T>
 where
     T: Extension,
@@ -163,16 +154,10 @@ where
     T: Extension,
 {
     fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
-        match self {
-            Self::Code(code) => code.offer(pass),
-            Self::Emphasis(emphasis) => emphasis.offer(pass),
-            Self::Html(html) => html.offer(pass),
-            Self::Image(image) => image.offer(pass),
-            Self::LineBreak(line_break) => line_break.offer(pass),
-            Self::Link(link) => link.offer(pass),
-            Self::Strong(strong) => strong.offer(pass),
-            Self::Text(text) => text.offer(pass),
+        if let Some(children) = children_mut(self) {
+            *children = inlines(mem::take(children), pass)?;
         }
+        own(self, pass)
     }
 }
 
@@ -204,17 +189,6 @@ where
 {
     fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
         let claimed = T::claim(Construct::LineBreak(self), &pass.at(self.span.start));
-        settle(&mut self.kind, claimed, pass)
-    }
-}
-
-impl<T> Offer for Link<T>
-where
-    T: Extension,
-{
-    fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
-        each(&mut self.children, pass)?;
-        let claimed = T::claim(Construct::Link(self), &pass.at(self.span.start));
         settle(&mut self.kind, claimed, pass)
     }
 }
@@ -261,17 +235,6 @@ where
         each(&mut self.blocks, pass)?;
         each(&mut self.subsections, pass)?;
         let claimed = T::claim(Construct::Section(self), &pass.at(self.span.start));
-        settle(&mut self.kind, claimed, pass)
-    }
-}
-
-impl<T> Offer for Strong<T>
-where
-    T: Extension,
-{
-    fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
-        each(&mut self.children, pass)?;
-        let claimed = T::claim(Construct::Strong(self), &pass.at(self.span.start));
         settle(&mut self.kind, claimed, pass)
     }
 }
@@ -370,6 +333,77 @@ where
     N: Offer,
 {
     nodes.iter_mut().try_for_each(|node| node.offer(pass))
+}
+
+/// Offers each of `nodes` and every node inside them, children before their
+/// parent, and gives them back. A node waits on a stack, its children taken
+/// out of it, while they are offered, so nesting takes no call depth.
+fn inlines<T>(nodes: Vec<Inline<T>>, pass: &Pass<'_>) -> Result<Vec<Inline<T>>, ParseError>
+where
+    T: Extension,
+{
+    // Each waiting node, with its siblings offered before it and those still
+    // to offer after it.
+    let mut waiting = Vec::new();
+    let mut offered = Vec::new();
+    let mut rest = popping(nodes);
+    loop {
+        if let Some(mut node) = rest.pop() {
+            if let Some(children) = children_mut(&mut node).map(mem::take) {
+                let before = mem::take(&mut offered);
+                let after = mem::replace(&mut rest, popping(children));
+                waiting.push((node, before, after));
+            } else {
+                own(&mut node, pass)?;
+                offered.push(node);
+            }
+        } else if let Some((mut node, before, after)) = waiting.pop() {
+            let children = mem::replace(&mut offered, before);
+            if let Some(slot) = children_mut(&mut node) {
+                *slot = children;
+            }
+            rest = after;
+            own(&mut node, pass)?;
+            offered.push(node);
+        } else {
+            return Ok(offered);
+        }
+    }
+}
+
+/// Offers `node` alone, its children already offered.
+fn own<T>(node: &mut Inline<T>, pass: &Pass<'_>) -> Result<(), ParseError>
+where
+    T: Extension,
+{
+    match node {
+        Inline::Code(code) => code.offer(pass),
+        Inline::Emphasis(emphasis) => {
+            let claimed = T::claim(Construct::Emphasis(emphasis), &pass.at(emphasis.span.start));
+            settle(&mut emphasis.kind, claimed, pass)
+        }
+        Inline::Html(html) => html.offer(pass),
+        Inline::Image(image) => image.offer(pass),
+        Inline::LineBreak(line_break) => line_break.offer(pass),
+        Inline::Link(link) => {
+            let claimed = T::claim(Construct::Link(link), &pass.at(link.span.start));
+            settle(&mut link.kind, claimed, pass)
+        }
+        Inline::Strong(strong) => {
+            let claimed = T::claim(Construct::Strong(strong), &pass.at(strong.span.start));
+            settle(&mut strong.kind, claimed, pass)
+        }
+        Inline::Text(text) => text.offer(pass),
+    }
+}
+
+/// `nodes` in reverse, so that popping gives them in order.
+fn popping<T>(mut nodes: Vec<Inline<T>>) -> Vec<Inline<T>>
+where
+    T: Extension,
+{
+    nodes.reverse();
+    nodes
 }
 
 /// Puts a claimed node into `kind`. A claim that fails leaves the plain

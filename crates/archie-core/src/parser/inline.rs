@@ -14,6 +14,18 @@ use crate::parser::definition::{self, Definitions, Target, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::{entity, html};
 
+/// The children of a node being cut at line ends: their pieces cut so far
+/// on each line the node lies on, from the first, and those still to cut,
+/// the next one last.
+struct Cutting<E>
+where
+    E: Extension,
+{
+    first: usize,
+    rest: Vec<Inline<E>>,
+    spread: Vec<Vec<Inline<E>>>,
+}
+
 /// What ends a line of a paragraph before the line after it.
 #[derive(Clone, Copy)]
 enum Ending {
@@ -30,19 +42,38 @@ enum Ending {
     Spaces(usize),
 }
 
+/// A node the bracket pass read, which the scanner takes as it is.
+enum Found {
+    /// An autolink: where it ends, past its `>`, and its target.
+    Autolink { close: usize, target: String },
+    /// A code span: where it ends, past its closing backticks.
+    Code(usize),
+    /// Inline HTML: where it ends.
+    Html(usize),
+    /// A link or an image: the `]` that ends its text, where it ends, and
+    /// its target.
+    Link {
+        close: usize,
+        end: usize,
+        target: Target,
+    },
+}
+
 /// The lines of a paragraph, `ranges` of `source`, joined by `\n` into
 /// `text`, which the scanner reads: where each line sits in `text`, and how
 /// it ends. A line that another follows keeps the spaces and tabs before its
 /// line ending.
 struct Layout<'src> {
     endings: Vec<Ending>,
+    /// The nodes the bracket pass read, each by where it starts in `text`:
+    /// at its `[` for a link or an image.
+    found: HashMap<usize, Found>,
     /// Where each `[`, `]` and `\n` is in `text`.
     marks: Vec<usize>,
-    /// The `]` that ends the text of each `[` that can open a link or an
-    /// image.
-    pairs: HashMap<usize, usize>,
     places: Vec<Range<usize>>,
     ranges: &'src [Range<usize>],
+    /// Where each run of backticks starts in `text`, by its length.
+    runs: HashMap<usize, Vec<usize>>,
     source: &'src str,
     text: String,
 }
@@ -77,17 +108,28 @@ struct Wiki {
 
 /// Reads the text of a layout into nodes whose spans are places in that
 /// text.
-struct Scanner<'lay, 'defs, E>
+struct Scanner<'lay, E>
 where
     E: Extension,
 {
-    definitions: &'defs Definitions,
     layout: &'lay Layout<'lay>,
     pieces: Vec<Piece<E>>,
     runs: Vec<Run>,
     text: String,
     text_end: usize,
     text_start: Option<usize>,
+}
+
+impl<E> Cutting<E>
+where
+    E: Extension,
+{
+    /// Adds `pieces`, each to the line it lies on.
+    fn add(&mut self, pieces: Vec<(usize, Inline<E>)>) {
+        for (line, piece) in pieces {
+            self.spread[line - self.first].push(piece);
+        }
+    }
 }
 
 impl Ending {
@@ -103,81 +145,44 @@ impl Ending {
     }
 }
 
-impl<'src> Layout<'src> {
-    /// The `]` that ends the text of each `[` that can open a link or an
-    /// image, by `CommonMark`'s stack of brackets: once a link is read, no `[`
-    /// before it opens one. A bracket after a backslash, or inside a code
-    /// span, an autolink, inline HTML, a wiki link or embed, or the
-    /// destination or label of a link or an image, is in no pair.
-    fn brackets(&self, definitions: &Definitions) -> HashMap<usize, usize> {
-        let source = self.text.as_str();
-        let bytes = source.as_bytes();
-        let end = source.len();
-        let mut pairs = HashMap::new();
-        // Each bracket still open, and whether it opens an image. A `[` below
-        // `active` in it opens no link.
-        let mut open: Vec<(usize, bool)> = Vec::new();
-        let mut active = 0;
-        let mut at = 0;
-        while at < end {
-            at = match bytes[at] {
-                b']' => match open.pop() {
-                    Some((start, image)) => {
-                        let below = open.len();
-                        let opens = image || below >= active;
-                        active = active.min(below);
-                        if opens {
-                            pairs.insert(start, at);
-                        }
-                        let read = opens
-                            .then(|| link_target(source, definitions, start, at, end))
-                            .flatten();
-                        match read {
-                            Some((_, close)) if image => close,
-                            Some((_, close)) => {
-                                active = below;
-                                close
-                            }
-                            None => at + 1,
-                        }
-                    }
-                    None => at + 1,
-                },
-                b'[' => {
-                    if let Some(wiki) = self.wiki(at, end) {
-                        active = open.len();
-                        wiki.close
-                    } else {
-                        open.push((at, false));
-                        at + 1
-                    }
-                }
-                b'!' if bytes.get(at + 1) == Some(&b'[') => self.wiki(at + 1, end).map_or_else(
-                    || {
-                        open.push((at + 1, true));
-                        at + 2
-                    },
-                    |wiki| wiki.close,
-                ),
-                b'\\' if at + 1 < end && bytes[at + 1].is_ascii_punctuation() => at + 2,
-                b'`' => code_end(bytes, at, end).unwrap_or_else(|| at + run(bytes, at, end)),
-                b'<' => autolink_at(source, at, end)
-                    .map(|(_, close)| close)
-                    .or_else(|| html::inline_end(source, at))
-                    .unwrap_or(at + 1),
-                _ => at + 1,
-            };
+impl Found {
+    /// Where the node ends.
+    const fn end(&self) -> usize {
+        match self {
+            Self::Autolink {
+                close: end,
+                target: _,
+            }
+            | Self::Code(end)
+            | Self::Html(end)
+            | Self::Link {
+                close: _,
+                end,
+                target: _,
+            } => *end,
         }
-        pairs
+    }
+}
+
+impl<'src> Layout<'src> {
+    /// Where the code span whose opening run of `ticks` backticks is at `at`
+    /// ends: past the next run of exactly as many.
+    fn code_end(&self, at: usize, ticks: usize) -> Option<usize> {
+        let starts = self.runs.get(&ticks)?;
+        let next = starts.get(starts.partition_point(|&start| start < at + ticks))?;
+        Some(next + ticks)
     }
 
     /// The pieces of `node`, read from `text`, one for each line it lies
-    /// on, by that line, with their spans in the source.
-    fn cut<E>(&self, node: Inline<E>) -> Vec<(usize, Inline<E>)>
+    /// on, by that line, with their spans in the source. The children of an
+    /// emphasis, a link or a strong emphasis were taken out of it and cut:
+    /// `spread` holds their pieces on each line it lies on.
+    fn cut<E>(&self, node: Inline<E>, spread: Vec<Vec<Inline<E>>>) -> Vec<(usize, Inline<E>)>
     where
         E: Extension,
     {
         let read = node.span().clone();
+        let mut children = spread.into_iter();
         match node {
             Inline::Code(code) => {
                 let mut values = code.value.split('\n');
@@ -190,17 +195,14 @@ impl<'src> Layout<'src> {
                     })
                 })
             }
-            Inline::Emphasis(emphasis) => {
-                let mut children = self.spread(emphasis.children, &read);
-                self.pieces(&read, |continues, span| {
-                    Inline::Emphasis(Emphasis {
-                        children: children.next().unwrap_or_default(),
-                        continues,
-                        kind: Kind(None),
-                        span,
-                    })
+            Inline::Emphasis(_) => self.pieces(&read, |continues, span| {
+                Inline::Emphasis(Emphasis {
+                    children: children.next().unwrap_or_default(),
+                    continues,
+                    kind: Kind(None),
+                    span,
                 })
-            }
+            }),
             Inline::Html(html) => {
                 let mut values = html.value.split('\n');
                 self.pieces(&read, |continues, span| {
@@ -236,35 +238,45 @@ impl<'src> Layout<'src> {
                 };
                 vec![(line, Inline::LineBreak(line_break))]
             }
-            Inline::Link(link) => {
-                let mut children = self.spread(link.children, &read);
-                self.pieces(&read, |continues, span| {
-                    Inline::Link(Link {
-                        children: children.next().unwrap_or_default(),
-                        continues,
-                        form: link.form,
-                        kind: Kind(None),
-                        span,
-                        target: link.target.clone(),
-                        title: link.title.clone(),
-                    })
+            Inline::Link(link) => self.pieces(&read, |continues, span| {
+                Inline::Link(Link {
+                    children: children.next().unwrap_or_default(),
+                    continues,
+                    form: link.form,
+                    kind: Kind(None),
+                    span,
+                    target: link.target.clone(),
+                    title: link.title.clone(),
                 })
-            }
-            Inline::Strong(strong) => {
-                let mut children = self.spread(strong.children, &read);
-                self.pieces(&read, |continues, span| {
-                    Inline::Strong(Strong {
-                        children: children.next().unwrap_or_default(),
-                        continues,
-                        kind: Kind(None),
-                        span,
-                    })
+            }),
+            Inline::Strong(_) => self.pieces(&read, |continues, span| {
+                Inline::Strong(Strong {
+                    children: children.next().unwrap_or_default(),
+                    continues,
+                    kind: Kind(None),
+                    span,
                 })
-            }
+            }),
             Inline::Text(mut text) => {
                 text.span = self.place(read.start)..self.place(read.end);
                 vec![(self.line(read.start), Inline::Text(text))]
             }
+        }
+    }
+
+    /// The children `nodes` of a node read at `read` in `text`, none cut
+    /// yet.
+    fn cutting<E>(&self, nodes: Vec<Inline<E>>, read: &Range<usize>) -> Cutting<E>
+    where
+        E: Extension,
+    {
+        let lines = self.lines_of(read);
+        let mut rest = nodes;
+        rest.reverse();
+        Cutting {
+            first: *lines.start(),
+            rest,
+            spread: lines.map(|_| Vec::new()).collect(),
         }
     }
 
@@ -283,6 +295,81 @@ impl<'src> Layout<'src> {
         self.endings[self.line(at)]
     }
 
+    /// The code spans, autolinks, inline HTML, links and images, each read
+    /// once, for the scanner to take. Brackets pair by `CommonMark`'s stack
+    /// of brackets: once a link is read, no `[` before it opens one. A
+    /// bracket after a backslash, or inside a code span, an autolink, inline
+    /// HTML, a wiki link or embed, or the destination or label of a link or
+    /// an image, is in no pair.
+    fn find(&self, definitions: &Definitions) -> HashMap<usize, Found> {
+        let source = self.text.as_str();
+        let bytes = source.as_bytes();
+        let end = source.len();
+        let mut found = HashMap::new();
+        // Each bracket still open, and whether it opens an image. A `[` below
+        // `active` in it opens no link.
+        let mut open: Vec<(usize, bool)> = Vec::new();
+        let mut active = 0;
+        let mut at = 0;
+        while at < end {
+            at = match bytes[at] {
+                b']' => match open.pop() {
+                    Some((start, image)) => {
+                        let below = open.len();
+                        let opens = image || below >= active;
+                        active = active.min(below);
+                        let read = opens
+                            .then(|| link_target(source, definitions, start, at, end))
+                            .flatten();
+                        match read {
+                            Some((target, close)) => {
+                                if !image {
+                                    active = below;
+                                }
+                                let link = Found::Link {
+                                    close: at,
+                                    end: close,
+                                    target,
+                                };
+                                keep(&mut found, start, link)
+                            }
+                            None => at + 1,
+                        }
+                    }
+                    None => at + 1,
+                },
+                b'[' => {
+                    if let Some(wiki) = self.wiki(at, end) {
+                        active = open.len();
+                        wiki.close
+                    } else {
+                        open.push((at, false));
+                        at + 1
+                    }
+                }
+                b'!' if bytes.get(at + 1) == Some(&b'[') => self.wiki(at + 1, end).map_or_else(
+                    || {
+                        open.push((at + 1, true));
+                        at + 2
+                    },
+                    |wiki| wiki.close,
+                ),
+                b'\\' if at + 1 < end && bytes[at + 1].is_ascii_punctuation() => at + 2,
+                b'`' => {
+                    let ticks = run(bytes, at, end);
+                    self.code_end(at, ticks)
+                        .map_or(at + ticks, |close| keep(&mut found, at, Found::Code(close)))
+                }
+                b'<' => autolink_at(source, at, end)
+                    .map(|(target, close)| Found::Autolink { close, target })
+                    .or_else(|| html::inline_end(source, at).map(Found::Html))
+                    .map_or(at + 1, |node| keep(&mut found, at, node)),
+                _ => at + 1,
+            };
+        }
+        found
+    }
+
     /// Ends each line that a code span or inline HTML among `nodes` goes on
     /// from past the spaces and tabs before its line ending, which the node
     /// holds.
@@ -290,27 +377,30 @@ impl<'src> Layout<'src> {
     where
         E: Extension,
     {
-        for node in nodes {
-            let span = match node {
-                Inline::Code(code) => &code.span,
-                Inline::Html(html) => &html.span,
-                Inline::Emphasis(emphasis) => {
-                    self.hold(&emphasis.children);
-                    continue;
+        let mut waiting = vec![nodes];
+        while let Some(siblings) = waiting.pop() {
+            for node in siblings {
+                let span = match node {
+                    Inline::Code(code) => &code.span,
+                    Inline::Html(html) => &html.span,
+                    Inline::Emphasis(emphasis) => {
+                        waiting.push(&emphasis.children);
+                        continue;
+                    }
+                    Inline::Link(link) => {
+                        waiting.push(&link.children);
+                        continue;
+                    }
+                    Inline::Strong(strong) => {
+                        waiting.push(&strong.children);
+                        continue;
+                    }
+                    Inline::Image(_) | Inline::LineBreak(_) | Inline::Text(_) => continue,
+                };
+                let lines = self.lines_of(span);
+                for line in *lines.start()..*lines.end() {
+                    self.endings[line] = Ending::Held(self.trailing(line).end);
                 }
-                Inline::Link(link) => {
-                    self.hold(&link.children);
-                    continue;
-                }
-                Inline::Strong(strong) => {
-                    self.hold(&strong.children);
-                    continue;
-                }
-                Inline::Image(_) | Inline::LineBreak(_) | Inline::Text(_) => continue,
-            };
-            let lines = self.lines_of(span);
-            for line in *lines.start()..*lines.end() {
-                self.endings[line] = Ending::Held(self.trailing(line).end);
             }
         }
     }
@@ -337,6 +427,7 @@ impl<'src> Layout<'src> {
         E: Extension,
     {
         self.spread(nodes, &(0..self.text.len()))
+            .into_iter()
             .zip(self.ranges)
             .enumerate()
             .map(|(line, (children, range))| Line {
@@ -374,15 +465,21 @@ impl<'src> Layout<'src> {
             .collect();
         let mut layout = Self {
             endings,
+            found: HashMap::new(),
             marks,
-            pairs: HashMap::new(),
             places,
             ranges,
+            runs: backtick_runs(&text),
             source,
             text,
         };
-        layout.pairs = layout.brackets(definitions);
+        layout.found = layout.find(definitions);
         layout
+    }
+
+    /// The node the bracket pass read at `at`, when it ends by `end`.
+    fn node_at(&self, at: usize, end: usize) -> Option<&Found> {
+        self.found.get(&at).filter(|node| node.end() <= end)
     }
 
     /// The pieces of the node read at `read` in `text`, one for each line it
@@ -426,30 +523,34 @@ impl<'src> Layout<'src> {
     }
 
     /// The pieces of `nodes`, the children of a node read at `read` in
-    /// `text`, on each line that node lies on, in order.
-    fn spread<E>(
-        &self,
-        nodes: Vec<Inline<E>>,
-        read: &Range<usize>,
-    ) -> impl Iterator<Item = Vec<Inline<E>>>
+    /// `text`, on each line that node lies on, in order. A node is cut once
+    /// its children are, from a stack of the nodes whose children are being
+    /// cut, so nesting takes no call depth.
+    fn spread<E>(&self, nodes: Vec<Inline<E>>, read: &Range<usize>) -> Vec<Vec<Inline<E>>>
     where
         E: Extension,
     {
-        let lines = self.lines_of(read);
-        let first = *lines.start();
-        let mut spread: Vec<Vec<Inline<E>>> = lines.map(|_| Vec::new()).collect();
-        for node in nodes {
-            for (line, piece) in self.cut(node) {
-                spread[line - first].push(piece);
+        let mut root = self.cutting(nodes, read);
+        let mut open: Vec<(Inline<E>, Cutting<E>)> = Vec::new();
+        loop {
+            let cutting = open.last_mut().map_or(&mut root, |(_, inner)| inner);
+            let Some(mut node) = cutting.rest.pop() else {
+                let Some((node, done)) = open.pop() else {
+                    return root.spread;
+                };
+                let pieces = self.cut(node, done.spread);
+                open.last_mut()
+                    .map_or(&mut root, |(_, outer)| outer)
+                    .add(pieces);
+                continue;
+            };
+            if let Some(children) = children_mut(&mut node).map(mem::take) {
+                let inner = self.cutting(children, node.span());
+                open.push((node, inner));
+            } else {
+                cutting.add(self.cut(node, Vec::new()));
             }
         }
-        spread.into_iter()
-    }
-
-    /// The `]` that ends the text of the link or image whose `[` is at
-    /// `open`, when it lies before `end`.
-    fn text_end(&self, open: usize, end: usize) -> Option<usize> {
-        self.pairs.get(&open).copied().filter(|&close| close < end)
     }
 
     /// The spaces and tabs between the text of `line` and its line ending,
@@ -516,46 +617,58 @@ impl Run {
     }
 }
 
-impl<'lay, 'defs, E> Scanner<'lay, 'defs, E>
+impl<'lay, E> Scanner<'lay, E>
 where
     E: Extension,
 {
     /// An autolink, inline HTML, or a `<` that starts neither.
     fn angle(&mut self, at: usize, end: usize) -> usize {
         let source = self.layout.text.as_str();
-        if let Some((target, close)) = autolink_at(source, at, end) {
-            let shown = at + 1..close - 1;
-            self.push(Inline::Link(Link {
-                children: vec![Inline::Text(Text {
+        match self.layout.node_at(at, end) {
+            Some(Found::Autolink { close, target }) => {
+                let shown = at + 1..close - 1;
+                self.push(Inline::Link(Link {
+                    children: vec![Inline::Text(Text {
+                        kind: Kind(None),
+                        value: source[shown.clone()].to_owned(),
+                        span: shown,
+                    })],
+                    continues: Continues::Neither,
+                    form: LinkForm::Markdown,
                     kind: Kind(None),
-                    value: source[shown.clone()].to_owned(),
-                    span: shown,
-                })],
-                continues: Continues::Neither,
-                form: LinkForm::Markdown,
-                kind: Kind(None),
-                span: at..close,
-                target,
-                title: None,
-            }));
-            return close;
+                    span: at..*close,
+                    target: target.clone(),
+                    title: None,
+                }));
+                *close
+            }
+            Some(&Found::Html(close)) => {
+                self.push(Inline::Html(Html {
+                    continues: Continues::Neither,
+                    kind: Kind(None),
+                    span: at..close,
+                    value: source[at..close].to_owned(),
+                }));
+                close
+            }
+            Some(
+                Found::Code(_)
+                | Found::Link {
+                    close: _,
+                    end: _,
+                    target: _,
+                },
+            )
+            | None => {
+                self.push_text(at..at + 1, "<");
+                at + 1
+            }
         }
-        if let Some(close) = html::inline_end(&source[..end], at) {
-            self.push(Inline::Html(Html {
-                continues: Continues::Neither,
-                kind: Kind(None),
-                span: at..close,
-                value: source[at..close].to_owned(),
-            }));
-            return close;
-        }
-        self.push_text(at..at + 1, "<");
-        at + 1
     }
 
     /// An image, or a `!` that starts none.
     fn bang(&mut self, at: usize, end: usize) -> usize {
-        if let Some((image, close)) = image_at(self.layout, self.definitions, at, end) {
+        if let Some((image, close)) = image_at(self.layout, at, end) {
             self.push(Inline::Image(image));
             return close;
         }
@@ -576,7 +689,7 @@ where
     fn code(&mut self, at: usize, end: usize) -> usize {
         let source = self.layout.text.as_str();
         let ticks = run(source.as_bytes(), at, end);
-        let Some(close) = code_end(source.as_bytes(), at, end) else {
+        let Some(&Found::Code(close)) = self.layout.node_at(at, end) else {
             self.push_text(at..at + ticks, &source[at..at + ticks]);
             return at + ticks;
         };
@@ -695,9 +808,8 @@ where
         }
     }
 
-    /// A wiki link, `[text](destination "title")`, or a reference link.
-    /// Brackets whose text holds a link have no end in the layout, so make
-    /// none.
+    /// A wiki link, or a link the bracket pass read: `[text](destination
+    /// "title")` or a reference link.
     fn link(&mut self, at: usize, end: usize) -> Option<usize> {
         let source = self.layout.text.as_str();
         if let Some(wiki) = self.layout.wiki(at, end) {
@@ -719,25 +831,30 @@ where
             }));
             return Some(wiki.close);
         }
-        let text_close = self.layout.text_end(at, end)?;
-        let (target, close) = link_target(source, self.definitions, at, text_close, end)?;
-        let mut inner = Self::new(self.layout, self.definitions);
-        inner.scan(at + 1..text_close);
+        let Some(Found::Link {
+            close: text_close,
+            end: close,
+            target,
+        }) = self.layout.node_at(at, end)
+        else {
+            return None;
+        };
+        let mut inner = Self::new(self.layout);
+        inner.scan(at + 1..*text_close);
         self.push(Inline::Link(Link {
             children: inner.finish(),
             continues: Continues::Neither,
             form: LinkForm::Markdown,
             kind: Kind(None),
-            span: at..close,
-            target: target.destination,
-            title: target.title,
+            span: at..*close,
+            target: target.destination.clone(),
+            title: target.title.clone(),
         }));
-        Some(close)
+        Some(*close)
     }
 
-    const fn new(layout: &'lay Layout<'lay>, definitions: &'defs Definitions) -> Self {
+    const fn new(layout: &'lay Layout<'lay>) -> Self {
         Self {
-            definitions,
             layout,
             pieces: Vec::new(),
             runs: Vec::new(),
@@ -813,7 +930,7 @@ where
     E: Extension,
 {
     let mut layout = Layout::new(source, ranges, definitions);
-    let mut scanner = Scanner::new(&layout, definitions);
+    let mut scanner = Scanner::new(&layout);
     scanner.scan(0..layout.text.len());
     let nodes = scanner.finish();
     layout.hold(&nodes);
@@ -937,6 +1054,23 @@ where
     nodes
 }
 
+/// The children of an emphasis, a link or a strong emphasis.
+pub const fn children_mut<E>(node: &mut Inline<E>) -> Option<&mut Vec<Inline<E>>>
+where
+    E: Extension,
+{
+    match node {
+        Inline::Emphasis(emphasis) => Some(&mut emphasis.children),
+        Inline::Link(link) => Some(&mut link.children),
+        Inline::Strong(strong) => Some(&mut strong.children),
+        Inline::Code(_)
+        | Inline::Html(_)
+        | Inline::Image(_)
+        | Inline::LineBreak(_)
+        | Inline::Text(_) => None,
+    }
+}
+
 /// A Unicode whitespace character, as `CommonMark` counts them: a space
 /// separator, a tab, a line feed, a form feed or a carriage return.
 pub fn is_whitespace(character: char) -> bool {
@@ -954,10 +1088,14 @@ pub fn is_punctuation(character: char) -> bool {
 }
 
 /// The target of the autolink at `at`, `<scheme:rest>` or `<address>`, and
-/// where it ends, past its `>`.
+/// where it ends, past its `>`. Neither holds a space, a control character
+/// or a `<`, so the search for the `>` stops at the first of them.
 fn autolink_at(source: &str, at: usize, end: usize) -> Option<(String, usize)> {
     let rest = &source[at + 1..end];
-    let inner = &rest[..rest.find('>')?];
+    let stop = rest.find(|character: char| {
+        character.is_ascii_control() || matches!(character, ' ' | '<' | '>')
+    })?;
+    let inner = rest[stop..].starts_with('>').then_some(&rest[..stop])?;
     let close = at + inner.len() + 2;
     if is_uri(inner) {
         return Some((inner.to_owned(), close));
@@ -1003,12 +1141,7 @@ fn is_email(text: &str) -> bool {
 /// An image starting at the `!` at `at`, and where it ends: a wiki embed,
 /// `![alt](destination "title")`, or a reference image, which takes the
 /// target of the definition its label names.
-fn image_at<E>(
-    layout: &Layout<'_>,
-    definitions: &Definitions,
-    at: usize,
-    end: usize,
-) -> Option<(Image<E>, usize)>
+fn image_at<E>(layout: &Layout<'_>, at: usize, end: usize) -> Option<(Image<E>, usize)>
 where
     E: Extension,
 {
@@ -1028,18 +1161,24 @@ where
         };
         return Some((image, wiki.close));
     }
-    let text_close = layout.text_end(open, end)?;
-    let (target, close) = link_target(source, definitions, open, text_close, end)?;
+    let Some(Found::Link {
+        close: text_close,
+        end: close,
+        target,
+    }) = layout.node_at(open, end)
+    else {
+        return None;
+    };
     let image = Image {
-        alt: unspaced(&source[open + 1..text_close]),
+        alt: unspaced(&source[open + 1..*text_close]),
         continues: Continues::Neither,
         form: LinkForm::Markdown,
         kind: Kind(None),
-        span: at..close,
-        target: target.destination,
-        title: target.title,
+        span: at..*close,
+        target: target.destination.clone(),
+        title: target.title.clone(),
     };
-    Some((image, close))
+    Some((image, *close))
 }
 
 /// The target of the link or image whose text runs from the `[` at `open`
@@ -1154,23 +1293,25 @@ fn line_end(source: &str, end: usize) -> Option<usize> {
     matches!(source.as_bytes().get(close), None | Some(b'\n' | b'\r')).then_some(close)
 }
 
-/// Where the code span whose opening backticks are at `at` ends, past its
-/// closing run of exactly as many backticks.
-fn code_end(bytes: &[u8], at: usize, end: usize) -> Option<usize> {
-    let ticks = run(bytes, at, end);
-    let mut close = at + ticks;
-    while close < end {
-        if bytes[close] != b'`' {
-            close += 1;
-            continue;
-        }
-        let found = run(bytes, close, end);
-        if found == ticks {
-            return Some(close + ticks);
-        }
-        close += found;
+/// Keeps `node`, read at `at`, among `found`, and gives where it ends.
+fn keep(found: &mut HashMap<usize, Found>, at: usize, node: Found) -> usize {
+    let end = node.end();
+    found.insert(at, node);
+    end
+}
+
+/// Where each run of backticks in `text` starts, by its length.
+fn backtick_runs(text: &str) -> HashMap<usize, Vec<usize>> {
+    let bytes = text.as_bytes();
+    let mut runs: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut at = 0;
+    while let Some(offset) = text[at..].find('`') {
+        let start = at + offset;
+        let length = run(bytes, start, bytes.len());
+        runs.entry(length).or_default().push(start);
+        at = start + length;
     }
-    None
+    runs
 }
 
 /// The length of the run of backticks starting at `at`.

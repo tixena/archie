@@ -6,6 +6,7 @@ use core::iter;
 use core::ops::Range;
 
 use crate::parser::ast::{Alignment, TableFormat};
+use crate::parser::lexer::trim_end_spaces;
 use crate::parser::line::line_from;
 
 pub struct TableToken {
@@ -112,7 +113,7 @@ fn line_after(source: &str, at: usize, level: usize, base: usize) -> Option<Tabl
     let text = &source[line.start..line.end];
     let content = text.trim_start_matches(' ');
     let indent = text.len() - content.len();
-    let trimmed = content.trim_end();
+    let trimmed = trim_end_spaces(content);
     (!trimmed.is_empty() && indent >= level).then(|| TableLine {
         end: line.start + indent + trimmed.len(),
         line_start: line.start,

@@ -1,4 +1,9 @@
+use std::thread;
+
 use super::{check, check_spans};
+use crate::parser::ast::{Block, Inline};
+use crate::parser::parse;
+use crate::writer::{WriteOptions, write};
 
 #[test]
 fn a_wiki_link_has_a_target_and_may_have_an_alias() {
@@ -1483,4 +1488,133 @@ fn of_links_nested_two_thousand_deep_only_the_innermost_is_a_link() {
         "](u)".repeat(1_999)
     );
     check(&source, &expected);
+}
+
+#[test]
+fn a_run_of_angle_brackets_is_text_and_an_autolink_search_stops_at_a_bracket() {
+    check(
+        "<<<<<x\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "<<<<<x"
+"#,
+    );
+    check(
+        "<a<http://b>\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "<a"
+          Link form=Markdown target="http://b"
+            Text "http://b"
+"#,
+    );
+}
+
+#[test]
+fn empty_brackets_before_unclosed_parentheses_are_text() {
+    check(
+        "[]([]([](\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "[]([]([]("
+"#,
+    );
+}
+
+#[test]
+fn backtick_runs_that_close_nothing_are_text() {
+    check(
+        "`a``a```a````a`````a\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "`a``a```a````a`````a"
+"#,
+    );
+}
+
+#[test]
+fn a_destination_holds_parentheses_nested_at_most_thirty_two_deep() {
+    check(
+        "[a](((((b)))))\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="((((b))))"
+            Text "a"
+"#,
+    );
+    let deepest = format!("{}b{}", "(".repeat(32), ")".repeat(32));
+    check(
+        &format!("[a]({deepest})\n"),
+        &format!(
+            r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Link form=Markdown target="{deepest}"
+            Text "a"
+"#
+        ),
+    );
+    let deeper = format!("[a]({}b{})", "(".repeat(33), ")".repeat(33));
+    check(
+        &format!("{deeper}\n"),
+        &format!(
+            r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "{deeper}"
+"#
+        ),
+    );
+}
+
+#[test]
+fn emphasis_nested_two_thousand_deep_reads_writes_and_drops_on_a_two_megabyte_stack() {
+    let reader = thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let source = format!("{}a{}\n", "*".repeat(2_000), "*".repeat(2_000));
+            let document = parse(&source).unwrap();
+            let mut nodes = match document.body.sections[0].blocks.as_slice() {
+                [Block::Paragraph(paragraph)] => paragraph.lines[0].children.as_slice(),
+                _ => &[],
+            };
+            let mut depth = 0_usize;
+            while let [Inline::Strong(strong)] = nodes {
+                depth += 1;
+                nodes = &strong.children;
+            }
+            assert_eq!(depth, 1_000);
+            assert!(matches!(nodes, [Inline::Text(text)] if text.value == "a"));
+            let written = write(&document, &WriteOptions::default()).unwrap();
+            assert_eq!(written, source);
+            drop(document);
+        })
+        .unwrap();
+    reader.join().unwrap();
 }

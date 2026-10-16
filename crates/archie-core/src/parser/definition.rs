@@ -8,6 +8,10 @@ use unicase::UniCase;
 
 use crate::parser::entity::resolve;
 
+/// The deepest parentheses may nest in a destination. `CommonMark` lets a
+/// reader limit it, so a run of `(` costs no more than this to refuse.
+const PARENTHESES: usize = 32;
+
 /// The link definitions of a file: each target by its folded label.
 pub type Definitions = HashMap<String, Target>;
 
@@ -173,7 +177,7 @@ fn label_end(text: &str, bytes: &Bytes<'_>, open: usize) -> Option<usize> {
 
 /// The destination at `at`, resolved, and where it ends: text between `<`
 /// and `>` on one line, or a nonempty run with no space or control
-/// character whose parentheses pair up.
+/// character whose parentheses pair up, at most `PARENTHESES` deep.
 fn destination(text: &str, bytes: &Bytes<'_>, at: usize) -> Option<(String, usize)> {
     if bytes.at(at) == Some(b'<') {
         let mut close = at + 1;
@@ -192,6 +196,7 @@ fn destination(text: &str, bytes: &Bytes<'_>, at: usize) -> Option<(String, usiz
     while let Some(byte) = bytes.at(end) {
         match byte {
             b'\\' if bytes.escapes(end) => end += 2,
+            b'(' if depth == PARENTHESES => return None,
             b'(' => {
                 depth += 1;
                 end += 1;
