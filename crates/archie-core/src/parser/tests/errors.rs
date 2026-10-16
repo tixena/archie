@@ -420,3 +420,46 @@ fn the_colon_line_of_an_explicit_key_indented_more_than_its_question_mark_is_ref
         )
     );
 }
+
+#[test]
+fn a_block_key_cannot_start_with_a_block_scalar_indicator_or_a_bracket() {
+    let refused = |character: &str| {
+        named(
+            &format!("a plain key cannot start with `{character}`; quote it"),
+            character,
+        )
+    };
+    assert_eq!(failed("---\n|x: 1\n---\n"), refused("|"));
+    assert_eq!(failed("---\na: 1\n>x: 2\n---\n"), refused(">"));
+    assert_eq!(failed("---\na:\n  b: 1\n  >x: 2\n---\n"), refused(">"));
+
+    let no_key = |at: &'static str| ("expected a key".to_owned(), at);
+    assert_eq!(refusal("---\na: 1\n[x]: 2\n---\n"), no_key("[x]: 2"));
+    assert_eq!(refusal("---\na: 1\n{x: 2}: 3\n---\n"), no_key("{x: 2}: 3"));
+}
+
+#[test]
+fn a_tab_before_a_key_or_a_list_entry_is_refused_at_the_tab() {
+    let refused = |source: &str| {
+        let error = parse(source).unwrap_err();
+        (error.message, error.span)
+    };
+    let at_tab = |at: usize| {
+        (
+            "a tab cannot indent a line; use spaces".to_owned(),
+            at..at + 1,
+        )
+    };
+    assert_eq!(refused("---\na:\n\tb: 1\n---\n"), at_tab(7));
+    assert_eq!(refused("---\n\ta: 1\n---\n"), at_tab(4));
+    assert_eq!(refused("---\na:\n\t- b\n---\n"), at_tab(7));
+    assert_eq!(refused("---\na:\n  \tb: 1\n---\n"), at_tab(9));
+}
+
+#[test]
+fn an_implicit_key_inside_a_flow_list_keeps_its_colon_on_its_line() {
+    assert_eq!(
+        refusal("---\na: [x\n  : 1]\n---\n"),
+        ("expected `,` or `]` in the list".to_owned(), ": 1]")
+    );
+}

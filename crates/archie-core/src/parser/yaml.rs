@@ -155,6 +155,9 @@ fn mapping_lines(
             return cursor.error("this line is indented more than the keys above it");
         }
         cursor.set_pos(cursor.pos() + indent);
+        if cursor.peek() == Some(b'\t') {
+            return Err(tab_indent(cursor.pos()));
+        }
         if is_dash(cursor, 0) {
             return cursor.error("expected a key, found a list entry");
         }
@@ -174,7 +177,8 @@ fn entry_mapping(cursor: &mut Cursor<'_>, column: usize) -> Result<Mapping, Pars
 }
 
 /// One pair of a block mapping whose keys are at column `indent`: a `key:`
-/// and its value, or an explicit key after `?`.
+/// and its value, a `:` and its value with the empty key, or an explicit key
+/// after `?`.
 fn entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
@@ -184,7 +188,11 @@ fn entry(
         return explicit_entry(cursor, indent, pairs);
     }
     let start = cursor.pos();
-    let name = key(cursor)?;
+    let name = if is_empty_key(cursor, false) {
+        String::new()
+    } else {
+        key(cursor)?
+    };
     cursor.skip_spaces();
     if !cursor.eat(b':') {
         return cursor.error("expected `:` after the key");
@@ -263,6 +271,7 @@ fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
         Some(b'\'') => single_quoted(cursor, None),
         Some(b'!') => tagged_key(cursor, key),
         Some(b'&' | b'*') => anchor(cursor),
+        Some(b'[' | b'{') => cursor.error("expected a key"),
         Some(_) | None => {
             no_indicator(cursor, false, "key")?;
             let line = cursor.rest_of_line();
@@ -284,10 +293,10 @@ fn plain_key_length(line: &str) -> Option<usize> {
         .filter(|&at| at > 0)
 }
 
-/// Whether the cursor is on a pair that opens a mapping: an explicit key, or
-/// a `key:` after a tag or not, whose key is plain or quoted.
+/// Whether the cursor is on a pair that opens a mapping: an explicit key, an
+/// empty key, or a `key:` after a tag or not, whose key is plain or quoted.
 fn starts_mapping(cursor: &mut Cursor<'_>) -> bool {
-    if is_explicit_key(cursor) {
+    if is_explicit_key(cursor) || is_empty_key(cursor, false) {
         return true;
     }
     let start = cursor.pos();
@@ -330,6 +339,7 @@ fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<V
         return block_sequence(cursor, line_start, found);
     }
     cursor.set_pos(line_start + found);
+    no_tab_before_block(cursor)?;
     if starts_mapping(cursor) {
         cursor.set_pos(line_start);
         return Ok(Value::Mapping(block_mapping(cursor, found)?));
@@ -337,6 +347,28 @@ fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<V
     let value = inline_value(cursor, context)?;
     end_of_line(cursor)?;
     Ok(value)
+}
+
+/// Refuses the tab at the cursor, after the indentation of a line, when a
+/// key, an explicit key or a list entry follows it.
+fn no_tab_before_block(cursor: &mut Cursor<'_>) -> Result<(), ParseError> {
+    let tab = cursor.pos();
+    if cursor.peek() != Some(b'\t') {
+        return Ok(());
+    }
+    cursor.skip_spaces();
+    let starts_block = is_dash(cursor, 0) || starts_mapping(cursor);
+    cursor.set_pos(tab);
+    if starts_block {
+        return Err(tab_indent(tab));
+    }
+    Ok(())
+}
+
+/// A tab at `at`, before the first character of a line: a tab is never
+/// indentation.
+fn tab_indent(at: usize) -> ParseError {
+    ParseError::new("a tab cannot indent a line; use spaces", at..at + 1)
 }
 
 /// A block list whose first `-` is at column `indent` of the line starting
@@ -362,6 +394,9 @@ fn block_sequence(
         };
         if found > indent {
             return cursor.error("this line is indented more than the list above it");
+        }
+        if found == indent && cursor.peek_at(found) == Some(b'\t') {
+            return Err(tab_indent(cursor.pos() + found));
         }
         if found < indent || !is_dash(cursor, found) {
             break;
@@ -473,7 +508,7 @@ fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value, Pa
 /// Whether the flow entry at the cursor is a pair: an explicit key, an empty
 /// key or a key followed by `:`.
 fn is_flow_pair(cursor: &mut Cursor<'_>) -> bool {
-    if is_flow_explicit_key(cursor) || is_empty_key(cursor) {
+    if is_flow_explicit_key(cursor) || is_empty_key(cursor, true) {
         return true;
     }
     let start = cursor.pos();
@@ -520,8 +555,10 @@ fn flow_mapping(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Mappin
     })
 }
 
-/// One pair of a flow mapping, or of a flow list. A key with no `:`, or with
-/// nothing after it, holds null.
+/// One pair of a flow mapping, or of a flow list. Line breaks and comments
+/// may come before its `:`; in a flow list, `is_flow_pair` allows that only
+/// after an explicit key. A key with no `:`, or with nothing after it, holds
+/// null.
 fn flow_entry(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
@@ -530,7 +567,7 @@ fn flow_entry(
     let start = cursor.pos();
     let name = flow_pair_key(cursor, column)?;
     let key_end = cursor.pos();
-    cursor.skip_spaces();
+    skip_flow_space(cursor, column)?;
     let value = if cursor.eat(b':') {
         let after_colon = cursor.pos();
         skip_flow_space(cursor, column)?;
@@ -559,7 +596,7 @@ fn flow_pair_key(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Strin
         cursor.bump();
         skip_flow_space(cursor, column)?;
     }
-    if is_empty_key(cursor)
+    if is_empty_key(cursor, true)
         || (explicit && matches!(cursor.peek(), None | Some(b',' | b']' | b'}')))
     {
         return Ok(String::new());
@@ -575,9 +612,10 @@ fn is_flow_explicit_key(cursor: &Cursor<'_>) -> bool {
         && (separated_at(cursor, 1) || matches!(cursor.peek_at(1), Some(b',' | b']' | b'}')))
 }
 
-/// Whether a flow pair starts at the cursor with its `:`, with the empty key.
-fn is_empty_key(cursor: &Cursor<'_>) -> bool {
-    cursor.peek() == Some(b':') && is_indicator(cursor, true)
+/// Whether a pair starts at the cursor with its `:`, with the empty key,
+/// inside a flow collection or not.
+fn is_empty_key(cursor: &Cursor<'_>, in_flow: bool) -> bool {
+    cursor.peek() == Some(b':') && is_indicator(cursor, in_flow)
 }
 
 /// A key inside a flow mapping. A plain key ends at a `:` followed by a
@@ -667,17 +705,16 @@ fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError>
 }
 
 /// Refuses a plain scalar, the `noun` named in the error, that starts with
-/// `@`, a backtick, `%`, `,`, `]` or `}`, or with a `?`, `:` or `-` that is
-/// an indicator. Inside a flow collection, `,`, `]` and `}` end the entry
-/// instead, and `|` and `>` are refused too.
+/// `@`, a backtick, `%`, `|`, `>`, `,`, `]` or `}`, or with a `?`, `:` or `-`
+/// that is an indicator. Inside a flow collection, `,`, `]` and `}` end the
+/// entry instead.
 fn no_indicator(cursor: &Cursor<'_>, in_flow: bool, noun: &str) -> Result<(), ParseError> {
     let Some(first) = cursor.peek() else {
         return Ok(());
     };
     let refused = match first {
         b',' | b']' | b'}' => !in_flow,
-        b'|' | b'>' => in_flow,
-        b'@' | b'`' | b'%' => true,
+        b'@' | b'`' | b'%' | b'|' | b'>' => true,
         b'?' | b':' | b'-' => is_indicator(cursor, in_flow),
         _ => false,
     };
