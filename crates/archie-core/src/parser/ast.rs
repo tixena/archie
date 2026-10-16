@@ -43,10 +43,11 @@ pub struct Frontmatter {
 }
 
 /// The syntax a frontmatter block is written in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FrontmatterFormat {
     Toml,
+    #[default]
     Yaml,
 }
 

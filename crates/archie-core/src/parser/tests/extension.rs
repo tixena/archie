@@ -10,6 +10,7 @@ use crate::parser::ast::{
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, With};
 use crate::parser::{ParseOptions, parse, parse_with, read_yaml};
+use crate::writer::{WriteOptions, Writer, write};
 
 const SOURCE: &str = "\
 Intro.
@@ -69,6 +70,29 @@ impl Extension for Comments {
         };
         (block.info == "remargin").then(|| comment(block, context))
     }
+
+    /// The header's text values, a `key: value` line each, between `---`
+    /// lines, then the body.
+    fn write<T>(node: &Comment<T>, _plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.fenced("remargin", |inner| {
+            inner.push_str("---\n");
+            for (key, pair) in &node.header.pairs {
+                if let Value::Scalar(scalar) = &pair.value
+                    && let ScalarValue::String(text) = &scalar.value
+                {
+                    inner.push_str(key);
+                    inner.push_str(": ");
+                    inner.push_str(text);
+                    inner.push_str("\n");
+                }
+            }
+            inner.push_str("---\n");
+            inner.markdown_block(&node.body);
+        });
+    }
 }
 
 /// Reads a file with a title in its frontmatter as a ticket.
@@ -115,6 +139,13 @@ impl Extension for Tickets {
             title: title.clone(),
         }))
     }
+
+    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
+    }
 }
 
 /// Claims every code block, as its info string.
@@ -139,6 +170,13 @@ impl Extension for Fences {
         };
         Some(Ok(block.info.clone()))
     }
+
+    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
+    }
 }
 
 /// Claims every table cell, as the markdown block its span reads as.
@@ -162,6 +200,13 @@ impl Extension for CellText {
             return None;
         };
         Some(context.markdown::<T>(cell.span.clone()))
+    }
+
+    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
     }
 }
 
@@ -189,6 +234,13 @@ impl Extension for Raw {
             return Some(Ok(format!("html {}", html.value)));
         }
         matches!(construct, Construct::ThematicBreak(_)).then(|| Ok("break".to_owned()))
+    }
+
+    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
     }
 }
 
@@ -220,6 +272,13 @@ impl Extension for Marks {
             return Some(Ok("strong".to_owned()));
         }
         matches!(construct, Construct::LineBreak(_)).then(|| Ok("break".to_owned()))
+    }
+
+    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
     }
 }
 
@@ -1048,4 +1107,39 @@ fn an_extension_that_claims_a_grid_cell_reads_only_that_cells_text() {
 "#
     );
     assert_eq!(block_outline(read), block_outline(&cell.body));
+}
+
+#[test]
+fn a_comment_is_written_back_as_its_own_text_and_reads_back_to_the_same_node() {
+    let source =
+        "# Notes\n\n```remargin\n---\nid: abc\nauthor: ada\n---\nLooks *good*.\n\n- one\n```\n";
+    let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
+    let text = write(&document, &WriteOptions::default()).unwrap();
+    assert_eq!(text, source);
+    let again = parse_with::<Comments>(&text, &ParseOptions::strict()).unwrap();
+    let comment = |read: &Document<With<Comments>>| {
+        code_blocks(&read.body)[0]
+            .kind
+            .0
+            .as_deref()
+            .and_then(second)
+            .cloned()
+    };
+    assert!(comment(&document).is_some());
+    assert_eq!(comment(&again), comment(&document));
+}
+
+#[test]
+fn an_extension_that_only_reads_writes_the_plain_node_in_archies_form() {
+    let fenced = parse_with::<Fences>("Code:\n\n    indented\n", &ParseOptions::default()).unwrap();
+    assert!(code_blocks(&fenced.body)[0].kind.0.is_some());
+    assert_eq!(
+        write(&fenced, &WriteOptions::default()).unwrap(),
+        "Code:\n\n```\nindented\n```\n"
+    );
+    let marked = parse_with::<Marks>("_a_ __b__ <br>  \nc\n", &ParseOptions::default()).unwrap();
+    assert_eq!(
+        write(&marked, &WriteOptions::default()).unwrap(),
+        "*a* **b** <br>\\\nc\n"
+    );
 }

@@ -12,6 +12,7 @@ use crate::parser::ast::{
 };
 use crate::parser::error::ParseError;
 use crate::parser::{block, claim};
+use crate::writer::Writer;
 
 /// A consumer's node types. archie builds every node first, children before
 /// parents, and then offers it to the extension.
@@ -28,6 +29,11 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
         construct: Construct<'_, T>,
         context: &Context<'_>,
     ) -> Option<Result<Self::Node<T>, ParseError>>
+    where
+        T: Extension;
+
+    /// Writes a claimed node back. `plain` is the node archie built under it.
+    fn write<T>(node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
     where
         T: Extension;
 }
@@ -124,6 +130,13 @@ impl Extension for Plain {
     {
         None
     }
+
+    /// Never called: `Plain` claims nothing, so it has no node to write.
+    fn write<T>(_node: &Infallible, _plain: Construct<'_, T>, _writer: &mut Writer)
+    where
+        T: Extension,
+    {
+    }
 }
 
 /// archie's own extension: a fenced block whose info string starts with the
@@ -151,6 +164,13 @@ impl Extension for Markdown {
         let word = block.info.split_whitespace().next()?;
         (word.eq_ignore_ascii_case("markdown") || word.eq_ignore_ascii_case("md"))
             .then(|| context.markdown::<T>(block.content.clone()))
+    }
+
+    fn write<T>(node: &Self::Node<T>, _plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.fenced("markdown", |inner| inner.markdown_block(node));
     }
 }
 
@@ -182,6 +202,16 @@ where
         A::claim(construct.clone(), context)
             .map(|result| result.map(Either::First))
             .or_else(|| B::claim(construct, context).map(|result| result.map(Either::Second)))
+    }
+
+    fn write<T>(node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        match node {
+            Either::First(first) => A::write(first, plain, writer),
+            Either::Second(second) => B::write(second, plain, writer),
+        }
     }
 }
 
