@@ -1,0 +1,17 @@
+Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=title
+        Scalar String "A grammar for markdown"
+      Pair key=author
+        Sequence
+          Scalar String "Ada Lovelace"
+          Scalar String "Grace Hopper"
+      Pair key=abstract
+        Scalar String "Markdown has no grammar.\nThis paper gives it one.\n"
+  Body
+    Section level=1
+      Heading
+        Text "Introduction"
+      Paragraph
+        Text "Markdown has no grammar."

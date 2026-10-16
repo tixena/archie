@@ -22,9 +22,11 @@ use crate::parser::ast::{
 use crate::parser::parse;
 
 /// One node of a parsed tree: how deep it sits, how it reads, what it covers.
+/// `merged` marks a pair whose key is written more than once.
 struct Row {
     depth: usize,
     label: String,
+    merged: bool,
     span: Range<usize>,
 }
 
@@ -134,7 +136,18 @@ impl Rows {
     fn mapping(&mut self, depth: usize, mapping: &Mapping) {
         self.push(depth, "Mapping".to_owned(), &mapping.span);
         for (key, pair) in &mapping.pairs {
-            self.push(depth + 1, format!("Pair key={key}"), &pair.span);
+            let merged = !pair.repeats.is_empty();
+            let label = if merged {
+                format!("Pair key={key} repeats={}", pair.repeats.len())
+            } else {
+                format!("Pair key={key}")
+            };
+            self.rows.push(Row {
+                depth: depth + 1,
+                label,
+                merged,
+                span: pair.span.clone(),
+            });
             self.value(depth + 2, &pair.value);
         }
     }
@@ -143,6 +156,7 @@ impl Rows {
         self.rows.push(Row {
             depth,
             label,
+            merged: false,
             span: span.clone(),
         });
     }
@@ -206,8 +220,11 @@ fn rows(source: &str) -> Vec<Row> {
 }
 
 /// Every span lies inside its parent's span and after its previous sibling.
+/// Under a pair whose key is written more than once, the values come from
+/// several places, so each only lies inside the frontmatter.
 fn assert_nested(source: &str, rows: &[Row]) {
     let mut open: Vec<Range<usize>> = Vec::new();
+    let mut merged: Option<(usize, Range<usize>)> = None;
     for row in rows {
         let span = &row.span;
         let label = &row.label;
@@ -217,6 +234,16 @@ fn assert_nested(source: &str, rows: &[Row]) {
                 && source.is_char_boundary(span.end),
             "{label} has a bad span"
         );
+        if let Some((depth, frontmatter)) = &merged {
+            if row.depth > *depth {
+                assert!(
+                    frontmatter.start <= span.start && span.end <= frontmatter.end,
+                    "{label} is outside the frontmatter"
+                );
+                continue;
+            }
+            merged = None;
+        }
         open.truncate(row.depth + 1);
         if let Some(parent) = row.depth.checked_sub(1).and_then(|depth| open.get(depth)) {
             assert!(
@@ -232,6 +259,11 @@ fn assert_nested(source: &str, rows: &[Row]) {
         }
         open.truncate(row.depth);
         open.push(span.clone());
+        if row.merged {
+            merged = open
+                .get(1)
+                .map(|frontmatter| (row.depth, frontmatter.clone()));
+        }
     }
 }
 

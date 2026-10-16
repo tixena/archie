@@ -27,6 +27,7 @@ document!(issue_template);
 document!(jekyll_post);
 document!(meeting_notes);
 document!(obsidian_note);
+document!(pandoc_paper);
 document!(recipe);
 document!(slash_command);
 document!(yaml_list_of_mappings);

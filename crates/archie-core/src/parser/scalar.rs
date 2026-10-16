@@ -62,7 +62,19 @@ fn date(text: &str) -> Option<Date> {
         month: digits(&text[5..7])?,
         year: digits(&text[0..4])?,
     };
-    ((1..=12).contains(&date.month) && (1..=31).contains(&date.day)).then_some(date)
+    let days = match date.month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap(date.year) => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=days).contains(&date.day).then_some(date)
+}
+
+/// Gregorian: every fourth year, except centuries not divisible by 400.
+const fn is_leap(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn time(text: &str) -> Option<Time> {

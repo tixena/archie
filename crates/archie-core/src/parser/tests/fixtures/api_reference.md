@@ -28,8 +28,8 @@ An error carries a message and a byte range:
 
 ```json
 {
-  "message": "the key `a` is written twice",
-  "span": { "start": 10, "end": 11 }
+  "message": "`tomorrow` is not a value",
+  "span": { "start": 10, "end": 18 }
 }
 ```
 

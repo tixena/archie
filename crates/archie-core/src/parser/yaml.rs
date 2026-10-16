@@ -1,4 +1,5 @@
-//! YAML frontmatter: block mappings, sequences and scalars into a mapping.
+//! YAML frontmatter: block and flow collections, block scalars, tags and
+//! plain scalars into a mapping.
 
 use core::ops::Range;
 
@@ -9,6 +10,38 @@ use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
 use crate::parser::frontmatter::{finish, insert};
 use crate::parser::scalar;
+
+/// The core-schema tags archie reads, plus `!!timestamp`.
+const TAGS: [&str; 8] = [
+    "bool",
+    "float",
+    "int",
+    "map",
+    "null",
+    "seq",
+    "str",
+    "timestamp",
+];
+
+/// What a block scalar keeps of the line break after its text and of the
+/// empty lines after that.
+#[derive(Clone, Copy)]
+enum Chomping {
+    /// The line break only.
+    Clip,
+    /// The line break and every empty line.
+    Keep,
+    /// Neither.
+    Strip,
+}
+
+/// Where a value is written: under a key or a list entry at the given
+/// column, or inside a flow collection.
+#[derive(Clone, Copy)]
+enum Context {
+    Block(usize),
+    Flow,
+}
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
     let empty_at = content.start;
@@ -88,7 +121,6 @@ fn entry(
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
     let name = key(cursor)?;
-    let key_end = cursor.pos();
     if !cursor.eat(b':') {
         return cursor.error("expected `:` after the key");
     }
@@ -98,18 +130,25 @@ fn entry(
         end_of_line(cursor)?;
         nested(cursor, indent, after_colon)?
     } else {
-        let inline = inline_value(cursor, false)?;
+        let inline = inline_value(cursor, Context::Block(indent))?;
         end_of_line(cursor)?;
         inline
     };
-    let span = start..value.span().end;
-    insert(pairs, name, start..key_end, Pair { span, value })
+    let pair = Pair {
+        repeats: Vec::new(),
+        span: start..value.span().end,
+        value,
+    };
+    insert(pairs, name, pair);
+    Ok(())
 }
 
 fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     match cursor.peek() {
         Some(b'"') => double_quoted(cursor),
         Some(b'\'') => single_quoted(cursor),
+        Some(b'!') => tagged_key(cursor, key),
+        Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
             let line = cursor.rest_of_line();
             let Some(length) = plain_key_length(line) else {
@@ -177,7 +216,7 @@ fn block_sequence(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, Parse
         } else if starts_mapping(cursor) {
             Value::Mapping(entry_mapping(cursor, cursor.pos() - line_start)?)
         } else {
-            let value = inline_value(cursor, false)?;
+            let value = inline_value(cursor, Context::Block(indent))?;
             end_of_line(cursor)?;
             value
         };
@@ -190,10 +229,14 @@ fn block_sequence(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, Parse
     }))
 }
 
-fn inline_value(cursor: &mut Cursor<'_>, flow: bool) -> Result<Value, ParseError> {
+/// A value that starts at the cursor. It ends on its own line, except a flow
+/// collection, which may run over several, and a block scalar, which takes
+/// the lines under it; either way the cursor stops after its last text.
+fn inline_value(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
     let start = cursor.pos();
     match cursor.peek() {
         Some(b'[') => flow_sequence(cursor),
+        Some(b'{') => flow_mapping(cursor),
         Some(b'"') => {
             let text = double_quoted(cursor)?;
             Ok(string(start..cursor.pos(), text))
@@ -202,10 +245,13 @@ fn inline_value(cursor: &mut Cursor<'_>, flow: bool) -> Result<Value, ParseError
             let text = single_quoted(cursor)?;
             Ok(string(start..cursor.pos(), text))
         }
-        Some(b'{') => cursor.error("flow mappings are not read yet"),
-        Some(b'|' | b'>') => cursor.error("block scalars are not read yet"),
-        Some(b'&' | b'*' | b'!') => cursor.error("anchors, aliases and tags are not read yet"),
-        Some(_) | None => plain(cursor, flow),
+        Some(b'|' | b'>') => match context {
+            Context::Block(indent) => block_scalar(cursor, indent),
+            Context::Flow => plain(cursor, context),
+        },
+        Some(b'!') => tagged(cursor, context),
+        Some(b'&' | b'*') => anchor(cursor),
+        Some(_) | None => plain(cursor, context),
     }
 }
 
@@ -214,12 +260,12 @@ fn flow_sequence(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
     cursor.bump();
     let mut items = Vec::new();
     loop {
-        cursor.skip_spaces();
+        skip_flow_space(cursor);
         if cursor.eat(b']') {
             break;
         }
-        items.push(inline_value(cursor, true)?);
-        cursor.skip_spaces();
+        items.push(inline_value(cursor, Context::Flow)?);
+        skip_flow_space(cursor);
         if cursor.eat(b']') {
             break;
         }
@@ -233,22 +279,121 @@ fn flow_sequence(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
     }))
 }
 
+fn flow_mapping(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
+    let start = cursor.pos();
+    cursor.bump();
+    let mut pairs = IndexMap::new();
+    loop {
+        skip_flow_space(cursor);
+        if cursor.eat(b'}') {
+            break;
+        }
+        flow_entry(cursor, &mut pairs)?;
+        skip_flow_space(cursor);
+        if cursor.eat(b'}') {
+            break;
+        }
+        if !cursor.eat(b',') {
+            return cursor.error("expected `,` or `}` in the mapping");
+        }
+    }
+    Ok(Value::Mapping(Mapping {
+        pairs,
+        span: start..cursor.pos(),
+    }))
+}
+
+/// One pair of a flow mapping. A key with no `:`, or with nothing after it,
+/// holds null.
+fn flow_entry(
+    cursor: &mut Cursor<'_>,
+    pairs: &mut IndexMap<String, Pair>,
+) -> Result<(), ParseError> {
+    let start = cursor.pos();
+    let name = flow_key(cursor)?;
+    let key_end = cursor.pos();
+    cursor.skip_spaces();
+    let value = if cursor.eat(b':') {
+        let after_colon = cursor.pos();
+        skip_flow_space(cursor);
+        if matches!(cursor.peek(), Some(b',' | b'}')) {
+            null(after_colon)
+        } else {
+            inline_value(cursor, Context::Flow)?
+        }
+    } else {
+        null(key_end)
+    };
+    let pair = Pair {
+        repeats: Vec::new(),
+        span: start..value.span().end,
+        value,
+    };
+    insert(pairs, name, pair);
+    Ok(())
+}
+
+/// A key inside a flow mapping. A plain key ends at a `:` followed by a
+/// space or a flow indicator, at a flow indicator, or at a comment.
+fn flow_key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
+    match cursor.peek() {
+        Some(b'"') => double_quoted(cursor),
+        Some(b'\'') => single_quoted(cursor),
+        Some(b'!') => tagged_key(cursor, flow_key),
+        Some(b'&' | b'*') => anchor(cursor),
+        Some(_) | None => {
+            let line = cursor.rest_of_line();
+            let bytes = line.as_bytes();
+            let length = (0..bytes.len())
+                .find(|&at| match bytes[at] {
+                    b',' | b'[' | b']' | b'{' | b'}' => true,
+                    b':' => matches!(
+                        bytes.get(at + 1),
+                        None | Some(b' ' | b'\t' | b',' | b'[' | b']' | b'{' | b'}')
+                    ),
+                    b' ' | b'\t' => bytes.get(at + 1) == Some(&b'#'),
+                    _ => false,
+                })
+                .unwrap_or(bytes.len());
+            let text = line[..length].trim_end();
+            if text.is_empty() {
+                return cursor.error("expected a key");
+            }
+            cursor.set_pos(cursor.pos() + text.len());
+            Ok(text.to_owned())
+        }
+    }
+}
+
+/// Skips the spaces, line breaks and comments between the entries of a
+/// flow collection.
+fn skip_flow_space(cursor: &mut Cursor<'_>) {
+    loop {
+        match cursor.peek() {
+            Some(b' ' | b'\t' | b'\r' | b'\n') => cursor.bump(),
+            Some(b'#') => {
+                let _: &str = cursor.take_until(b"\n");
+            }
+            Some(_) | None => break,
+        }
+    }
+}
+
 /// An unquoted scalar: the rest of the line up to a comment, or inside a
-/// flow sequence up to the next `,` or `]`.
-fn plain(cursor: &mut Cursor<'_>, flow: bool) -> Result<Value, ParseError> {
+/// flow collection up to the next `,`, `[`, `]`, `{` or `}`.
+fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
     let start = cursor.pos();
     let line = cursor.rest_of_line();
     let uncommented = line.find(" #").map_or(line, |at| &line[..at]);
-    let bounded = if flow {
-        uncommented
-            .find([',', ']'])
-            .map_or(uncommented, |at| &uncommented[..at])
-    } else {
-        uncommented
+    let bounded = match context {
+        Context::Block(_) => uncommented,
+        Context::Flow => uncommented
+            .find([',', '[', ']', '{', '}'])
+            .map_or(uncommented, |at| &uncommented[..at]),
     };
     let text = bounded.trim_end();
-    if !flow && (text.contains(": ") || text.ends_with(':')) {
-        return cursor.error("a mapping written inside a value is not read yet");
+    if text.contains(": ") || text.ends_with(':') {
+        return cursor.error("a plain value cannot hold `: `; quote it");
     }
     let end = start + text.len();
     cursor.set_pos(end);
@@ -256,6 +401,279 @@ fn plain(cursor: &mut Cursor<'_>, flow: bool) -> Result<Value, ParseError> {
         span: start..end,
         value: scalar::yaml(text),
     }))
+}
+
+/// A literal (`|`) or folded (`>`) block scalar whose key or list entry sits
+/// at column `indent`: its header, then the lines indented more than that.
+fn block_scalar(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, ParseError> {
+    let start = cursor.pos();
+    let folded = cursor.peek() == Some(b'>');
+    cursor.bump();
+    let (chomping, explicit) = block_header(cursor);
+    let mut end = cursor.pos();
+    end_of_line(cursor)?;
+    let width = match explicit {
+        Some(digits) => indent + digits,
+        None => detected_width(cursor, indent)?,
+    };
+    let content_start = cursor.pos();
+    let mut offset = 0;
+    let mut lines = Vec::new();
+    let mut broken = false;
+    for piece in cursor.rest().split_inclusive('\n') {
+        let line = line_text(piece);
+        let spaces = leading_spaces(line);
+        let has_break = piece.ends_with('\n');
+        if is_blank(line) && spaces <= width {
+            if has_break {
+                lines.push(None);
+            }
+        } else if spaces >= width {
+            lines.push(Some(&line[width..]));
+            end = content_start + offset + line.len();
+            broken = has_break;
+        } else {
+            break;
+        }
+        offset += piece.len();
+    }
+    let text_lines = lines
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |at| at + 1);
+    let (body, trailing) = lines.split_at(text_lines);
+    let mut text = if folded { fold(body) } else { literal(body) };
+    let final_break = usize::from(broken);
+    let breaks = match chomping {
+        Chomping::Clip => final_break,
+        Chomping::Keep => final_break + trailing.len(),
+        Chomping::Strip => 0,
+    };
+    text.push_str(&"\n".repeat(breaks));
+    cursor.set_pos(end);
+    Ok(string(start..end, text))
+}
+
+/// The chomping indicator and the indentation digit after `|` or `>`, in
+/// either order.
+fn block_header(cursor: &mut Cursor<'_>) -> (Chomping, Option<usize>) {
+    let mut chomping = Chomping::Clip;
+    let mut explicit = None;
+    for _ in 0_u8..2 {
+        match cursor.peek() {
+            Some(b'-') if matches!(chomping, Chomping::Clip) => chomping = Chomping::Strip,
+            Some(b'+') if matches!(chomping, Chomping::Clip) => chomping = Chomping::Keep,
+            Some(digit @ b'1'..=b'9') if explicit.is_none() => {
+                explicit = Some(usize::from(digit - b'0'));
+            }
+            Some(_) | None => break,
+        }
+        cursor.bump();
+    }
+    (chomping, explicit)
+}
+
+/// The column of a block scalar's text, from its first line of text. With
+/// no text, every blank line is empty.
+fn detected_width(cursor: &Cursor<'_>, indent: usize) -> Result<usize, ParseError> {
+    let mut deepest_blank = 0;
+    let mut offset = 0;
+    for piece in cursor.rest().split_inclusive('\n') {
+        let line = line_text(piece);
+        let spaces = leading_spaces(line);
+        if is_blank(line) {
+            deepest_blank = deepest_blank.max(spaces);
+        } else if spaces <= indent {
+            break;
+        } else if deepest_blank > spaces {
+            let at = cursor.pos() + offset;
+            return Err(ParseError::new(
+                "a blank line before the text of a block scalar is indented more than the text",
+                at..at,
+            ));
+        } else {
+            return Ok(spaces);
+        }
+        offset += piece.len();
+    }
+    Ok(deepest_blank.max(indent + 1))
+}
+
+/// Literal lines keep their line breaks.
+fn literal(lines: &[Option<&str>]) -> String {
+    let texts: Vec<&str> = lines.iter().map(|line| line.unwrap_or_default()).collect();
+    texts.join("\n")
+}
+
+/// Folded lines: the line break between two lines of text is a space, an
+/// empty line is a line break, and a line indented more than the text keeps
+/// the line breaks around it.
+fn fold(lines: &[Option<&str>]) -> String {
+    let mut text = String::new();
+    let mut previous: Option<&str> = None;
+    let mut empty = 0;
+    for line in lines {
+        let Some(current) = *line else {
+            empty += 1;
+            continue;
+        };
+        let breaks = match previous {
+            Some(before) if !is_spaced(before) && !is_spaced(current) => {
+                if empty == 0 {
+                    text.push(' ');
+                }
+                empty
+            }
+            Some(_) => empty + 1,
+            None => empty,
+        };
+        text.push_str(&"\n".repeat(breaks));
+        text.push_str(current);
+        previous = Some(current);
+        empty = 0;
+    }
+    text
+}
+
+/// A line of `piece` without its line ending.
+fn line_text(piece: &str) -> &str {
+    let line = piece.strip_suffix('\n').unwrap_or(piece);
+    line.strip_suffix('\r').unwrap_or(line)
+}
+
+fn leading_spaces(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
+}
+
+fn is_blank(line: &str) -> bool {
+    line.trim_start_matches([' ', '\t']).is_empty()
+}
+
+/// Whether a line of a folded scalar is indented more than its text.
+fn is_spaced(line: &str) -> bool {
+    line.starts_with([' ', '\t'])
+}
+
+/// A value written after a tag, read again under it. In block context a tag
+/// may end its line, and the value is the block under it.
+fn tagged(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
+    let name = tag(cursor)?;
+    let tag_end = cursor.pos();
+    let value = match context {
+        Context::Block(indent) => {
+            cursor.skip_spaces();
+            if at_line_end(cursor) {
+                end_of_line(cursor)?;
+                let block = nested(cursor, indent, tag_end)?;
+                cursor.set_pos(block.span().end);
+                block
+            } else {
+                inline_value(cursor, context)?
+            }
+        }
+        Context::Flow => {
+            skip_flow_space(cursor);
+            inline_value(cursor, context)?
+        }
+    };
+    retag(cursor, name, value)
+}
+
+/// A key written after a tag, read by `read` and checked against the tag.
+fn tagged_key(
+    cursor: &mut Cursor<'_>,
+    read: fn(&mut Cursor<'_>) -> Result<String, ParseError>,
+) -> Result<String, ParseError> {
+    let name = tag(cursor)?;
+    cursor.skip_spaces();
+    let start = cursor.pos();
+    let text = read(cursor)?;
+    let _: Value = retag(cursor, name, string(start..cursor.pos(), text.clone()))?;
+    Ok(text)
+}
+
+/// Reads the tag at the cursor and returns the type it names: `!!int` and
+/// `!<tag:yaml.org,2002:int>` both name `int`.
+fn tag(cursor: &mut Cursor<'_>) -> Result<&'static str, ParseError> {
+    let start = cursor.pos();
+    if cursor.rest().starts_with("!<") {
+        let _: &str = cursor.take_until(b" \t\r\n>");
+        let _: bool = cursor.eat(b'>');
+    } else {
+        let _: &str = cursor.take_until(b" \t\r\n,[]{}");
+    }
+    let written = cursor.slice(start..cursor.pos());
+    let named = written.strip_prefix("!!").or_else(|| {
+        written
+            .strip_prefix("!<tag:yaml.org,2002:")?
+            .strip_suffix('>')
+    });
+    named
+        .and_then(|suffix| TAGS.into_iter().find(|known| *known == suffix))
+        .ok_or_else(|| {
+            let message = format!("the tag `{written}` is not one archie reads");
+            ParseError::new(&message, start..cursor.pos())
+        })
+}
+
+/// `value` read again under the tag `!!name`: a scalar's text gets the
+/// tag's type, and a mapping or a list must be what the tag names.
+fn retag(cursor: &Cursor<'_>, name: &str, value: Value) -> Result<Value, ParseError> {
+    let scalar = match value {
+        Value::Mapping(_) if name == "map" => return Ok(value),
+        Value::Sequence(_) if name == "seq" => return Ok(value),
+        Value::Mapping(mapping) => return Err(misfit("a mapping", name, mapping.span)),
+        Value::Sequence(sequence) => return Err(misfit("a list", name, sequence.span)),
+        Value::Scalar(scalar) => scalar,
+    };
+    let text = match scalar.value {
+        ScalarValue::String(text) => text,
+        ScalarValue::Boolean(_)
+        | ScalarValue::Date(_)
+        | ScalarValue::DateTime(_)
+        | ScalarValue::Float(_)
+        | ScalarValue::Integer(_)
+        | ScalarValue::Null
+        | ScalarValue::Time(_) => cursor.slice(scalar.span.clone()).to_owned(),
+    };
+    let Some(typed) = typed(name, &text) else {
+        return Err(misfit(&format!("`{text}`"), name, scalar.span));
+    };
+    Ok(Value::Scalar(Scalar {
+        span: scalar.span,
+        value: typed,
+    }))
+}
+
+/// The value `text` has under the scalar tag `!!name`, read by the rules of
+/// an untagged value of that type, or `None` when it does not fit.
+fn typed(name: &str, text: &str) -> Option<ScalarValue> {
+    match (name, scalar::yaml(text)) {
+        ("str", _) => Some(ScalarValue::String(text.to_owned())),
+        ("float", ScalarValue::Integer(_)) => text.parse().ok().map(ScalarValue::Float),
+        ("bool", fitting @ ScalarValue::Boolean(_))
+        | ("float", fitting @ ScalarValue::Float(_))
+        | ("int", fitting @ ScalarValue::Integer(_))
+        | ("null", fitting @ ScalarValue::Null)
+        | ("timestamp", fitting @ (ScalarValue::Date(_) | ScalarValue::DateTime(_))) => {
+            Some(fitting)
+        }
+        _ => None,
+    }
+}
+
+fn misfit(written: &str, name: &str, span: Range<usize>) -> ParseError {
+    let message = format!("{written} is not a value of the tag `!!{name}`");
+    ParseError::new(&message, span)
+}
+
+/// Anchors and aliases are refused: reading one means copying a value.
+fn anchor<T>(cursor: &Cursor<'_>) -> Result<T, ParseError> {
+    let at = cursor.pos();
+    Err(ParseError::new(
+        "anchors and aliases are not read",
+        at..at + 1,
+    ))
 }
 
 fn double_quoted(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {

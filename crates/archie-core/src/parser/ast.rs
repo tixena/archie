@@ -85,10 +85,12 @@ pub struct Mapping {
 }
 
 /// The value under one key of a mapping. Its span runs from the key to the
-/// end of the value.
+/// end of the value, at the key's first occurrence. `repeats` holds the span
+/// of each later occurrence of the same key, in file order.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Pair {
+    pub repeats: Vec<Range<usize>>,
     pub span: Range<usize>,
     pub value: Value,
 }

@@ -10,7 +10,7 @@ with no requirement behind them.
 ## Two stages
 
 A grammar is context-free when each rule can be applied without looking at anything
-outside the piece of text it matches. Three things in markdown and one in YAML break
+outside the piece of text it matches. Three things in markdown and two in YAML break
 that. Each one is taken out of the grammar and handled by the stage that reads
 characters, so the grammar never sees it.
 
@@ -21,6 +21,7 @@ characters, so the grammar never sees it.
 | A table's cells line up in columns, and a pipe table's first line is a header only when the next line is a delimiter row. | The table reader reads the whole table. | One `TABLE` token. |
 | A code span ends at a run of exactly as many backticks as opened it. | The inline scanner compares the two runs. | One `code` node. |
 | Which YAML mapping a line belongs to depends on its indentation. | The YAML reader compares each line's indentation with that of the block it is reading. | `INDENT` and `DEDENT` in the rules below. |
+| A YAML block scalar ends at the first line of text indented less than its own text. | The YAML reader reads the whole scalar. | One `BLOCK_SCALAR` token. |
 
 Reference links (`[text][label]`, with `[label]: target` written elsewhere in the
 file) are the other construct of CommonMark that is not context-free. archie does not
@@ -195,7 +196,11 @@ inline_table := "{" ( key "=" value ( "," key "=" value )* )? "}"
 - `COMMENT` is `#` to the end of the line.
 - Inside an array, line breaks and comments are allowed between the values. Inside
   an inline table they are not.
-- A key appears once in a mapping.
+- A key written more than once in one mapping or inline table becomes one key, in
+  the place where it was first written. Its value is a list of every value written
+  for it, in the order of the file: a list adds its items, and any other value adds
+  itself as one item. `title = "Draft"` then `title = "Final"` is
+  `title = ["Draft", "Final"]`.
 
 A value's type comes from how it is written:
 
@@ -204,7 +209,7 @@ A value's type comes from how it is written:
 | `"..."`, with the escapes `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX` | String |
 | `'...'`, with no escapes | String |
 | `true`, `false` | Boolean |
-| `2026-10-10` | Date |
+| `2026-10-10`, when that day exists in the calendar; `2026-02-30` is not a value | Date |
 | `07:32:00`, optionally with a fraction such as `.250` | Time |
 | A date, then `T`, `t` or one space, then a time, then optionally `Z`, `z` or an offset such as `-04:00` | DateTime |
 | An optional sign and digits; or `0x`, `0o`, `0b` and digits in that base | Integer, 64 bits |
@@ -215,33 +220,81 @@ A value's type comes from how it is written:
 ```text
 yaml          := mapping?
 mapping       := entry+
-entry         := key ":" inline NEWLINE
-               | key ":" NEWLINE INDENT mapping DEDENT
-               | key ":" NEWLINE INDENT sequence DEDENT
-               | key ":" NEWLINE sequence
-               | key ":" NEWLINE
-sequence      := ( "-" ( inline NEWLINE | mapping | NEWLINE ) )+
-inline        := flow_sequence | double_quoted | single_quoted | PLAIN
-flow_sequence := "[" ( inline ( "," inline )* )? "]"
-key           := double_quoted | single_quoted | PLAIN_KEY
+entry         := key ":" ( node | NEWLINE block? )
+sequence      := ( "-" ( node | mapping | NEWLINE ) )+
+node          := TAG? inline NEWLINE
+               | TAG? BLOCK_SCALAR
+               | TAG NEWLINE block?
+block         := INDENT mapping DEDENT
+               | INDENT sequence DEDENT
+               | sequence
+inline        := flow_sequence | flow_mapping | double_quoted | single_quoted | PLAIN
+flow_sequence := "[" ( flow_node ( "," flow_node )* ","? )? "]"
+flow_mapping  := "{" ( flow_pair ( "," flow_pair )* ","? )? "}"
+flow_pair     := flow_key ( ":" flow_node? )?
+flow_node     := TAG? inline
+key           := TAG? ( double_quoted | single_quoted | PLAIN_KEY )
+flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY )
 ```
 
 - `INDENT` is a line indented more than the key above it; `DEDENT` is the return to
   an earlier indentation. Every key of one mapping starts at the same column.
-- A sequence may be written at the same column as its key (the fourth form of
-  `entry`).
-- A key with nothing after its colon and no block under it is null (the fifth
-  form), and so is a `-` with nothing after it.
+- A `block` may be a sequence written at the same column as its key (its third
+  form).
+- A key with nothing after its colon and no block under it is null, and so is a `-`
+  with nothing after it, and a pair of a flow mapping with no `:` or nothing after
+  it.
 - A list entry whose line goes on with a plain `key:` holds a mapping. Its first key is on
   the `-` line, and its other keys start at that key's column on the lines below.
 - `PLAIN_KEY` runs to the first `:` followed by a space or by the end of the line.
+  `FLOW_KEY` runs to the first `:` followed by a space or by one of `, [ ] { }`, or
+  to the first of `, [ ] { }`.
 - `PLAIN` runs to the end of the line, or to a comment (a space then `#`); inside a
-  flow sequence it stops at `,` or `]`.
+  flow collection it stops at `,`, `[`, `]`, `{` or `}`. It cannot hold `: ` or end
+  with `:`; such a value fails the file with ``a plain value cannot hold `: `; quote
+  it``.
+- A flow collection may run over several lines: line breaks and comments may sit
+  between its entries, and a `,` may follow the last one.
 - `double_quoted` reads the escapes `\0 \a \b \t \n \v \f \r \e \" \/ \\`, a
   backslash before a space, `\xXX`, `\uXXXX` and `\UXXXXXXXX`. Inside
   `single_quoted`, `''` is one quote.
 - Blank lines and lines holding only a comment are skipped.
-- A key appears once in a mapping.
+- A key written more than once becomes one key holding a list of every value
+  written for it, by the same rule as in TOML: `tags: [a, b]` then `tags: c` is
+  `tags: [a, b, c]`.
+- An anchor (`&name`) or an alias (`*name`), on a value or on a key, fails the file
+  with `anchors and aliases are not read`.
+
+`BLOCK_SCALAR` is read whole, by YAML 1.2.2 section 8.1:
+
+- Its header is `|` (literal) or `>` (folded), then in either order an optional
+  chomping indicator, `-` (strip) or `+` (keep), and an optional indentation digit
+  from 1 to 9, then the end of the line.
+- Its lines are those indented more than the key or the `-` it belongs to. The
+  column of its text is that key's or that `-`'s column plus the digit; with no
+  digit, it is the column of the first line of text, and a blank line before that
+  line may not be indented more. The scalar ends before the first line of text
+  indented less than that column.
+- A literal scalar keeps every line break. A folded scalar joins two lines of text
+  with a space, turns each empty line into a line break, and keeps the line breaks
+  around a line indented more than the text.
+- Clip, the default, keeps the line break after the last line of text and drops the
+  empty lines after it. Strip drops both. Keep keeps both.
+
+`TAG` is `!!` followed by `str`, `int`, `float`, `bool`, `null`, `map`, `seq` or
+`timestamp`, or the same type written in full, such as `!<tag:yaml.org,2002:str>`.
+Any other tag, such as `!point`, fails the file with
+``the tag `!point` is not one archie reads``.
+
+- A tagged scalar's text is read again by the rules for an unquoted value of the
+  tag's type in the table below: `!!str 01234` is the String `"01234"`, and
+  `!!timestamp` reads a Date or a DateTime. `!!float` also reads the text of a
+  decimal integer, so `!!float 1` is the Float `1`. `!!map` and `!!seq` only check
+  that the value is a mapping or a list.
+- A value that does not fit its tag fails the file, as
+  ``"`abc` is not a value of the tag `!!int`"``, or
+  ``"a list is not a value of the tag `!!map`"``.
+- A tag on a key checks the key's text the same way.
 
 A `PLAIN` value's type comes from how it is written:
 
@@ -251,8 +304,8 @@ A `PLAIN` value's type comes from how it is written:
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
 | An optional sign and digits; or `0x`, `0o` and digits in that base | Integer, 64 bits |
 | Digits with a fraction, an exponent or both; `.inf` and `.nan` | Float |
-| `2026-10-10` | Date |
-| A date-time, written as in TOML | DateTime |
+| `2026-10-10`, when that day exists in the calendar | Date |
+| A date-time, written as in TOML, whose date exists in the calendar | DateTime |
 | Anything else | String |
 
 ## What each node's span covers
@@ -261,14 +314,17 @@ A `PLAIN` value's type comes from how it is written:
 |---|---|---|
 | `Document` | The first byte of the file | The last |
 | `Frontmatter` | The opening delimiter | The end of the closing delimiter |
-| `Mapping` written as lines | The first key | The end of the last value |
+| `Mapping` written as lines | The first key | The end of the last value written |
 | `Mapping` with no pairs | Empty, on the line after the opening delimiter | |
 | `Mapping` written as `{ ... }` | `{` | `}` |
-| `Pair` | Its key | The end of its value |
+| `Pair` | Its key | The end of its value, where the key is first written; `repeats` holds the same range for each later occurrence |
 | `Sequence` written as `[ ... ]` | `[` | `]` |
+| `Sequence` of the values of a key written more than once | The first value's start | The first value's end |
 | `Sequence` written as `-` lines | The first `-` | The end of the last value |
 | `Scalar` | Its first character, quotes included | Its last |
 | `Scalar` that is null because nothing is written | Empty, right after the `:` or the `-` | |
+| `Scalar` written as a block scalar | `\|` or `>` | The end of its last line of text, or of its header when it has none |
+| `Scalar`, `Mapping` or `Sequence` after a tag | The value, without its tag | |
 | `Body` | The line after the frontmatter, or the first byte of a file with none | The last byte of the file |
 | `Section` | Its heading | The end of its last block |
 | `Heading` | The first `#` | The end of the line's text |
@@ -322,16 +378,22 @@ between the two lines.
    not read. Each is refused with an error that names it.
 2. Numbers are read more loosely: underscores are dropped wherever they are, and
    leading zeros are accepted.
+3. A key written more than once becomes one key holding a list of its values. TOML
+   does not allow it.
 
 ### From YAML
 
-1. Block scalars (`|`, `>`), flow mappings (`{ ... }`), and anchors, aliases and
-   tags are not read. Each is refused with an error that names it.
-2. A flow sequence continued on a second line, and a value continued on a more
-   indented line, are refused.
-3. An unquoted date or date-time is a Date or a DateTime. YAML 1.2 reads it as a
-   string.
-4. A number written with nothing before the dot, such as `.5`, is a string. YAML
+1. Anchors and aliases are refused, and so is every tag other than the eight above.
+   Each is refused with an error that names it.
+2. A plain value continued on a more indented line, and a quoted string continued
+   on a second line, are refused.
+3. A pair written inside a flow list, such as `[a: b]`, is refused instead of read
+   as a mapping.
+4. A key written more than once becomes one key holding a list of its values. YAML
+   does not allow it.
+5. An unquoted date or date-time whose day exists in the calendar is a Date or a
+   DateTime. The YAML 1.2.2 core schema has no date type and reads it as a string.
+6. A number written with nothing before the dot, such as `.5`, is a string. YAML
    reads it as a float.
 
 ## Extensions
@@ -361,11 +423,13 @@ pub trait Extension {
 
 Each of these was needed to write the parser and none was asked for.
 
-1. An unquoted date in YAML is typed as a date.
+1. A pair written inside a flow list, such as `[a: b]`, is refused with the error
+   for a plain value holding `: `.
 2. A frontmatter construct the reader does not know fails the whole file. It is not
    kept as opaque text.
-3. A key written twice fails the whole file. It is not reported as a finding beside
-   the tree.
+3. A key written more than once keeps the range of its first occurrence in `span` and
+   that of each later one in `repeats`. The list of its values keeps the first
+   value's range, so the values from a later occurrence lie outside it.
 4. TOML table headers are refused instead of read: one mapping written in several
    separate places has no single byte range to put in `span`.
 5. The rule for an item's text column, and one list across different bullets.

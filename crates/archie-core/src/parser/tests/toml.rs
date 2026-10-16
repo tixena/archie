@@ -176,3 +176,136 @@ Document
 ",
     );
 }
+
+#[test]
+fn a_key_written_twice_holds_a_list_of_both_values_and_keeps_its_first_place() {
+    check(
+        r#"+++
+title = "Draft"
+other = 1
+title = "Final"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=title repeats=1
+        Sequence
+          Scalar String "Draft"
+          Scalar String "Final"
+      Pair key=other
+        Scalar Integer 1
+  Body
+"#,
+    );
+}
+
+#[test]
+fn a_list_written_again_adds_its_items_and_any_other_value_adds_itself() {
+    check(
+        r#"+++
+tags = "draft"
+tags = ["review", "parser"]
+labels = ["review", "parser"]
+labels = "draft"
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=tags repeats=1
+        Sequence
+          Scalar String "draft"
+          Scalar String "review"
+          Scalar String "parser"
+      Pair key=labels repeats=1
+        Sequence
+          Scalar String "review"
+          Scalar String "parser"
+          Scalar String "draft"
+  Body
+"#,
+    );
+}
+
+#[test]
+fn a_table_written_again_is_one_item_of_the_list() {
+    check(
+        r#"+++
+owner = { name = "Ada" }
+owner = { role = "host" }
+host = "Ada"
+host = { name = "Grace", role = "host" }
+people = ["ada", "grace"]
+people = [{ name = "Linus" }]
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=owner repeats=1
+        Sequence
+          Mapping
+            Pair key=name
+              Scalar String "Ada"
+          Mapping
+            Pair key=role
+              Scalar String "host"
+      Pair key=host repeats=1
+        Sequence
+          Scalar String "Ada"
+          Mapping
+            Pair key=name
+              Scalar String "Grace"
+            Pair key=role
+              Scalar String "host"
+      Pair key=people repeats=1
+        Sequence
+          Scalar String "ada"
+          Scalar String "grace"
+          Mapping
+            Pair key=name
+              Scalar String "Linus"
+  Body
+"#,
+    );
+}
+
+#[test]
+fn three_occurrences_give_one_list_in_file_order() {
+    check(
+        "+++\na = 1\na = 2\na = 3\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=2
+        Sequence
+          Scalar Integer 1
+          Scalar Integer 2
+          Scalar Integer 3
+  Body
+",
+    );
+}
+
+#[test]
+fn a_key_written_twice_in_an_inline_table_holds_a_list() {
+    check(
+        r#"+++
+owner = { name = "Ada", name = "Grace" }
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=owner
+        Mapping
+          Pair key=name repeats=1
+            Sequence
+              Scalar String "Ada"
+              Scalar String "Grace"
+  Body
+"#,
+    );
+}
