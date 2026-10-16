@@ -81,9 +81,9 @@ struct Layout<'src> {
     text: String,
 }
 
-/// The order of the pieces being paired, as links by their places among
-/// them. The pieces a pair takes out of the order keep their links to each
-/// other.
+/// The order of the pieces being paired, or of the runs not yet removed, as
+/// links by their places among them. The places taken out of the order
+/// between two others keep their links to each other.
 struct Links {
     first: Option<usize>,
     next: Vec<Option<usize>>,
@@ -111,7 +111,12 @@ struct Run {
     can_open: bool,
     character: char,
     count: usize,
+    /// How deep the deepest piece between this run and the next run not
+    /// yet removed nests.
+    deepest: usize,
     length: usize,
+    /// The run's place among the pieces.
+    place: usize,
     span: Range<usize>,
 }
 
@@ -603,15 +608,15 @@ impl<'src> Layout<'src> {
 }
 
 impl Links {
-    /// The pieces before `at`, the nearest first.
+    /// The places before `at`, the nearest first.
     fn before(&self, at: usize) -> impl Iterator<Item = usize> {
         iter::successors(self.previous[at], |&place| self.previous[place])
     }
 
-    /// The pieces between `open` and `close`, in order.
-    fn between(&self, open: usize, close: usize) -> impl Iterator<Item = usize> {
-        self.onward(self.next[open])
-            .take_while(move |&place| place != close)
+    /// Takes the places between `open` and `close` out of the order.
+    fn cut(&mut self, open: usize, close: usize) {
+        self.next[open] = Some(close);
+        self.previous[close] = Some(open);
     }
 
     /// Puts a new piece, at the next place, between `open` and `close` in
@@ -822,13 +827,16 @@ where
             )
         };
         self.flush();
+        let place = self.pieces.len();
         self.pieces.push(Piece::Run(self.runs.len()));
         self.runs.push(Run {
             can_close,
             can_open,
             character,
             count: length,
+            deepest: 0,
             length,
+            place,
             span: at..close,
         });
         close
@@ -995,6 +1003,9 @@ where
     /// after it.
     fn push(&mut self, node: Inline<E>, depth: usize) {
         self.flush();
+        if let Some(run) = self.runs.last_mut() {
+            run.deepest = run.deepest.max(depth);
+        }
         self.pieces.push(Piece::Node(node, depth));
     }
 
@@ -1050,6 +1061,8 @@ where
     E: Extension,
 {
     let mut links = Links::new(pieces.len());
+    // The runs not yet removed, by their places among `runs`.
+    let mut chain = Links::new(runs.len());
     // For each key of closer, the first run that may still open for it.
     let mut bottoms = [0_usize; 12];
     let mut at = links.first;
@@ -1062,32 +1075,29 @@ where
             }
         };
         let key = runs[closer].key();
-        let opener = links
-            .before(current)
-            .filter_map(|place| match pieces[place] {
-                Piece::Run(run) => Some((place, run)),
-                Piece::Node(_, _) | Piece::Pair(_, _, _) => None,
-            })
-            .take_while(|&(_, run)| run >= bottoms[key])
-            .find(|&(_, run)| runs[run].opens(&runs[closer]))
-            .map(|(place, run)| {
-                let inside = deepest(&pieces, links.between(place, current));
-                ((place, run), inside + 1)
-            })
-            .filter(|&(_, depth)| depth <= INLINE_CAP);
-        if let Some((open, depth)) = opener {
+        let mut inside = 0;
+        let found = chain
+            .before(closer)
+            .take_while(|&run| run >= bottoms[key])
+            .find(|&run| {
+                inside = inside.max(runs[run].deepest);
+                runs[run].opens(&runs[closer])
+            });
+        let depth = inside + 1;
+        if let Some(opener) = found.filter(|_| depth <= INLINE_CAP) {
             at = pair(
                 &mut pieces,
                 &mut links,
+                &mut chain,
                 &mut runs,
-                open,
-                (current, closer),
+                (opener, closer),
                 depth,
             );
         } else {
             bottoms[key] = closer;
             if !runs[closer].can_open {
                 pieces[current] = Piece::Node(runs[closer].text(), 0);
+                retire(&mut chain, &mut runs, closer);
             }
             at = links.next[current];
         }
@@ -1111,19 +1121,21 @@ where
 
 /// Makes emphasis, or strong emphasis when both runs have two characters
 /// left, nesting `depth` deep, of the pieces between the opening and the
-/// closing run, each given by its place among `pieces` and among `runs`.
-/// Gives where the closer, or what follows it, now is.
+/// closing run, each given by its place among `runs`. The runs between them
+/// leave `chain`, the runs not yet removed. Gives where the closer, or what
+/// follows it, now is among the pieces.
 fn pair<E>(
     pieces: &mut Vec<Piece<E>>,
     links: &mut Links,
+    chain: &mut Links,
     runs: &mut [Run],
-    (open, opener): (usize, usize),
-    (close, closer): (usize, usize),
+    (opener, closer): (usize, usize),
     depth: usize,
 ) -> Option<usize>
 where
     E: Extension,
 {
+    let (open, close) = (runs[opener].place, runs[closer].place);
     let used = if runs[opener].count >= 2 && runs[closer].count >= 2 {
         2
     } else {
@@ -1151,15 +1163,28 @@ where
     };
     let first = links.enclose(open, close);
     pieces.push(Piece::Pair(node, depth, first));
+    chain.cut(opener, closer);
+    runs[opener].deepest = depth;
     if runs[opener].count == 0 {
         links.remove(open);
+        retire(chain, runs, opener);
     }
     if runs[closer].count == 0 {
         let after = links.next[close];
         links.remove(close);
+        retire(chain, runs, closer);
         return after;
     }
     Some(close)
+}
+
+/// Takes `run` out of `chain`, the runs not yet removed: the pieces after
+/// it now follow the run before it.
+fn retire(chain: &mut Links, runs: &mut [Run], run: usize) {
+    if let Some(earlier) = chain.previous[run] {
+        runs[earlier].deepest = runs[earlier].deepest.max(runs[run].deepest);
+    }
+    chain.remove(run);
 }
 
 /// `pieces` as nodes, in the order of `links`: each run as the text of its

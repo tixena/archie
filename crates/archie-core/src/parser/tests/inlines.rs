@@ -1754,3 +1754,36 @@ fn a_closed_comment_and_a_processing_instruction_are_inline_html() {
         ),
     );
 }
+
+#[test]
+fn a_hundred_closers_after_a_hundred_code_spans_are_text() {
+    let codes = ["          Code \"a\"\n"; 100].join("          Text \" \"\n");
+    let text = format!(" {}", "a* ".repeat(100).trim_end());
+    check(
+        &format!("{}{}\n", "`a` ".repeat(100), "a* ".repeat(100)),
+        &one_line(&format!("{codes}          Text \"{text}\"\n")),
+    );
+}
+
+#[test]
+fn a_hundred_closers_after_a_hundred_openers_nest_emphasis_a_hundred_deep() {
+    let indent = |level: usize| "  ".repeat(5 + level);
+    let opened = (0..99)
+        .map(|level| {
+            let pad = indent(level);
+            format!("{pad}Emphasis\n{pad}  Text \"a \"\n")
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    let pad = indent(99);
+    let innermost = format!("{pad}Emphasis\n{pad}  Text \"a b\"\n");
+    let closed = (0..99)
+        .rev()
+        .map(|level| format!("{}  Text \" b\"\n", indent(level)))
+        .collect::<Vec<_>>()
+        .concat();
+    check(
+        &format!("{}{}\n", "*a ".repeat(100), "b* ".repeat(100)),
+        &one_line(&format!("{opened}{innermost}{closed}")),
+    );
+}
