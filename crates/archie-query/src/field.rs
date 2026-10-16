@@ -3,6 +3,8 @@
 
 use core::fmt;
 
+use crate::adapters::ast::read_literal;
+
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const SECONDS_PER_DAY: i128 = 86_400;
 
@@ -106,18 +108,17 @@ impl Date {
         i128::from(days_from_civil(self.y, self.m, self.d)) * SECONDS_PER_DAY * NANOS_PER_SECOND
     }
 
-    /// Reads `YYYY-MM-DD`; the day must exist in that month.
+    /// Whether the day exists in its month.
+    pub(crate) const fn is_real(self) -> bool {
+        1 <= self.m && self.m <= 12 && 1 <= self.d && self.d <= days_in_month(self.y, self.m)
+    }
+
+    /// `text` as a date, when archie-core reads it as one and the day exists.
     pub(crate) fn parse(text: &str) -> Option<Self> {
-        if text.len() != 10 || text.get(4..5)? != "-" || text.get(7..8)? != "-" {
+        let Field::Date(date) = read_literal(text)? else {
             return None;
-        }
-        let date = Self {
-            d: digits(text.get(8..10)?)?.try_into().ok()?,
-            m: digits(text.get(5..7)?)?.try_into().ok()?,
-            y: digits(text.get(0..4)?)?.try_into().ok()?,
         };
-        ((1..=12).contains(&date.m) && (1..=days_in_month(date.y, date.m)).contains(&date.d))
-            .then_some(date)
+        Some(date)
     }
 }
 
@@ -130,69 +131,25 @@ impl DateTime {
         self.date.instant() + seconds * NANOS_PER_SECOND + i128::from(self.time.ns)
     }
 
-    /// Reads RFC 3339 `YYYY-MM-DDTHH:MM:SS[.frac][Z|±HH:MM]`, or with no offset.
-    pub(crate) fn parse(text: &str) -> Option<Self> {
-        if !text.is_ascii() {
-            return None;
-        }
-        let (date_text, rest) = text.split_once(['T', 't'])?;
-        let date = Date::parse(date_text)?;
-        if rest.get(2..3)? != ":" || rest.get(5..6)? != ":" {
-            return None;
-        }
-        let mut time = Time {
-            h: digits(rest.get(0..2)?)?.try_into().ok()?,
-            m: digits(rest.get(3..5)?)?.try_into().ok()?,
-            ns: 0,
-            s: digits(rest.get(6..8)?)?.try_into().ok()?,
-        };
-        if time.h > 23 || time.m > 59 || time.s > 59 {
-            return None;
-        }
-        let mut tail = rest.get(8..)?;
-        if let Some(fraction) = tail.strip_prefix('.') {
-            let count = fraction.bytes().take_while(u8::is_ascii_digit).count();
-            if count == 0 {
-                return None;
+    /// Whether the date exists, the time is a time of day, and the offset is at most 23:59.
+    pub(crate) const fn is_real(self) -> bool {
+        self.date.is_real()
+            && self.time.h <= 23
+            && self.time.m <= 59
+            && self.time.s <= 59
+            && match self.offset_minutes {
+                None => true,
+                Some(minutes) => minutes.unsigned_abs() <= 23 * 60 + 59,
             }
-            let padded = format!("{:0<9}", fraction.get(..count.min(9))?);
-            time.ns = digits(&padded)?;
-            tail = fraction.get(count..)?;
-        }
-        let offset_minutes = match tail {
-            "" => None,
-            "Z" | "z" => Some(0),
-            signed => {
-                let sign: i16 = match signed.get(0..1)? {
-                    "+" => 1,
-                    "-" => -1,
-                    _ => return None,
-                };
-                if signed.len() != 6 || signed.get(3..4)? != ":" {
-                    return None;
-                }
-                let hours = i16::try_from(digits(signed.get(1..3)?)?).ok()?;
-                let minutes = i16::try_from(digits(signed.get(4..6)?)?).ok()?;
-                if hours > 23 || minutes > 59 {
-                    return None;
-                }
-                Some(sign * (hours * 60 + minutes))
-            }
-        };
-        Some(Self {
-            date,
-            offset_minutes,
-            time,
-        })
     }
-}
 
-/// `text` as a number when every character is an ASCII digit.
-fn digits(text: &str) -> Option<u32> {
-    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
+    /// `text` as a datetime, when archie-core reads it as one and every part is in range.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        let Field::DateTime(datetime) = read_literal(text)? else {
+            return None;
+        };
+        Some(datetime)
     }
-    text.parse().ok()
 }
 
 /// How many days `month` has in `year`.

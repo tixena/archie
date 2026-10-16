@@ -2,8 +2,9 @@
 
 use core::ops::Range;
 
+use crate::adapters::ast::read_literal;
 use crate::error::QueryError;
-use crate::field::{Date, DateTime};
+use crate::field::{Date, DateTime, Field};
 use crate::query::lexer::{CmpOp, Kind, Token, lex};
 
 /// Deepest nesting of parentheses and `not`.
@@ -232,14 +233,16 @@ pub fn parse(text: &str) -> Result<Expr, QueryError> {
 }
 
 fn word_literal(word: &str) -> Option<Literal> {
-    if let Some(datetime) = DateTime::parse(word) {
-        return Some(Literal::DateTime(datetime));
+    match read_literal(word)? {
+        Field::Date(date) => Some(Literal::Date(date)),
+        Field::DateTime(datetime) => Some(Literal::DateTime(datetime)),
+        Field::Float(number) => Some(Literal::Float(number)),
+        Field::Int(number) => Some(Literal::Int(number)),
+        Field::Bool(_)
+        | Field::List(_)
+        | Field::Map(_)
+        | Field::Null
+        | Field::Str(_)
+        | Field::Time(_) => None,
     }
-    if let Some(date) = Date::parse(word) {
-        return Some(Literal::Date(date));
-    }
-    if let Ok(number) = word.parse::<i64>() {
-        return Some(Literal::Int(number));
-    }
-    word.parse::<f64>().ok().map(Literal::Float)
 }

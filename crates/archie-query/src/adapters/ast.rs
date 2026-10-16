@@ -3,6 +3,7 @@
 use archie_core::parser::{
     self,
     ast::{Date as AstDate, Mapping, ScalarValue, Time as AstTime, Value},
+    read_toml,
 };
 
 use crate::error::QuerySourceError;
@@ -71,4 +72,53 @@ const fn time_of(time: AstTime) -> Time {
         ns: time.nanosecond,
         s: time.second,
     }
+}
+
+/// A literal word or string read as a date, datetime, integer or float, by
+/// asking archie-core to read `v = <text>`. `None` for anything else, and for a
+/// date or time archie accepts but that is not real (day past the month's end,
+/// hour 24, offset past 23:59).
+pub fn read_literal(text: &str) -> Option<Field> {
+    if text.is_empty() || text.contains(|c: char| c.is_whitespace() || c.is_control()) {
+        return None;
+    }
+    let source = format!("v = {text}");
+    let read = read_toml(&source, 0..source.len()).ok()?;
+    if read.pairs.len() != 1 {
+        return None;
+    }
+    let (_, pair) = read.pairs.first()?;
+    let Value::Scalar(scalar) = &pair.value else {
+        return None;
+    };
+    let field = scalar_field(&scalar.value)?;
+    let accepted = match &field {
+        Field::Date(date) => date.is_real(),
+        Field::DateTime(datetime) => datetime.is_real() && offset_minutes_in_range(text),
+        Field::Float(_) | Field::Int(_) => true,
+        Field::Bool(_)
+        | Field::List(_)
+        | Field::Map(_)
+        | Field::Null
+        | Field::Str(_)
+        | Field::Time(_) => false,
+    };
+    accepted.then_some(field)
+}
+
+/// archie folds `+05:60` into 360 minutes, so the written minutes of a
+/// numeric offset are checked on the text. `Z` and a missing offset pass.
+fn offset_minutes_in_range(text: &str) -> bool {
+    let Some((_, clock)) = text.split_once(['T', 't']) else {
+        return true;
+    };
+    let Some((_, offset)) = clock.rsplit_once(['+', '-']) else {
+        return true;
+    };
+    if !offset.contains(':') {
+        return true;
+    }
+    offset
+        .split_once(':')
+        .is_some_and(|(_, minutes)| minutes.parse::<u8>().is_ok_and(|m| m <= 59))
 }
