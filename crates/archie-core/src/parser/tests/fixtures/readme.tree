@@ -21,7 +21,7 @@ Document
       Section
         Heading
           Text "Install"
-        CodeBlock info="console" value="$ cargo install quill"
+        CodeBlock language="console" value="$ cargo install quill"
       Section
         Heading
           Text "Features"

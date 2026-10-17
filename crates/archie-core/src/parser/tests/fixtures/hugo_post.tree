@@ -40,7 +40,7 @@ Document
         Paragraph
           Line
             Text "The lexer turns lines into tokens:"
-        CodeBlock info="go" value="type Token struct {\n\tKind TokenKind\n\tSpan Range\n}"
+        CodeBlock language="go" value="type Token struct {\n\tKind TokenKind\n\tSpan Range\n}"
       Section
         Heading
           Text "Stage two"

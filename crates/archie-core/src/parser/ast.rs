@@ -389,9 +389,10 @@ where
 /// Lines between two fences of backticks or of tildes, or indented four
 /// columns past their parent's.
 ///
-/// `content` is the range of those lines in the source, `info` the text after
-/// the opening fence, empty for an indented block, and `value` the lines as
-/// the block holds them.
+/// `content` is the range of those lines in the source, and `value` the lines
+/// as the block holds them. The info string, the text after the opening
+/// fence, is split into `language`, its first word, `None` when there is no
+/// info string, and `args`, the rest.
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -400,12 +401,26 @@ pub struct CodeBlock<E = Markdown>
 where
     E: Extension,
 {
+    pub args: Args,
     pub content: Range<usize>,
-    pub info: String,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     pub span: Range<usize>,
     pub value: String,
+}
+
+/// The rest of a fenced code block's info string, after its language.
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum Args {
+    /// The rest as written, when it is not the inside of a TOML inline table.
+    Text(String),
+    /// The rest read as the inside of a TOML inline table; empty when the
+    /// fence has nothing after its language.
+    Toml(Mapping),
 }
 
 /// A table read from pipe, grid or simple table syntax. `head` holds the

@@ -16,19 +16,21 @@ enum Row {
     Claimed(String),
 }
 
-/// The text of `cell`'s content, with its levels counted from one.
-fn cell<T>(cell: &TableCell<T>) -> String
+/// The text of `cell`'s content, with its levels counted from one. `writer`
+/// keeps the error met while writing it.
+fn cell<T>(writer: &mut Writer, cell: &TableCell<T>) -> String
 where
     T: Extension,
 {
     let mut inner = Writer::new();
     inner.node(&cell.kind, Construct::TableCell(cell));
+    writer.keep_error(&mut inner);
     inner.finish().trim_end_matches('\n').to_owned()
 }
 
 /// The cells of `row`, `width` of them, empty ones added at the end, or
 /// what an extension wrote for it.
-fn row<T>(writer: &Writer, row: &TableRow<T>, width: usize) -> Row
+fn row<T>(writer: &mut Writer, row: &TableRow<T>, width: usize) -> Row
 where
     T: Extension,
 {
@@ -36,7 +38,7 @@ where
         let text = writer.claimed(node, Construct::TableRow(row));
         return Row::Claimed(text.trim_end_matches('\n').to_owned());
     }
-    let mut cells: Vec<String> = row.cells.iter().map(cell).collect();
+    let mut cells: Vec<String> = row.cells.iter().map(|each| cell(writer, each)).collect();
     cells.resize(width.max(cells.len()), String::new());
     Row::Cells(cells)
 }
@@ -79,14 +81,14 @@ where
 }
 
 /// `row` as a line of a pipe table, its cells not padded.
-pub fn pipe_row<T>(row: &TableRow<T>) -> String
+pub fn pipe_row<T>(writer: &mut Writer, row: &TableRow<T>) -> String
 where
     T: Extension,
 {
     let mut line = "|".to_owned();
     for each in &row.cells {
         line.push(' ');
-        line.push_str(&escape_pipes(&cell(each)));
+        line.push_str(&escape_pipes(&cell(writer, each)));
         line.push_str(" |");
     }
     line

@@ -10,7 +10,7 @@ Document
       Section
         Heading
           Text "Synopsis"
-        CodeBlock info="console" value="$ archie ls"
+        CodeBlock language="console" value="$ archie ls"
         Paragraph
           Line
             Emphasis

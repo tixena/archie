@@ -23,10 +23,12 @@ use chrono::{
 };
 
 use crate::parser::ast::{
-    Block, Continues, Document, Inline, Mapping, MarkdownBlock, ScalarValue, Section, Value,
+    Args, Block, CodeBlock, Continues, Document, Inline, Mapping, MarkdownBlock, ScalarValue,
+    Section, Value,
 };
 use crate::parser::extension::Extension;
 use crate::parser::parse;
+use crate::writer::Writer;
 
 /// One node of a parsed tree: how deep it sits, how it reads, what it covers.
 /// `merged` marks a pair whose key is written more than once, and `spread` a
@@ -62,9 +64,14 @@ impl Rows<'_> {
                 } else {
                     ""
                 };
+                let language = code_block
+                    .language
+                    .as_ref()
+                    .map_or_else(String::new, |language| format!(" language={language:?}"));
                 let label = format!(
-                    "CodeBlock info={:?} value={:?}{claimed}",
-                    code_block.info, code_block.value
+                    "CodeBlock{language}{} value={:?}{claimed}",
+                    args_label(code_block),
+                    code_block.value
                 );
                 self.push(depth, label, &code_block.span);
             }
@@ -377,6 +384,23 @@ fn assert_nested(source: &str, rows: &[Row]) {
             merged = open
                 .get(1)
                 .map(|frontmatter| (row.depth, frontmatter.clone()));
+        }
+    }
+}
+
+/// ` args=Text "..."`, or ` args=Toml {...}` with the pairs as the writer
+/// writes them, else nothing when the args are an empty mapping.
+fn args_label<E>(code_block: &CodeBlock<E>) -> String
+where
+    E: Extension,
+{
+    match &code_block.args {
+        Args::Text(text) => format!(" args=Text {text:?}"),
+        Args::Toml(mapping) if mapping.pairs.is_empty() => String::new(),
+        Args::Toml(_) => {
+            let info = Writer::new().info_string(code_block);
+            let language = code_block.language.as_deref().unwrap_or_default();
+            format!(" args=Toml {{{}}}", info[language.len()..].trim_start())
         }
     }
 }

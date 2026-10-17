@@ -153,8 +153,8 @@ impl Extension for Plain {
     }
 }
 
-/// archie's own extension: a fenced block whose info string starts with the
-/// word `markdown` or `md`, in any case, holds a `MarkdownBlock`.
+/// archie's own extension: a fenced block whose language is the word
+/// `markdown` or `md`, in any case, holds a `MarkdownBlock`.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -176,16 +176,22 @@ impl Extension for Markdown {
         let Construct::CodeBlock(block) = construct else {
             return None;
         };
-        let word = block.info.split_whitespace().next()?;
-        (word.eq_ignore_ascii_case("markdown") || word.eq_ignore_ascii_case("md"))
+        let language = block.language.as_deref()?;
+        (language.eq_ignore_ascii_case("markdown") || language.eq_ignore_ascii_case("md"))
             .then(|| context.markdown::<T>(block.content.clone()))
     }
 
-    fn write<T>(node: &Self::Node<T>, _plain: Construct<'_, T>, writer: &mut Writer)
+    /// Fenced with the info string of the code block it was read from.
+    fn write<T>(node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
-        writer.fenced("markdown", |inner| inner.markdown_block(node));
+        let info = if let Construct::CodeBlock(block) = plain {
+            writer.info_string(block)
+        } else {
+            "markdown".to_owned()
+        };
+        writer.fenced(&info, |inner| inner.markdown_block(node));
     }
 }
 

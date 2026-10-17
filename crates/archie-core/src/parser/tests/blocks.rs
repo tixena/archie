@@ -1,7 +1,7 @@
 use core::iter;
 
-use super::{check, on_two_megabytes};
-use crate::parser::ast::{Block, Document, Inline, MarkdownBlock, Section};
+use super::{Rows, check, on_two_megabytes};
+use crate::parser::ast::{Args, Block, Document, Inline, Mapping, MarkdownBlock, Section};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
 use crate::parser::inline::INLINE_CAP;
@@ -520,7 +520,7 @@ After the code.
         r#"Document
   MarkdownBlock
     Section
-      CodeBlock info="rust" value="fn main() {\n    // # not a heading\n    - not a list\n}"
+      CodeBlock language="rust" value="fn main() {\n    // # not a heading\n    - not a list\n}"
       Paragraph
         Line
           Text "After the code."
@@ -552,7 +552,7 @@ fn a_fence_inside_an_item_closes_only_on_a_fence_at_least_as_long() {
               Paragraph
                 Line
                   Text "step"
-              CodeBlock info="text" value="```\ninner fence\n\nstays code"
+              CodeBlock language="text" value="```\ninner fence\n\nstays code"
         Item
           MarkdownBlock
             Section
@@ -574,7 +574,7 @@ never closed
         r#"Document
   MarkdownBlock
     Section
-      CodeBlock info="" value="never closed\n# still code"
+      CodeBlock value="never closed\n# still code"
 "#,
     );
 }
@@ -598,7 +598,7 @@ fn an_unclosed_fence_inside_an_item_ends_with_the_item() {
               Paragraph
                 Line
                   Text "item"
-              CodeBlock info="" value="code"
+              CodeBlock value="code"
         Item
           MarkdownBlock
             Section
@@ -692,7 +692,7 @@ fn four_spaces_of_indentation_are_a_code_block_and_a_tab_is_text() {
         r#"Document
   MarkdownBlock
     Section
-      CodeBlock info="" value="four spaces"
+      CodeBlock value="four spaces"
       Paragraph
         Line
           Text "\t- tab"
@@ -1029,7 +1029,7 @@ fn text_indented_four_columns_past_the_item_text_is_a_code_block() {
               Paragraph
                 Line
                   Text "item"
-              CodeBlock info="" value="code here"
+              CodeBlock value="code here"
 "#,
     );
 }
@@ -1053,20 +1053,20 @@ fn a_marker_followed_by_five_spaces_starts_its_text_one_space_after_it() {
         Item
           MarkdownBlock
             Section
-              CodeBlock info="" value="code"
+              CodeBlock value="code"
         Item
           MarkdownBlock
             Section
-              CodeBlock info="" value=" indented code"
+              CodeBlock value=" indented code"
       List start=1 loose
         Item
           MarkdownBlock
             Section
-              CodeBlock info="" value="indented code"
+              CodeBlock value="indented code"
               Paragraph
                 Line
                   Text "paragraph"
-              CodeBlock info="" value="more code"
+              CodeBlock value="more code"
 "#,
     );
 }
@@ -1081,11 +1081,11 @@ fn an_indented_code_block_keeps_the_blank_lines_between_its_lines() {
       Paragraph
         Line
           Text "text"
-      CodeBlock info="" value="code\n\n  indented"
+      CodeBlock value="code\n\n  indented"
     Section
       Heading
         Text "Heading"
-      CodeBlock info="" value="after the heading"
+      CodeBlock value="after the heading"
 "#,
     );
 }
@@ -1130,12 +1130,12 @@ fn closing_hashes_of_a_heading_are_kept_as_text() {
 
 #[test]
 fn a_fence_of_tildes_is_a_code_block() {
-    for (source, info, value) in [
-        ("~~~\ncode\n~~~\n", "", "code"),
-        ("~~~python\nprint(1)\n~~~\n", "python", "print(1)"),
-        ("~~~ a`b\nx\n~~~\n", "a`b", "x"),
+    for (source, language, value) in [
+        ("~~~\ncode\n~~~\n", None, "code"),
+        ("~~~python\nprint(1)\n~~~\n", Some("python"), "print(1)"),
+        ("~~~ a`b\nx\n~~~\n", Some("a`b"), "x"),
     ] {
-        check(source, &code_block_outline(info, value));
+        check(source, &code_block_outline(language, value));
     }
 }
 
@@ -1146,20 +1146,171 @@ fn a_fence_closes_only_on_its_own_character_at_least_as_long() {
         ("~~~~\nx\n~~~\n~~~~\n", "x\n~~~"),
         ("```\nx\n~~~\n", "x\n~~~"),
     ] {
-        check(source, &code_block_outline("", value));
+        check(source, &code_block_outline(None, value));
     }
 }
 
-/// The outline of a document holding only a code block.
-fn code_block_outline(info: &str, value: &str) -> String {
+/// The outline of a document holding only a code block, with no args.
+fn code_block_outline(language: Option<&str>, value: &str) -> String {
+    let label = language.map_or_else(String::new, |word| format!(" language={word:?}"));
     format!(
         "\
 Document
   MarkdownBlock
     Section
-      CodeBlock info={info:?} value={value:?}
+      CodeBlock{label} value={value:?}
 "
     )
+}
+
+#[test]
+fn args_that_read_as_the_inside_of_a_toml_inline_table_are_toml() {
+    check(
+        "```md title=\"README.md\",showLineNumbers=true\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Toml {title = "README.md", showLineNumbers = true} value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn args_with_a_key_and_no_value_are_text() {
+    check(
+        "```md title=\"README.md\" showLineNumbers\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Text "title=\"README.md\" showLineNumbers" value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn a_word_after_the_language_is_text_args() {
+    check(
+        "```Markdown title\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="Markdown" args=Text "title" value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn words_after_the_language_are_text_args() {
+    check(
+        "```markdown Example of a list\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="markdown" args=Text "Example of a list" value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn args_with_a_key_written_twice_are_text() {
+    check(
+        "```md a=1,a=2\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Text "a=1,a=2" value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn args_whose_inline_table_ends_before_the_last_brace_are_text() {
+    check(
+        "```md a=1} # x\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Text "a=1} # x" value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn a_fence_with_no_info_string_has_no_language_and_empty_toml_args() {
+    let source = "```\nx\n```\n";
+    check(source, &code_block_outline(None, "x"));
+    let document = parse(source).unwrap();
+    let read = match &document.body.sections[0].blocks[0] {
+        Block::CodeBlock(code) => Some((code.language.as_deref(), &code.args)),
+        Block::BlockQuote(_)
+        | Block::Html(_)
+        | Block::List(_)
+        | Block::Paragraph(_)
+        | Block::Table(_)
+        | Block::ThematicBreak(_) => None,
+    };
+    assert!(matches!(read, Some((None, Args::Toml(mapping))) if mapping.pairs.is_empty()));
+}
+
+#[test]
+fn every_span_of_toml_args_covers_its_text_in_the_source() {
+    let fence = "```md title=\"README.md\",showLineNumbers=true";
+    let width = fence.len();
+    let border = format!("+{}+", "-".repeat(width + 2));
+    let lines: Vec<String> = iter::once(border.clone())
+        .chain(
+            [fence, "x", "```"]
+                .iter()
+                .map(|line| format!("| {line:<width$} |")),
+        )
+        .chain(iter::once(border))
+        .collect();
+    let grid = format!("{}\n", lines.join("\n"));
+    for source in [format!("{fence}\nx\n```\n"), grid] {
+        let document = parse(&source).unwrap();
+        let mut rows = Rows::default();
+        rows.mapping(0, toml_args(&document.body).unwrap());
+        let spans: Vec<(&str, &str)> = rows
+            .rows
+            .iter()
+            .map(|row| (row.label.as_str(), &source[row.span.clone()]))
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                ("Mapping", "title=\"README.md\",showLineNumbers=true"),
+                ("Pair key=title", "title=\"README.md\""),
+                ("Scalar String \"README.md\"", "\"README.md\""),
+                ("Pair key=showLineNumbers", "showLineNumbers=true"),
+                ("Scalar Boolean true", "true"),
+            ],
+            "{source}"
+        );
+    }
+}
+
+/// The `Toml` args of the first code block of `body`, or of the first cell
+/// of its first table.
+fn toml_args(body: &MarkdownBlock) -> Option<&Mapping> {
+    body.sections
+        .first()?
+        .blocks
+        .iter()
+        .find_map(|block| match block {
+            Block::CodeBlock(code) => match &code.args {
+                Args::Text(_) => None,
+                Args::Toml(mapping) => Some(mapping),
+            },
+            Block::Table(table) => {
+                let cell = table.head.iter().chain(&table.rows).next()?.cells.first()?;
+                toml_args(&cell.body)
+            }
+            Block::BlockQuote(_)
+            | Block::Html(_)
+            | Block::List(_)
+            | Block::Paragraph(_)
+            | Block::ThematicBreak(_) => None,
+        })
 }
 
 #[test]
@@ -1177,7 +1328,7 @@ fn a_fence_of_tildes_inside_an_item_is_a_code_block_as_one_of_backticks_is() {
               Paragraph
                 Line
                   Text "step"
-              CodeBlock info="text" value="code"
+              CodeBlock language="text" value="code"
         Item
           MarkdownBlock
             Section
@@ -1212,7 +1363,7 @@ More text.
       Paragraph
         Line
           Text "Intro."
-      CodeBlock info="remargin" value="---\nid: abc\nauthor: ada\ntype: human\n---\nLooks good."
+      CodeBlock language="remargin" value="---\nid: abc\nauthor: ada\ntype: human\n---\nLooks good."
       Paragraph
         Line
           Text "More text."
@@ -1235,7 +1386,7 @@ fn a_markdown_block_inside_a_nested_item_keeps_its_lines_from_the_fence_column()
                 Item
                   MarkdownBlock
                     Section
-                      CodeBlock info="markdown" value="# A" claimed
+                      CodeBlock language="markdown" value="# A" claimed
 "##,
     );
 }
@@ -2121,7 +2272,7 @@ fn markdown_blocks_nest_the_block_cap_deep_and_the_block_past_it_stays_a_code_bl
             _ => None,
         };
         assert!(plain.is_some_and(|code| code.kind.0.is_none()
-            && code.info == "markdown"
+            && code.language.as_deref() == Some("markdown")
             && rest.strip_suffix('\n') == Some(code.value.as_str())));
         let written = write(&document, &WriteOptions::default()).unwrap();
         assert_eq!(written, source);

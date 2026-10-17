@@ -69,7 +69,7 @@ impl Extension for Comments {
         let Construct::CodeBlock(block) = construct else {
             return None;
         };
-        (block.info == "remargin").then(|| comment(block, context))
+        (block.language.as_deref() == Some("remargin")).then(|| comment(block, context))
     }
 
     /// The header's text values, a `key: value` line each, between `---`
@@ -149,7 +149,7 @@ impl Extension for Tickets {
     }
 }
 
-/// Claims every code block, as its info string.
+/// Claims every code block, as its info string as the writer writes it.
 #[derive(Debug, Clone, PartialEq)]
 struct Fences;
 
@@ -169,7 +169,7 @@ impl Extension for Fences {
         let Construct::CodeBlock(block) = construct else {
             return None;
         };
-        Some(Ok(block.info.clone()))
+        Some(Ok(Writer::new().info_string(block)))
     }
 
     fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
@@ -557,7 +557,7 @@ fn an_extension_turns_the_blocks_it_claims_into_its_own_typed_node() {
       Scalar String "grace@2026-10-01T10:00:00Z"
 "#
     );
-    assert_eq!(blocks[1].info, "rust");
+    assert_eq!(blocks[1].language.as_deref(), Some("rust"));
     assert!(blocks[1].kind.0.is_none());
 }
 
@@ -572,7 +572,7 @@ fn a_block_the_extension_claims_but_cannot_read_stays_a_plain_code_block() {
     Section
       Heading
         Text "Notes"
-      CodeBlock info="remargin" value="just text, no header"
+      CodeBlock language="remargin" value="just text, no header"
 "#
     );
 }
@@ -599,7 +599,7 @@ fn a_claim_that_cannot_be_read_inside_a_markdown_block_falls_back_or_fails_a_str
         block_outline(markdown),
         r#"MarkdownBlock
   Section
-    CodeBlock info="remargin" value="no header"
+    CodeBlock language="remargin" value="no header"
 "#
     );
     let error = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap_err();
@@ -640,7 +640,7 @@ fn a_markdown_block_inside_a_markdown_block_is_read_the_same_way() {
         block_outline(outer),
         r##"MarkdownBlock
   Section
-    CodeBlock info="md" value="# B" claimed
+    CodeBlock language="md" value="# B" claimed
 "##
     );
     let inner = code_blocks(outer)[0].kind.0.as_deref().unwrap();
@@ -926,7 +926,7 @@ fn a_comment_inside_a_nested_item_has_the_same_body_as_at_the_root() {
             Paragraph
               Line
                 Text "point"
-            CodeBlock info="" value="code"
+            CodeBlock value="code"
 "#
     );
     assert_eq!(block_outline(&in_item.body), block_outline(&at_root.body));
@@ -1059,7 +1059,7 @@ fn a_markdown_block_in_a_grid_cell_counts_its_columns_from_the_cell() {
             block_outline(block.kind.0.as_deref().unwrap()),
             r#"MarkdownBlock
   Section
-    CodeBlock info="" value="code"
+    CodeBlock value="code"
 "#,
             "{source}"
         );
@@ -1228,7 +1228,7 @@ fn comments_nest_the_block_cap_deep_and_the_comment_past_it_stays_a_code_block()
         let (depth, inner) = comment_depth(&document.body);
         assert_eq!(depth, BLOCK_CAP);
         assert!(matches!(code_blocks(inner).as_slice(),
-            [code] if code.kind.0.is_none() && code.info == "remargin"));
+            [code] if code.kind.0.is_none() && code.language.as_deref() == Some("remargin")));
         write(&document, &WriteOptions::default()).unwrap();
         let copy = document.clone();
         assert_eq!(copy, document);
@@ -1254,7 +1254,7 @@ fn a_comment_inside_the_block_cap_of_items_stays_a_code_block_and_inside_one_les
                 body = first_item(body);
             }
             let block = code_blocks(body)[0];
-            assert_eq!(block.info, "remargin", "{items}");
+            assert_eq!(block.language.as_deref(), Some("remargin"), "{items}");
             assert_eq!(
                 block.kind.0.as_deref().and_then(second).is_some(),
                 claimed,

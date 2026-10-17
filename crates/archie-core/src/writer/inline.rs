@@ -90,7 +90,7 @@ impl Fence {
             || (!blank && value.starts_with(' ') && value.ends_with(' '));
         Self {
             pad,
-            ticks: super::longest_run(value) + 1,
+            ticks: super::longest_run(value, '`') + 1,
         }
     }
 }
@@ -207,7 +207,7 @@ impl Segments {
     }
 
     /// `*emphasis*`.
-    pub fn emphasis<T>(&mut self, writer: &Writer, emphasis: &Emphasis<T>, link: bool)
+    pub fn emphasis<T>(&mut self, writer: &mut Writer, emphasis: &Emphasis<T>, link: bool)
     where
         T: Extension,
     {
@@ -291,7 +291,7 @@ impl Segments {
     /// `[text](target "title")`, also for a reference link or an autolink,
     /// or `[[target|text]]` for a wiki link. The `[` goes before the first
     /// piece of a link written over several lines, the rest after the last.
-    pub fn link<T>(&mut self, writer: &Writer, link: &Link<T>)
+    pub fn link<T>(&mut self, writer: &mut Writer, link: &Link<T>)
     where
         T: Extension,
     {
@@ -343,7 +343,7 @@ impl Segments {
 
     /// Adds `node`: what the extension that claimed it writes, or else its
     /// plain form. `link` is set between a link's brackets.
-    pub fn node<T>(&mut self, writer: &Writer, node: &Inline<T>, link: bool)
+    pub fn node<T>(&mut self, writer: &mut Writer, node: &Inline<T>, link: bool)
     where
         T: Extension,
     {
@@ -365,7 +365,7 @@ impl Segments {
 
     /// Adds `nodes`, each run of plain emphases or of plain strongs next to
     /// each other and whole on their line inside one pair of marks.
-    pub fn nodes<T>(&mut self, writer: &Writer, nodes: &[Inline<T>], link: bool)
+    pub fn nodes<T>(&mut self, writer: &mut Writer, nodes: &[Inline<T>], link: bool)
     where
         T: Extension,
     {
@@ -382,7 +382,7 @@ impl Segments {
         }
     }
 
-    fn plain<T>(&mut self, writer: &Writer, node: &Inline<T>, link: bool)
+    fn plain<T>(&mut self, writer: &mut Writer, node: &Inline<T>, link: bool)
     where
         T: Extension,
     {
@@ -399,7 +399,7 @@ impl Segments {
     }
 
     /// `**strong**`.
-    pub fn strong<T>(&mut self, writer: &Writer, strong: &Strong<T>, link: bool)
+    pub fn strong<T>(&mut self, writer: &mut Writer, strong: &Strong<T>, link: bool)
     where
         T: Extension,
     {
@@ -450,7 +450,7 @@ impl Segments {
 
     /// `run`, plain emphases or plain strongs next to each other, inside one
     /// pair of their mark, the children of each one after the other.
-    fn touching<T>(&mut self, writer: &Writer, run: &[Inline<T>], link: bool)
+    fn touching<T>(&mut self, writer: &mut Writer, run: &[Inline<T>], link: bool)
     where
         T: Extension,
     {
@@ -468,7 +468,7 @@ impl Segments {
     /// the last.
     fn wrapped<T>(
         &mut self,
-        writer: &Writer,
+        writer: &mut Writer,
         children: &[Inline<T>],
         continues: Continues,
         mark: &str,

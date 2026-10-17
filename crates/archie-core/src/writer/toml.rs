@@ -6,6 +6,31 @@ use core::fmt::{self, Write as _};
 use crate::parser::ast::{Mapping, NonFinite, ScalarValue, Value};
 use crate::writer::{WriteError, push_date_time, push_finite, push_local_date_time};
 
+/// The pairs of `mapping` on one line, `key = value` separated by `, `: a
+/// code block's args. A pair holding a null, which TOML cannot hold, is left
+/// out, and the error naming the key of the first one is given.
+pub fn args(mapping: &Mapping) -> (String, Option<WriteError>) {
+    let mut out = String::new();
+    let mut error = None;
+    for (key, pair) in &mapping.pairs {
+        let mut value = String::new();
+        match inline(&mut value, &pair.value, &[key]) {
+            Ok(()) => {
+                if !out.is_empty() {
+                    out.push_str(", ");
+                }
+                push_key(&mut out, key);
+                out.push_str(" = ");
+                out.push_str(&value);
+            }
+            Err(found) => {
+                error = error.or(Some(found));
+            }
+        }
+    }
+    (out, error)
+}
+
 /// `mapping` between `+++` lines, or an error naming the key of the first
 /// null, which TOML cannot hold.
 pub fn frontmatter(mapping: &Mapping) -> Result<String, WriteError> {

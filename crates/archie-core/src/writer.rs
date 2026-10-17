@@ -7,11 +7,12 @@ mod toml;
 mod yaml;
 
 use core::fmt::{self, Write as _};
+use core::iter;
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
 
 use crate::parser::ast::{
-    Block, BlockQuote, CodeBlock, Document, FrontmatterFormat, Heading, Kind, Line, List,
+    Args, Block, BlockQuote, CodeBlock, Document, FrontmatterFormat, Heading, Kind, Line, List,
     MarkdownBlock, Paragraph, Section,
 };
 use crate::parser::extension::{Construct, Extension};
@@ -30,8 +31,8 @@ enum Marker {
     Other,
 }
 
-/// Why a document could not be written: the frontmatter key whose value the
-/// chosen syntax cannot hold.
+/// Why a document could not be written: the key, of the frontmatter or of a
+/// code block's TOML args, whose value the chosen syntax cannot hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WriteError {
@@ -53,6 +54,8 @@ pub struct Writer {
     blank: bool,
     /// The depth of the section being written, from 1.
     depth: usize,
+    /// The first error met while writing, which `write` returns.
+    error: Option<WriteError>,
     /// Whether the text written starts the file, with no frontmatter before
     /// it.
     file_start: bool,
@@ -109,7 +112,7 @@ impl Writer {
     }
 
     /// What `T` writes for `node`, which it claimed in place of `plain`.
-    fn claimed<T>(&self, node: &T::Node<T>, plain: Construct<'_, T>) -> String
+    fn claimed<T>(&mut self, node: &T::Node<T>, plain: Construct<'_, T>) -> String
     where
         T: Extension,
     {
@@ -120,15 +123,17 @@ impl Writer {
             ..Self::new()
         };
         T::write(node, plain, &mut writer);
+        self.keep_error(&mut writer);
         writer.out
     }
 
-    /// Fenced with backticks, also when it was indented.
+    /// Fenced, also when it was indented.
     fn code_block<T>(&mut self, code: &CodeBlock<T>)
     where
         T: Extension,
     {
-        self.fenced(&code.info, |inner| {
+        let info = self.info_string(code);
+        self.fenced(&info, |inner| {
             if !code.value.is_empty() {
                 inner.put(&code.value);
                 inner.put("\n");
@@ -153,18 +158,21 @@ impl Writer {
         }
     }
 
-    /// Writes a fenced block: `info` after a fence of backticks one longer
-    /// than the longest run of backticks in the content, and at least three,
-    /// then the lines `content` writes, then the closing fence. The content
-    /// is written with its levels counted from one.
+    /// Writes a fenced block: `info` after a fence of backticks, or of tildes
+    /// when `info` holds a backtick, one longer than the longest run of its
+    /// mark in the content, and at least three, then the lines `content`
+    /// writes, then the closing fence. The content is written with its
+    /// levels counted from one.
     pub fn fenced<F>(&mut self, info: &str, content: F)
     where
         F: FnOnce(&mut Self),
     {
         let mut inner = Self::new();
         content(&mut inner);
+        self.keep_error(&mut inner);
         let text = inner.finish();
-        let fence = "`".repeat(longest_run(&text).max(2) + 1);
+        let mark = if info.contains('`') { '~' } else { '`' };
+        let fence: String = iter::repeat_n(mark, longest_run(&text, mark).max(2) + 1).collect();
         self.end_line();
         self.put(&fence);
         self.put(info);
@@ -214,10 +222,34 @@ impl Writer {
         self.put("\n");
     }
 
+    /// The info string of `block`: its language, then a space and its args,
+    /// unless they are empty. `Toml` args are written as one line of
+    /// `key = value` pairs separated by `, `. A pair holding a null, which
+    /// TOML cannot hold, is left out, and the error naming its key is kept.
+    pub fn info_string<T>(&mut self, block: &CodeBlock<T>) -> String
+    where
+        T: Extension,
+    {
+        let args = match &block.args {
+            Args::Text(text) => text.clone(),
+            Args::Toml(mapping) => {
+                let (text, error) = toml::args(mapping);
+                self.record(error);
+                text
+            }
+        };
+        let mut info = block.language.clone().unwrap_or_default();
+        if !args.is_empty() {
+            info.push(' ');
+            info.push_str(&args);
+        }
+        info
+    }
+
     /// Writes inline nodes on their own, with nothing known around them.
     fn inline<F>(&mut self, build: F)
     where
-        F: FnOnce(&mut Segments, &Self),
+        F: FnOnce(&mut Segments, &mut Self),
     {
         let mut segments = Segments::new(&Pieces::default());
         build(&mut segments, self);
@@ -225,22 +257,25 @@ impl Writer {
         self.put(&text);
     }
 
+    /// Takes the error that `inner`, a writer this one built, recorded,
+    /// unless this one has one already.
+    fn keep_error(&mut self, inner: &mut Self) {
+        self.record(inner.error.take());
+    }
+
     /// The text of `line`, and whether it starts with text. `first` is set
     /// for the first line of a paragraph.
-    fn line<T>(&self, line: &Line<T>, segments: &mut Segments, first: bool) -> (String, bool)
+    fn line<T>(&mut self, line: &Line<T>, segments: &mut Segments, first: bool) -> (String, bool)
     where
         T: Extension,
     {
-        line.kind.0.as_deref().map_or_else(
-            || {
-                segments.nodes(self, &line.children, false);
-                segments.line(first)
-            },
-            |node| {
-                let text = self.claimed(node, Construct::Line(line));
-                (text.trim_end_matches('\n').to_owned(), false)
-            },
-        )
+        if let Some(node) = line.kind.0.as_deref() {
+            let text = self.claimed(node, Construct::Line(line));
+            (text.trim_end_matches('\n').to_owned(), false)
+        } else {
+            segments.nodes(self, &line.children, false);
+            segments.line(first)
+        }
     }
 
     /// `-` and one space before each item of a bullet list, the number and
@@ -272,6 +307,7 @@ impl Writer {
                 ..Self::new()
             };
             inner.node(&item.kind, Construct::Item(item));
+            self.keep_error(&mut inner);
             self.marked(&marker, &inner.finish());
         }
     }
@@ -286,6 +322,7 @@ impl Writer {
             ..Self::new()
         };
         inner.markdown_node(block);
+        self.keep_error(&mut inner);
         self.end_line();
         self.put(&inner.finish());
     }
@@ -324,10 +361,11 @@ impl Writer {
         }
     }
 
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             blank: false,
             depth: 1,
+            error: None,
             file_start: false,
             marker: Marker::First,
             out: String::new(),
@@ -377,7 +415,7 @@ impl Writer {
     /// would open a TOML frontmatter, and before every `|` of the text when
     /// `pipes` is set.
     fn paragraph_lines<T>(
-        &self,
+        &mut self,
         paragraph: &Paragraph<T>,
         pieces: &Pieces,
         pipes: bool,
@@ -465,6 +503,13 @@ impl Writer {
         self.out.push_str(text);
     }
 
+    /// Keeps `error`, unless an error is kept already.
+    fn record(&mut self, error: Option<WriteError>) {
+        if self.error.is_none() {
+            self.error = error;
+        }
+    }
+
     fn section<T>(&mut self, section: &Section<T>)
     where
         T: Extension,
@@ -525,6 +570,7 @@ where
                 for section in &block.sections {
                     inner.section(section);
                 }
+                writer.keep_error(&mut inner);
                 writer.put(&inner.finish());
             }
             Self::Paragraph(paragraph) => writer.paragraph(paragraph),
@@ -534,7 +580,10 @@ where
             }
             Self::Table(table) => table::write(writer, table),
             Self::TableCell(cell) => writer.markdown_node(&cell.body),
-            Self::TableRow(row) => writer.put(&table::pipe_row(row)),
+            Self::TableRow(row) => {
+                let line = table::pipe_row(writer, row);
+                writer.put(&line);
+            }
             Self::Text(text) => writer.inline(|segments, _| segments.text(&text.value, false)),
             Self::ThematicBreak(_) => writer.put("***\n"),
         }
@@ -547,7 +596,8 @@ where
 /// # Errors
 ///
 /// Returns an error naming the key when TOML is picked and the frontmatter
-/// holds a null, which TOML cannot hold.
+/// holds a null, which TOML cannot hold, or when the `Toml` args of a code
+/// block hold one.
 pub fn write<E>(document: &Document<E>, options: &WriteOptions) -> Result<String, WriteError>
 where
     E: Extension,
@@ -557,7 +607,8 @@ where
         (Some(frontmatter), FrontmatterFormat::Toml) => toml::frontmatter(&frontmatter.mapping)?,
         (Some(frontmatter), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
     };
-    Ok(with_body(frontmatter, document))
+    let (text, error) = with_body(frontmatter, document);
+    error.map_or(Ok(text), Err)
 }
 
 /// Writes `document` in archie's form, its frontmatter in the syntax it was
@@ -575,11 +626,12 @@ where
                 .unwrap_or_else(|_| yaml::frontmatter(&frontmatter.mapping)),
             FrontmatterFormat::Yaml => yaml::frontmatter(&frontmatter.mapping),
         });
-    with_body(frontmatter, document)
+    with_body(frontmatter, document).0
 }
 
-/// `frontmatter`, the written frontmatter of `document`, then its body.
-fn with_body<E>(mut frontmatter: String, document: &Document<E>) -> String
+/// `frontmatter`, the written frontmatter of `document`, then its body, and
+/// the first error met while writing the body, if any.
+fn with_body<E>(mut frontmatter: String, document: &Document<E>) -> (String, Option<WriteError>)
 where
     E: Extension,
 {
@@ -588,8 +640,9 @@ where
         ..Writer::new()
     };
     writer.node(&document.kind, Construct::Document(document));
+    let error = writer.error.take();
     frontmatter.push_str(&writer.finish());
-    frontmatter
+    (frontmatter, error)
 }
 
 /// A date and time with no offset, such as `2026-10-10T07:32:00`, with the
@@ -636,9 +689,9 @@ where
     }
 }
 
-/// The length of the longest run of backticks in `text`.
-fn longest_run(text: &str) -> usize {
-    text.split(|character| character != '`')
+/// The length of the longest run of `mark` in `text`.
+fn longest_run(text: &str, mark: char) -> usize {
+    text.split(|character| character != mark)
         .map(str::len)
         .max()
         .unwrap_or_default()

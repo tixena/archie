@@ -78,9 +78,11 @@ pub enum TokenKind {
     BlockQuote {
         value: String,
     },
+    /// A code block: the range of its lines, of its info string, trimmed,
+    /// and its lines as the block holds them.
     CodeBlock {
         content: Range<usize>,
-        info: String,
+        info: Range<usize>,
         value: String,
     },
     /// A link reference definition: its label as written and its target.
@@ -185,7 +187,9 @@ impl Lexer<'_> {
     /// file.
     fn code_block(&mut self, column: usize, at: usize, end: usize, length: usize, mark: char) {
         let source = self.source;
-        let info = source[at + length..end].trim().to_owned();
+        let after = &source[at + length..end];
+        let from = at + length + (after.len() - after.trim_start().len());
+        let info = from..from + after.trim().len();
         let level = self.level();
         let mut lines: Vec<&str> = Vec::new();
         let mut block_end = end;
@@ -412,7 +416,7 @@ impl Lexer<'_> {
         }
         let kind = TokenKind::CodeBlock {
             content: start..block_end,
-            info: String::new(),
+            info: start..start,
             value: lines.join("\n"),
         };
         self.push(kind, start..block_end);
@@ -644,11 +648,14 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize, outer: usize
         token.span = place(token.span.start)..place(token.span.end);
         match &mut token.kind {
             TokenKind::CodeBlock {
-                content: range,
-                info: _,
+                content,
+                info,
                 value: _,
+            } => {
+                *content = place(content.start)..place(content.end);
+                *info = place(info.start)..place(info.end);
             }
-            | TokenKind::Heading {
+            TokenKind::Heading {
                 level: _,
                 text: range,
             } => *range = place(range.start)..place(range.end),

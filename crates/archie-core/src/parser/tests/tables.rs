@@ -707,7 +707,7 @@ fn a_fence_of_tildes_in_a_grid_cell_is_a_code_block_as_one_of_backticks_is() {
           TableCell
             MarkdownBlock
               Section
-                CodeBlock info="text" value="code"
+                CodeBlock language="text" value="code"
           TableCell
             MarkdownBlock
               Section

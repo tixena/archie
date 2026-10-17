@@ -89,7 +89,10 @@ fn a_code_block_spans_from_its_opening_fence_to_its_closing_fence() {
             ("Paragraph", "x"),
             ("Line", "x"),
             (r#"Text "x""#, "x"),
-            (r#"CodeBlock info="sh" value="ls""#, "```sh\n  ls\n  ```"),
+            (
+                r#"CodeBlock language="sh" value="ls""#,
+                "```sh\n  ls\n  ```",
+            ),
         ],
     );
 }
@@ -220,7 +223,7 @@ fn an_indented_code_block_spans_from_its_code_column_to_its_last_line() {
             ("Paragraph", "a"),
             ("Line", "a"),
             (r#"Text "a""#, "a"),
-            (r#"CodeBlock info="" value="  code\n\nmore""#, code),
+            (r#"CodeBlock value="  code\n\nmore""#, code),
         ],
     );
 }

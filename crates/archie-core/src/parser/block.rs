@@ -8,15 +8,20 @@ use core::ops::Range;
 use std::collections::HashMap;
 
 use crate::parser::ast::{
-    Block, BlockQuote, CodeBlock, Continues, Heading, Html, Inline, Item, Kind, Line, List,
-    MarkdownBlock, Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text,
-    ThematicBreak,
+    Args, Block, BlockQuote, CodeBlock, Continues, Heading, Html, Inline, Item, Kind, Line, List,
+    Mapping, MarkdownBlock, Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text,
+    ThematicBreak, Value,
 };
 use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::inline::{self, children_mut};
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
+use crate::parser::read_toml;
 use crate::parser::table::{Cell, RowToken, TableToken};
+
+/// What the rest of a code block's info string is put after to read it as
+/// the inside of a TOML inline table.
+const ARGS_OPENING: &str = "args = {";
 
 /// Each grid cell's lines, as ranges of the source, by the cell's span.
 pub type Cells = HashMap<Range<usize>, Vec<Range<usize>>>;
@@ -186,13 +191,17 @@ where
                     content,
                     info,
                     value,
-                } => Some(Block::CodeBlock(CodeBlock {
-                    content,
-                    info,
-                    kind: Kind(None),
-                    span: token.span,
-                    value,
-                })),
+                } => {
+                    let (language, args) = split_info(self.source, &info);
+                    Some(Block::CodeBlock(CodeBlock {
+                        args,
+                        content,
+                        kind: Kind(None),
+                        language,
+                        span: token.span,
+                        value,
+                    }))
+                }
                 TokenKind::Definition {
                     label: _,
                     target: _,
@@ -536,6 +545,90 @@ fn definitions(source: &str, tokens: &[Token], lexed: &mut Lexed) -> Definitions
         }
     }
     found
+}
+
+/// The language and the args of the info string at `info` in `source`: its
+/// first word, `None` when it is empty, then the rest, trimmed.
+fn split_info(source: &str, info: &Range<usize>) -> (Option<String>, Args) {
+    let text = &source[info.clone()];
+    let word = text.find(char::is_whitespace).unwrap_or(text.len());
+    let language = (word > 0).then(|| text[..word].to_owned());
+    let rest = text[word..].trim_start();
+    (language, args(source, info.end - rest.len()..info.end))
+}
+
+/// The args written at `rest` of `source`: `Toml` when `args = {`, the
+/// rest, then `}` reads as TOML whose inline table ends at that last `}`,
+/// with no key written twice at any depth, or else `Text`, as written. The
+/// mapping's spans count from the start of `source`, and its own span is
+/// `rest`.
+fn args(source: &str, rest: Range<usize>) -> Args {
+    let written = &source[rest.clone()];
+    let text = format!("{ARGS_OPENING}{written}}}");
+    let read = read_toml(&text, 0..text.len()).ok().and_then(|mut read| {
+        let pair = read.pairs.swap_remove("args")?;
+        let Value::Mapping(mut mapping) = pair.value else {
+            return None;
+        };
+        let whole = read.pairs.is_empty()
+            && pair.repeats.is_empty()
+            && mapping.span.end == text.len()
+            && !repeats(&mapping);
+        whole.then(|| {
+            moved_pairs(&mut mapping, rest.start);
+            mapping.span = rest;
+            mapping
+        })
+    });
+    read.map_or_else(|| Args::Text(written.to_owned()), Args::Toml)
+}
+
+/// Whether a key of `mapping`, or of a mapping it holds at any depth, is
+/// written more than once.
+fn repeats(mapping: &Mapping) -> bool {
+    mapping
+        .pairs
+        .values()
+        .any(|pair| !pair.repeats.is_empty() || value_repeats(&pair.value))
+}
+
+fn value_repeats(value: &Value) -> bool {
+    match value {
+        Value::Mapping(mapping) => repeats(mapping),
+        Value::Scalar(_) => false,
+        Value::Sequence(sequence) => sequence.items.iter().any(value_repeats),
+    }
+}
+
+/// Moves `span`, a range of the text the args are read from, to the same
+/// characters of the rest, which starts at `at` in the source.
+const fn moved(span: &mut Range<usize>, at: usize) {
+    *span = span.start - ARGS_OPENING.len() + at..span.end - ARGS_OPENING.len() + at;
+}
+
+/// Moves the span of each pair of `mapping`, and every span of its value,
+/// as `moved` does.
+fn moved_pairs(mapping: &mut Mapping, at: usize) {
+    for pair in mapping.pairs.values_mut() {
+        moved(&mut pair.span, at);
+        moved_value(&mut pair.value, at);
+    }
+}
+
+fn moved_value(value: &mut Value, at: usize) {
+    match value {
+        Value::Mapping(mapping) => {
+            moved(&mut mapping.span, at);
+            moved_pairs(mapping, at);
+        }
+        Value::Scalar(scalar) => moved(&mut scalar.span, at),
+        Value::Sequence(sequence) => {
+            moved(&mut sequence.span, at);
+            for item in &mut sequence.items {
+                moved_value(item, at);
+            }
+        }
+    }
 }
 
 /// The inline nodes of `lines` as those of one line, with a space where

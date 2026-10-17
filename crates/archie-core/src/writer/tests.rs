@@ -4,13 +4,13 @@
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Kind, Line, LineBreak,
-    Mapping, MarkdownBlock, NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence,
-    Table, TableFormat, Text, Value,
+    Alignment, Args, Block, CodeBlock, Document, Frontmatter, FrontmatterFormat, Heading, Inline,
+    Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Pair, Paragraph, Scalar,
+    ScalarValue, Section, Sequence, Table, TableCell, TableFormat, TableRow, Text, Value,
 };
 use crate::parser::extension::Markdown;
 use crate::parser::parse;
-use crate::writer::{WriteError, WriteOptions, write};
+use crate::writer::{WriteError, WriteOptions, Writer, write};
 
 /// Every file under `parser/tests/fixtures/`.
 const FIXTURES: [(&str, &str); 21] = [
@@ -175,6 +175,9 @@ fn clear_block_node(block: &mut Block) {
             clear_kind(&mut quote.kind);
         }
         Block::CodeBlock(code) => {
+            if let Args::Toml(mapping) = &mut code.args {
+                clear_mapping(mapping);
+            }
             code.content = 0..0;
             code.span = 0..0;
             clear_kind(&mut code.kind);
@@ -346,7 +349,7 @@ fn document(sections: Vec<Section>) -> Document {
 fn lifted(mut section: Section) -> Section {
     let mut deeper = Vec::new();
     while let Some(Block::CodeBlock(code)) = section.blocks.last()
-        && code.info == "markdown"
+        && code.language.as_deref() == Some("markdown")
         && let Some(Block::CodeBlock(claimed)) = section.blocks.pop()
         && let Some(block) = claimed.kind.0
     {
@@ -725,6 +728,168 @@ fn a_simple_table_and_a_one_line_grid_table_read_back_to_the_same_body() {
         round_trip("+---+---+\n| a | b |\n+===+===+\n| 1 | 2 |\n+---+---+\n"),
         "| a   | b   |\n| --- | --- |\n| 1   | 2   |\n"
     );
+}
+
+#[test]
+fn toml_args_are_written_as_pairs_separated_by_commas() {
+    assert_eq!(
+        round_trip("```md title=\"README.md\",showLineNumbers=true\nx\n```\n"),
+        "```md title = \"README.md\", showLineNumbers = true\nx\n```\n"
+    );
+}
+
+#[test]
+fn text_args_with_a_key_and_no_value_are_written_as_found() {
+    let source = "```md title=\"README.md\" showLineNumbers\nx\n```\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn a_word_after_the_language_is_written_as_found() {
+    let source = "```Markdown title\nx\n```\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn words_after_the_language_are_written_as_found() {
+    let source = "```markdown Example of a list\nx\n```\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn text_args_with_a_key_written_twice_are_written_as_found() {
+    let source = "```md a=1,a=2\nx\n```\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn text_args_whose_inline_table_ends_before_the_last_brace_are_written_as_found() {
+    let source = "```md a=1} # x\nx\n```\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn a_fence_with_no_info_string_is_written_with_none() {
+    let source = "```\nx\n```\n";
+    assert_eq!(round_trip(source), source);
+}
+
+#[test]
+fn a_code_block_whose_args_hold_a_backtick_is_fenced_with_tildes() {
+    for (source, text) in [
+        ("~~~sh a`b\nx\n~~~\n", "~~~sh a`b\nx\n~~~\n"),
+        ("~~~sh a`b\n```\n~~~\n", "~~~sh a`b\n```\n~~~\n"),
+        ("~~~sh a`b\n~~~ x\n~~~\n", "~~~~sh a`b\n~~~ x\n~~~~\n"),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
+fn a_markdown_block_keeps_its_info_string_and_its_claimed_content() {
+    let source = "```Markdown title\n# A\n```\n";
+    assert_eq!(round_trip(source), source);
+    let claimed = match &body(source).sections[0].blocks[0] {
+        Block::CodeBlock(code) => code.kind.0.as_deref().cloned(),
+        Block::BlockQuote(_)
+        | Block::Html(_)
+        | Block::List(_)
+        | Block::Paragraph(_)
+        | Block::Table(_)
+        | Block::ThematicBreak(_) => None,
+    };
+    assert_eq!(claimed, Some(body("# A\n")));
+}
+
+/// A code block whose language is `language` and whose `Toml` args map
+/// `title` to `value`, then `b` to 1.
+fn code_with_args(language: &str, value: ScalarValue, kind: Kind<Markdown>) -> Block {
+    let pair = |scalar| Pair {
+        repeats: Vec::new(),
+        span: 0..0,
+        value: Value::Scalar(Scalar {
+            span: 0..0,
+            value: scalar,
+        }),
+    };
+    let pairs = IndexMap::from([
+        ("title".to_owned(), pair(value)),
+        ("b".to_owned(), pair(ScalarValue::Integer(1))),
+    ]);
+    Block::CodeBlock(CodeBlock {
+        args: Args::Toml(Mapping { pairs, span: 0..0 }),
+        content: 0..0,
+        kind,
+        language: Some(language.to_owned()),
+        span: 0..0,
+        value: "x".to_owned(),
+    })
+}
+
+/// A markdown block of one section with no heading, holding `blocks`.
+fn holding(blocks: Vec<Block>) -> MarkdownBlock {
+    MarkdownBlock {
+        kind: Kind(None),
+        sections: vec![Section {
+            blocks,
+            heading: None,
+            kind: Kind(None),
+            span: 0..0,
+            subsections: Vec::new(),
+        }],
+        span: 0..0,
+    }
+}
+
+#[test]
+fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
+    let null = || code_with_args("sh", ScalarValue::Null, Kind(None));
+    let mut writer = Writer::new();
+    if let Block::CodeBlock(code) = null() {
+        assert_eq!(writer.info_string(&code), "sh b = 1");
+    }
+    assert_eq!(writer.error, Some(null_error("title")));
+    let in_item = Block::List(List {
+        items: vec![Item {
+            body: holding(vec![null()]),
+            kind: Kind(None),
+            span: 0..0,
+        }],
+        kind: Kind(None),
+        loose: false,
+        span: 0..0,
+        start: None,
+    });
+    let in_cell = Block::Table(Table {
+        alignments: vec![Alignment::Default],
+        format: TableFormat::Pipe,
+        head: vec![TableRow {
+            cells: vec![TableCell {
+                body: holding(vec![null()]),
+                kind: Kind(None),
+                span: 0..0,
+            }],
+            kind: Kind(None),
+            span: 0..0,
+        }],
+        kind: Kind(None),
+        rows: Vec::new(),
+        span: 0..0,
+    });
+    let claimed = Kind(Some(Box::new(holding(vec![null()]))));
+    let in_markdown = code_with_args("md", ScalarValue::Integer(2), claimed);
+    let claimed_null = Kind(Some(Box::new(holding(Vec::new()))));
+    let markdown_null = code_with_args("md", ScalarValue::Null, claimed_null);
+    for block in [null(), in_item, in_cell, in_markdown, markdown_null] {
+        let built = Document {
+            body: holding(vec![block]),
+            ..document(Vec::new())
+        };
+        assert_eq!(
+            write(&built, &WriteOptions::default()),
+            Err(null_error("title"))
+        );
+    }
 }
 
 fn toml(source: &str) -> String {
