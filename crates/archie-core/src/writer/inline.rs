@@ -553,6 +553,19 @@ where
     })
 }
 
+/// Three or more of the same `-`, `*` or `_`, with nothing but spaces and
+/// tabs between them.
+pub fn is_thematic_break(text: &str) -> bool {
+    text.chars()
+        .next()
+        .filter(|mark| matches!(mark, '-' | '*' | '_'))
+        .is_some_and(|mark| {
+            text.chars()
+                .all(|character| character == mark || matches!(character, ' ' | '\t'))
+                && text.chars().filter(|&character| character == mark).count() >= 3
+        })
+}
+
 /// Whether `lines`, a paragraph as written, would read as a table that
 /// starts on one of them, each line offered to the table reader as the
 /// lexer offers it.
@@ -726,19 +739,6 @@ fn inert(character: char, before: Near, after: Near) -> bool {
         )
     };
     !can_open && !can_close
-}
-
-/// Three or more of the same `-`, `*` or `_`, with nothing but spaces and
-/// tabs between them.
-fn is_thematic_break(text: &str) -> bool {
-    text.chars()
-        .next()
-        .filter(|mark| matches!(mark, '-' | '*' | '_'))
-        .is_some_and(|mark| {
-            text.chars()
-                .all(|character| character == mark || matches!(character, ' ' | '\t'))
-                && text.chars().filter(|&character| character == mark).count() >= 3
-        })
 }
 
 /// Whether a piece that `continues` opens on its line.

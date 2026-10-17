@@ -737,6 +737,13 @@ fn an_item_whose_first_line_starts_with_a_tab_writes_it_under_the_marker() {
 }
 
 #[test]
+fn an_item_whose_marker_line_would_read_as_a_thematic_break_writes_its_first_line_under_it() {
+    for source in ["-\n  - -\n", "-\t- *\n"] {
+        assert_eq!(round_trip(source), "-\n  - -\n", "{source:?}");
+    }
+}
+
+#[test]
 fn an_html_block_led_by_a_tab_reads_back_the_same_under_a_wider_marker() {
     let source = format!("{}1. j\n\n   \t<div>\n", "1. a\n".repeat(9));
     assert_eq!(

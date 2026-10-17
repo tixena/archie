@@ -395,27 +395,28 @@ impl Writer {
         self.node(&block.kind, Construct::MarkdownBlock(block));
     }
 
-    /// Writes `content`, the lines of an item, after `marker`, every line
-    /// after the first indented to the item's text. A first line that starts
-    /// with a space or a tab goes under the marker, so the item's text column
-    /// stays where it is. After `*`, a first line `***` is written `___`, since
-    /// `* ***` reads as a thematic break.
+    /// Writes `content`, an item's lines, after `marker`, the rest indented to
+    /// its text. A first line led by a space or a tab, or making the marker's
+    /// line a thematic break, goes under it; after `*`, `***` is written `___`.
     fn marked(&mut self, marker: &str, content: &str) {
         let indent = " ".repeat(marker.len() + 1);
         let mut lines = content.strip_suffix('\n').unwrap_or(content).split('\n');
         self.put(marker);
-        if let Some(first) = lines.next().filter(|first| !first.is_empty()) {
-            if first.starts_with([' ', '\t']) {
+        if let Some(line) = lines.next().filter(|line| !line.is_empty()) {
+            let first = if marker == "*" && line == "***" {
+                "___"
+            } else {
+                line
+            };
+            if first.starts_with([' ', '\t'])
+                || inline::is_thematic_break(&format!("{marker} {first}"))
+            {
                 self.put("\n");
                 self.put(&indent);
             } else {
                 self.put(" ");
             }
-            self.put(if marker == "*" && first == "***" {
-                "___"
-            } else {
-                first
-            });
+            self.put(first);
         }
         self.put("\n");
         for line in lines {
