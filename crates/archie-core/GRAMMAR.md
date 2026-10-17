@@ -1,45 +1,49 @@
 # The grammar of the markdown archie reads
 
-This file states what `archie_core::parser::parse` and `parse_with` accept and the
-tree they build, as the parser is written today. The unit tests under
-[`src/parser/tests/`](src/parser/tests) show, sample by sample, the tree each rule
-produces. None of the choices has been reviewed; the
-[last section](#choices-made-without-a-requirement) lists the ones that were made
-with no requirement behind them.
+This file states what `archie_core::parser::parse` and `parse_with` accept, the tree
+they build, and the text `archie_core::writer::write` writes back, as the code is
+written today. The unit tests under [`src/parser/tests/`](src/parser/tests) show,
+sample by sample, the tree each rule produces, and
+[`src/writer/tests.rs`](src/writer/tests.rs) the text each written form gives.
 
 ## Two stages
 
 A grammar is context-free when each rule can be applied without looking at anything
-outside the piece of text it matches. Three things in markdown and two in YAML break
-that. Each one is taken out of the grammar and handled by the stage that reads
-characters, so the grammar never sees it.
+outside the piece of text it matches. The constructs below break that. Each one is
+taken out of the grammar and handled by a stage that reads characters, so the grammar
+never sees it.
 
 | What is not context-free | What handles it | What the grammar sees instead |
 |---|---|---|
-| Which list item a line belongs to depends on how far it is indented compared with earlier lines. | The body lexer keeps a stack of the open items. | `ITEM_START` and `ITEM_END` tokens. |
-| A fenced code block ends at a fence of the same character, at least as long as the one that opened it. | The body lexer reads the whole block. | One `CODE_BLOCK` token. |
-| A table's cells line up in columns, and a pipe table's first line is a header only when the next line is a delimiter row. | The table reader reads the whole table. | One `TABLE` token. |
-| A code span ends at a run of exactly as many backticks as opened it. | The inline scanner compares the two runs. | One `code` node. |
+| Which list item a line belongs to depends on how far it is indented compared with earlier lines. | The lexer keeps a stack of the open items. | `ITEM_START` and `ITEM_END` tokens. |
+| A fenced code block ends at a fence of the same character, at least as long as the one that opened it. An indented code block, a block quote, an HTML block and a link reference definition each run over the lines that a rule about their first line admits. | The lexer reads each one whole. | One `CODE_BLOCK`, `BLOCK_QUOTE`, `HTML` or `DEFINITION` token. |
+| A line of `=` or `-` underlines a heading only right after paragraph text. | The lexer, which knows whether the line before was text. | One `UNDERLINE_n` token, only after `TEXT`. |
+| A table's cells line up in columns, and a table's first line is a header only when the right line follows it. | The table reader reads the whole table. | One `TABLE` token. |
+| A code span ends at a run of exactly as many backticks as opened it. | The inline scanner finds the next run of that length. | One `Code` node. |
+| Which runs of `*` and `_` pair into emphasis depends on the runs around them. | CommonMark's procedure for emphasis, run over the paragraph. | `Emphasis` and `Strong` nodes. |
+| Which brackets make a link depends on the brackets around them, and a reference link on a definition written anywhere in the file. | One bracket pass per paragraph, with the definitions of the whole file read first. | `Link` and `Image` nodes. |
 | Which YAML mapping a line belongs to depends on its indentation. | The YAML reader compares each line's indentation with that of the block it is reading. | `INDENT` and `DEDENT` in the rules below. |
 | A YAML block scalar ends at the first line of text indented less than its own text. | The YAML reader reads the whole scalar. | One `BLOCK_SCALAR` token. |
-
-Reference links (`[text][label]`, with `[label]: target` written elsewhere in the
-file) are the other construct of CommonMark that is not context-free. archie does not
-read them, so nothing has to handle them.
+| A TOML header or dotted key adds to a table that other lines wrote. | The TOML reader keeps the tables made so far. | Each `header` and `pair` on its own. |
 
 With those removed, every rule below is context-free.
 
 | Stage | File |
 |---|---|
-| Finding the frontmatter | [`src/parser/frontmatter.rs`](src/parser/frontmatter.rs) |
+| Finding the frontmatter, and the value cap | [`src/parser/frontmatter.rs`](src/parser/frontmatter.rs) |
 | TOML frontmatter | [`src/parser/toml.rs`](src/parser/toml.rs) |
 | YAML frontmatter | [`src/parser/yaml.rs`](src/parser/yaml.rs) |
 | Typing an unquoted value | [`src/parser/scalar.rs`](src/parser/scalar.rs) |
-| Body lexer | [`src/parser/lexer.rs`](src/parser/lexer.rs) |
+| Lexer, and the block cap | [`src/parser/lexer.rs`](src/parser/lexer.rs), [`src/parser/line.rs`](src/parser/line.rs) |
 | Tables | [`src/parser/table.rs`](src/parser/table.rs) |
-| Body grammar | [`src/parser/block.rs`](src/parser/block.rs) |
-| Inline grammar | [`src/parser/inline.rs`](src/parser/inline.rs) |
-| The tree, and the `Extension` trait | [`src/parser/ast.rs`](src/parser/ast.rs) |
+| HTML blocks and inline HTML | [`src/parser/html.rs`](src/parser/html.rs) |
+| Link reference definitions, labels, destinations and titles | [`src/parser/definition.rs`](src/parser/definition.rs) |
+| Block grammar | [`src/parser/block.rs`](src/parser/block.rs) |
+| Inline grammar, and the inline cap | [`src/parser/inline.rs`](src/parser/inline.rs) |
+| Escapes and character references | [`src/parser/entity.rs`](src/parser/entity.rs) |
+| The tree | [`src/parser/ast.rs`](src/parser/ast.rs) |
+| Extensions and the claim pass | [`src/parser/extension.rs`](src/parser/extension.rs), [`src/parser/claim.rs`](src/parser/claim.rs) |
+| Writing | [`src/writer.rs`](src/writer.rs), [`src/writer/inline.rs`](src/writer/inline.rs), [`src/writer/table.rs`](src/writer/table.rs), [`src/writer/yaml.rs`](src/writer/yaml.rs), [`src/writer/toml.rs`](src/writer/toml.rs) |
 
 ## Notation
 
@@ -48,14 +52,16 @@ name := ...      a rule
 A B              A followed by B
 A | B            A or B
 A*  A+  A?       zero or more, one or more, optional
+ε                nothing
 UPPER            a token made by a lexer
 "x"              the literal characters x
+rule_n           one rule for each n in the range given beside it
 ```
 
 ## Document
 
 ```text
-document    := frontmatter? body
+document    := frontmatter? markdown_block
 frontmatter := TOML_OPEN toml TOML_CLOSE
              | YAML_OPEN yaml YAML_CLOSE
 ```
@@ -66,174 +72,418 @@ frontmatter := TOML_OPEN toml TOML_CLOSE
   the next line that is `---` or `...`.
 - Spaces after a delimiter are allowed. Spaces before it are not.
 - When the first line is a delimiter and no later line closes it, the file has no
-  frontmatter and that first line is body text.
-- The body starts on the line after the closing delimiter. Both `\n` and `\r\n` end
-  a line.
+  frontmatter, and its first line is read as the rest of the markdown is: `---` alone
+  is a thematic break.
+- The markdown block starts on the line after the closing delimiter. Both `\n` and
+  `\r\n` end a line.
 
-Only the frontmatter can fail. The body never fails: what no rule recognizes is
-text.
+Only the frontmatter can fail, and an extension's error in a strict parse (see
+[Extensions](#extensions)). A frontmatter that archie cannot read fails the whole file,
+with an error that points at the place; it is not kept as text. The markdown never
+fails: what no rule recognizes is text.
 
-## Body
+## Markdown block
+
+A markdown block, `MarkdownBlock` in the tree, is any stretch of markdown read by the
+same rules: the document's body after its frontmatter, the content of every list item
+and of every table cell, and the content of a code block whose language is `markdown`
+or `md`.
 
 ### Tokens
 
-The lexer reads the body one line at a time. It keeps a stack with one number per
-open list item: the column where that item's text starts.
+The lexer reads a markdown block one line at a time. It keeps a stack with one number
+per open list item: the column where that item's text starts. Columns count spaces
+only: a tab is a character of text.
 
-1. A line holding only spaces and tabs is `BLANK`.
+| Token | What it covers |
+|---|---|
+| `BLANK` | A line holding only spaces and tabs. |
+| `BLOCK_QUOTE` | A line whose text starts with `>`, and each line after it whose text starts with `>` within three columns of the enclosing item's text. It holds their text, each line without its `>` and one space after it, joined by `\n`. |
+| `CODE_BLOCK` | A fenced code block, from its opening fence to its closing fence, or an indented code block. It holds the lines between the fences, their range in the source, and the info string, the text after the opening fence with the white space around it trimmed, as a range of the source. An indented block has an empty info string. |
+| `DEFINITION` | A link reference definition: `[label]:`, a destination and an optional title, with nothing after them on their line, over as many lines as it needs. It holds the label as written and the target. |
+| `HEADING_n` | One to six `#`, `n` of them, followed by a space or by the end of the line. Its text runs from the first character after those spaces to the end of the line's text. |
+| `HTML` | An HTML block, by the seven kinds of CommonMark's HTML blocks, from its first line to the line that ends it by its kind. It holds the lines as written, from the column of the enclosing item's text. |
+| `ITEM_END` | The end of a list item. |
+| `ITEM_START` | A list marker: `-`, `*` or `+`, or one to nine digits and `.` or `)`, followed by a space or by the end of the line. It holds the marker, so the block grammar knows the bullet character or the delimiter: an item whose bullet character or delimiter differs from the item's before it starts a new list. |
+| `TABLE` | A whole table (see [Tables](#tables)), and the depth of the containers that hold it. |
+| `TEXT` | A line of paragraph text, from its first character to the end of its text. |
+| `THEMATIC_BREAK` | Three or more of the same `-`, `*` or `_`, with nothing but spaces between them. |
+| `UNDERLINE_n` | A line of only `=` (`n` is 1) or only `-` (`n` is 2), right after paragraph text. |
+
+A line's text ends before the spaces and tabs at its end, and only those: a no-break
+space or any other white space at the end of a line is text.
+
+Each line is read as follows.
+
+1. A `BLANK` line is `BLANK`. When the token before it opened an item whose marker
+   line holds nothing else, that item ends first, with `ITEM_END`.
 2. Otherwise the spaces that start the line are counted: that count is the line's
    column. Every open item whose text column is greater than the line's column is
    closed, innermost first, with one `ITEM_END` each.
-3. What is written from that column on is classified by the first of these that
-   fits:
-   1. No item is open, and it is one to six `#` followed by a space or by the end
-      of the line: `HEADING_n`, where `n` is the number of `#`.
-   2. It starts with three or more backticks and holds no other backtick, or with
-      three or more tildes: a fenced code block starts. The lexer takes every line
-      up to and including the first line made only of the fence's character, at
-      least as many of it as opened the block, and emits one `CODE_BLOCK` holding
-      the lines between and their range in the source. With no closing fence, the
-      block ends before the first non-blank line indented less than the enclosing
-      item, or at the end of the file.
-   3. It is `-`, `*` or `+` followed by a space or by the end of the line, and the
-      line is not three or more of the same `-`, `*` or `_` with only spaces
-      between them: `ITEM_START`. The item's text column is the bullet's column
-      plus two. Whatever follows the bullet on that line is classified again by
-      these same rules. At the block cap, below, a bullet opens no item, and it
-      and the text after it are `TEXT`.
-   4. It starts a well-formed table (see [Tables](#tables)): one `TABLE` token
-      holding the whole table. The lexer goes on after the table's last line. At
-      the block cap no table is read, and its lines are read as they would be
-      without it.
-   5. Anything else: `TEXT`, ending before any trailing spaces.
-4. At the end of the file every open item is closed.
-
-The block cap, 40, counts list items, markdown blocks and grid cells together, so
-that reading, writing, cloning, comparing, printing and dropping the tree stay
-within a 2 MB stack in a debug build. Each of them puts what it holds one level
-deeper: an item its text, a fenced block whose info string starts with `markdown`
-or `md` its content, and a table its cells, those of a pipe or simple table as well
-as a grid table's. Text 40 levels deep opens none of them and stays as it is
-written: a bullet is text, a grid table is paragraph text, and a `markdown` block is
-a plain code block whose value is its content. No node that deep is offered to an
-extension, and it stays the node archie built.
+3. The line continues a paragraph when the token before it is `TEXT` and it closed no
+   item.
+4. A line whose column is four or more past the text column of the innermost open
+   item, or past column zero, is `TEXT` when it continues a paragraph. Otherwise it
+   starts an indented code block: one `CODE_BLOCK` holding that line and every later
+   line indented as far, with the blank lines between them, each without its columns
+   up to that code column.
+5. Otherwise what is written from that column on is classified by the first of these
+   that fits, in the order of precedence CommonMark gives them:
+   1. `UNDERLINE_n`, when the line continues a paragraph.
+   2. A fenced code block: three or more backticks whose info string holds no
+      backtick, or three or more tildes. The lexer takes every line up to and
+      including the first line made only of the fence's character, at least as many
+      of it as opened the block. With no closing fence, the block ends before the
+      first line of text indented less than the enclosing item's text, or at the end
+      of the text. Each line inside loses at most as many leading spaces as the column
+      of the opening fence.
+   3. `THEMATIC_BREAK`.
+   4. `HEADING_n`. A list item may hold one.
+   5. `BLOCK_QUOTE`.
+   6. `HTML`, by the start conditions of CommonMark's seven kinds. Only the first six
+      kinds may start on a line that continues a paragraph. The block ends at the
+      line that holds its closer (`-->`, `?>`, `>`, `]]>`, or `</pre>`, `</script>`,
+      `</style>` or `</textarea>`, in any case), or before a blank line for the last
+      two kinds, or at the end of the enclosing item or of the text.
+   7. `ITEM_START`. On a line that continues a paragraph, only a bullet, or the number
+      1, with text after it starts an item. The item's text column is the column of
+      its first word, when one to four spaces follow the marker; with none, or with
+      five or more, it is the column one space past the marker. Whatever follows the
+      marker on its line is classified again by these same rules. At the block cap
+      (see [Blocks](#blocks)), a marker opens no item, and it and the text after it
+      are `TEXT`.
+   8. `TABLE`, also on a line that continues a paragraph, which then ends before the
+      table. The lexer goes on after the table's last line. At the block cap no table
+      is read, and its lines are read as they would be without it.
+   9. `DEFINITION`, when the line does not continue a paragraph. A definition may go
+      on over the lines after it as long as each would continue a paragraph; it takes
+      them up to their line endings, so a title over a line end keeps the spaces and
+      tabs before it.
+   10. `TEXT`: anything else.
+6. At the end of the text every open item is closed.
 
 ### Blocks
 
 ```text
-body       := content_0
-content_n  := plain* section_m*              for n = 0..6, every m greater than n
-section_m  := HEADING_m content_m            for m = 1..6
-plain      := BLANK | paragraph | list | CODE_BLOCK | TABLE
-paragraph  := TEXT+
-list       := item ( BLANK* item )*
-item       := ITEM_START plain* ITEM_END
+markdown_block := space* lead? section_1*
+lead           := node block* sub_1 | gap_1             the first section
+section_n      := heading_n block* sub_n                n = 1..6
+sub_n          := gap_n+1? section_n+1*                 n = 1..4
+sub_5          := section_6*
+sub_6          := ε
+gap_n          := gap_n+1 section_n+1* | section_n+1+   n = 1..4, a skipped level
+gap_5          := section_6+
+heading_n      := HEADING_n | TEXT+ UNDERLINE_n         n = 1, 2
+heading_n      := HEADING_n                             n = 3..6
+block          := node | space
+node           := paragraph | list | BLOCK_QUOTE | CODE_BLOCK | HTML | TABLE
+                | THEMATIC_BREAK
+space          := BLANK | DEFINITION
+paragraph      := TEXT+
+list           := list_c                                c is one of - * + . )
+list_c         := item_c ( BLANK* item_c )*
+item_c         := ITEM_START_c markdown_block ITEM_END  a marker with c
 ```
 
-`content_n` and `section_m` stand for seven and six rules, one per level, so the
-set of rules is finite. A section holds the blocks after its heading, then the
-sections of deeper levels, and ends at the next heading of its own level or a
-higher one.
+A section holds its heading, the blocks after it, then its subsections, one level
+deeper. It ends at the next heading of its own level or a higher one. A block after a
+subsection belongs to that subsection, because no rule returns to the parent. The tree
+stores no level: a section's level is its depth in its markdown block, and each
+markdown block, inside an item, a cell or a code block, counts its levels from one.
 
-Two rules settle what the grammar leaves open: a paragraph takes every `TEXT` that
-follows it, and blank lines followed by an item continue the list.
+The grammar is context-free because its set of rules is finite. A markdown block has
+six levels, so `section_1` to `section_6`, with their `sub_n` and `gap_n`, are a fixed
+number of rules, and the five `list_c` rules give one list per bullet character or
+delimiter. A heading line of level `n` can only start a `section_n`, or a `gap_m` for
+each level `m` above it that it skips, so no rule looks at the heading before it. A
+markdown block nests inside an item between `ITEM_START` and `ITEM_END`, which pair as
+parentheses do; a table cell and a `markdown` code block hold markdown blocks read
+again from their own text by the same rules.
+
+A section with no heading line, whose `heading` is `None` in the tree, is `ε` in the
+grammar. There are two: `lead`, the section that holds what comes before a markdown
+block's first heading, and exists only when something does; and `gap_n`, a level that
+the next heading skips, which holds no blocks and holds the sections of that heading.
+A heading line with no text, such as `#` alone, is not `ε`: it is a heading with no
+children, and its section is a `section_n`. A seven-`#` line is not a heading; it is
+`TEXT`.
+
+`# Hi H1` then `### This is H3` derives as `section_1 := HEADING_1 sub_1`,
+`sub_1 := gap_2`, `gap_2 := section_3`, `section_3 := HEADING_3 sub_3`: the middle
+section's heading is `None`, and the writer writes back the same two heading lines,
+with a blank line between them. `intro` then `## B` derives as `lead := node sub_1`
+and `sub_1 := section_2`: `B` is a subsection of the first section, which has no
+heading line.
+
+The block cap, 40, counts list items, markdown blocks and table cells together, so
+that reading, writing, cloning, comparing, printing and dropping the tree stay within
+a 2 MB stack in a debug build. Each of them puts what it holds one level deeper: an
+item its text, a fenced block whose language is `markdown` or `md` its content, and a
+table its cells, those of a pipe or simple table as well as a grid table's. Text 40
+levels deep opens none of them and stays as it is written: a marker is text, a table
+is paragraph text, and a `markdown` block is a plain code block whose value is its
+content. No node that deep is offered to an extension, and it stays the node archie
+built.
+
+Two rules settle what the grammar leaves open:
+
+- A paragraph takes every `TEXT` that follows it; when `UNDERLINE_n` follows them,
+  those lines are the text of `heading_n` instead, joined with a space where each line
+  ended.
+- Blank lines followed by an item of the same list continue the list.
+
+`BLANK` and `DEFINITION` make no node: blank lines alone make no section, and a
+definition adds its label and its target to the definitions of the file. The first
+definition of a label wins, also one written inside a table cell.
+
+A list is loose when a blank line separates two of its items, or two blocks of one of
+its items. Its `start` is the number of its first item, or `None` for a bullet list.
+An item whose marker line holds nothing else ends at a blank line right after it;
+otherwise the line after the marker belongs to it when it is indented to its text.
+
+A fenced code block's info string is its `language` and its `args`. The language is
+the first word, up to the first white-space character, as written, and `None` when the
+info string is empty. The args are the rest, with the white space before it trimmed.
+They are `Args::Toml` when `args = {`, the rest, then `}` reads as a TOML document
+holding the key `args` alone, written once, whose inline table ends at that last `}`,
+with no key written twice at any depth inside it. Dotted keys that only share a
+prefix, such as `a.b=1,a.c=2`, are one table and not a key written twice. Otherwise,
+and also when the args nest deeper than the value cap of the frontmatter, the args are
+`Args::Text`, the rest as written. A fence with nothing after its language has empty
+`Toml` args.
+
+| Opening fence | `language` | `args` |
+|---|---|---|
+| ```` ```md title="README.md",showLineNumbers=true ```` | `md` | `Toml`: `title` is the text `README.md`, `showLineNumbers` is `true` |
+| ```` ```md title="README.md" showLineNumbers ```` | `md` | `Text`: `title="README.md" showLineNumbers` |
+| ```` ```md a=1,a=2 ```` | `md` | `Text`: `a=1,a=2` |
+| ```` ```md a=1} # x ```` | `md` | `Text`: `a=1} # x` |
+| ```` ```markdown Example of a list ```` | `markdown` | `Text`: `Example of a list` |
+| ```` ``` ```` | `None` | `Toml`, empty |
+
+A code block whose language is `markdown` or `md`, in any case, is one `CODE_BLOCK`
+token. archie's own markdown extension reads its content again as a markdown block in
+the claim pass, so that content follows this same grammar (see
+[Extensions](#extensions)).
 
 ### Tables
 
-A table is read whole, and only when it is well formed; otherwise its lines are read
-as they would be without it, which makes them paragraph text. Three formats are
-read, tried in this order:
+A table is read whole, and only when its lines have the shape below; otherwise they
+are read as they would be without it, most often as paragraph text. Three formats are
+read, tried in this order, and every line of a table after its first is indented at
+least to the enclosing item's text.
 
-| Format | Written as | Well formed when |
+| Format | Written as | Read when |
 |---|---|---|
-| Pipe | A header row, then a delimiter row such as `\|:--\|:-:\|--:\|`, then body rows, each with cells between `\|`. The pipes at either end of a row are optional. | The delimiter row has one cell per header cell, each cell is dashes with an optional colon at either end, and every body row has that many cells. The table ends at the first line with no pipe, or a blank line. |
-| Grid | `+---+---+` borders around rows of `\| a \| b \|`; a `+===+===+` border under the header rows. | Every line has the width of the top border, every `+` and `\|` stands at a column of the top border's `+`, and every row is one line between two borders. |
-| Simple | A header line, then a line of dash groups separated by spaces, then rows up to a blank line. | There are at least two dash groups and one row, no text sits left of the first group, and no word crosses from one column into the next. A column runs from its dash group to the next group. |
+| Pipe | A header row, then a delimiter row such as `\|:--\|:-:\|--:\|`, then body rows, each with cells between `\|`. The pipes at either end of a row are optional. | The header line holds a `\|`, and every cell of the delimiter row is one or more dashes with an optional colon at either end. The body rows run to the first line with no `\|`, or to a blank line. |
+| Grid | `+---+---+` borders around rows of `\| a \| b \|` lines; a `+===+===+` border under the header rows. | Every border has its `+` at the same columns as the top border, every row line starts with `\|` at the top border's column, a border follows the lines of each row, and at most one border is `+===+`. A row runs over every line between two borders. |
+| Simple | A header line, then a line of dash groups separated by spaces, then rows up to a blank line. | The dash line has at least two groups of dashes and nothing but spaces between them, and at least one row follows it. |
 
-- A cell holds one paragraph of inline nodes, or nothing when it is empty. `\|` in a
-  pipe cell is a pipe, through the escape rule below.
+- A cell holds a markdown block, read from its text by the same rules as the document,
+  one container deeper. A pipe or simple cell is its text on its line, without the
+  spaces and tabs around it; `\|` in a pipe cell is a pipe, through the escape rule. A
+  grid cell is its text on each line of its row, read one after another, with the
+  indentation the lines share left out and the spaces and tabs at their ends dropped.
+  So `| # Foo |` is a cell holding a section `Foo`.
+- A table is as wide as the widest of its header, its delimiter row and its rows. A
+  shorter row, the header too, gets empty cells at its end, and a column the
+  delimiter row does not reach has the default alignment.
+- A grid column runs from one `+` column of the top border to the next. A `\|` at a
+  `+` column is a wall, and a `\|` that ends the line closes the last column, so a
+  wall out of line stays text in a cell.
+- A simple column runs from its dash group to the next group, the first one from the
+  start of the line, and a word that crosses into the next column stays in the column
+  it starts in.
 - The alignment of a pipe column comes from the colons of its delimiter cell, and that
-  of a grid column from the colons of the header border (or of the top border when
-  there is no header): `:--` left, `--:` right, `:-:` center, `--` default.
+  of a grid column from the colons of the header border, or of the top border when
+  there is no header: `:--` left, `--:` right, `:-:` center, `--` default.
 - The alignment of a simple column comes from where its header sits on its dashes:
   flush with the left end only, left; with the right end only, right; with neither,
-  center; with both, default.
+  center; with both, or with no header text, default.
 - A pipe or simple table has one header row; a grid table has the rows above its
   `+===+` border, or none.
+- A link definition in a cell is a definition of the file, and its cell holds no text
+  for it.
 
 ### Inline nodes
 
-Inline nodes are read inside each `TEXT` line and inside the text of a heading.
+Inline nodes are read in the text of a paragraph and of a heading.
 
 ```text
 inlines     := inline*
-inline      := code | image | link | escape | text
-code        := TICKS code_text TICKS         both runs of backticks the same length
-image       := "!" ( wiki | bracketed )
-link        := wiki | bracketed
-wiki        := "[[" target ( "|" alias )? "]]"
-bracketed   := "[" link_inline* "]" "(" destination ")"
-link_inline := code | image | escape | text
+inline      := code | autolink | html | link | image | emphasis | strong
+             | escape | reference | line_break | text
+code        := TICKS code_text TICKS             both runs of backticks the same length
+autolink    := "<" ( URI | EMAIL ) ">"
+html        := OPEN_TAG | CLOSING_TAG | COMMENT | PROCESSING | DECLARATION | CDATA
+link        := wiki | "[" inlines "]" target
+image       := "!" wiki | "!" "[" ALT "]" target
+wiki        := "[[" wiki_target ( "|" alias )? "]]"
+target      := "(" destination? title? ")" | "[" label "]" | "[]" | ε
+emphasis    := RUN inlines RUN                   paired by CommonMark's rules
+strong      := RUN inlines RUN                   paired by CommonMark's rules
 escape      := "\" PUNCTUATION
+reference   := "&" NAME ";" | "&#" DIGITS ";" | ( "&#x" | "&#X" ) HEX ";"
+line_break  := ( "\" | SPACES ) LINE_END
 text        := any other characters
 ```
 
-- A link and an image record which form they were written in: `wiki` or
-  `bracketed`, called `Wiki` and `Markdown` in the tree.
-- `target` and `alias` hold no `[` and no `]`. `target` holds no `|`. A link's
-  alias is its text; an image's alias is its `alt`.
-- `destination` holds no space, no tab and no `(`. It is the link's or the image's
-  `target`.
-- The text of a link holds no unescaped `[` or `]` other than an image's, so a link
-  cannot hold a link but can hold an image. An image's `alt` is the text between
-  its brackets, as written.
-- `PUNCTUATION` is any ASCII punctuation character. The backslash is dropped and
-  the character becomes text.
-- An inline node starts and ends on one line.
-- Emphasis, strong emphasis and links nest at most 1000 deep, the inline cap, so
-  that reading, writing, cloning, comparing, printing and dropping them stay
-  within a 2 MB stack in a debug build. CommonMark section 6.3 permits such a
-  limit. An emphasis, a strong emphasis or a link that would nest deeper is not
-  formed: its `*`, `_` or brackets are text.
-- Brackets or backticks that complete none of these rules are text.
+A paragraph's lines are read as one text: its lines joined by their line endings,
+each line that another follows keeping the spaces and tabs before its line ending.
+Every rule above may match across a line end. The nodes are then cut at each line end
+into the paragraph's `Line`s, and each line holds the nodes written on it. A node that
+crosses a line end is cut into one piece per line, each with its `continues`: `Next`
+for the first piece, `Both` for a middle one, `Previous` for the last, and `Neither`
+for a node whole on its line. Text never crosses a line end, since each line has its
+own. A heading reads its text the same way and holds whole nodes: the pieces of each
+node are joined into one, the line end between two lines is a space unless a line
+break ends the first, a code span's line endings become spaces before its strip, the
+parts of an image's alt are joined with a space, and the parts of inline HTML with
+`\n`.
 
-Neighbouring `text` and `escape` pieces become one `Text` node. Between two lines
-of one paragraph, the line break is a `\n` inside that `Text`.
+- **Code spans.** A run of backticks opens a code span that ends at the next run of
+  exactly as many; a run with none stays text. Its value is what lies between the
+  runs, as written. When both ends are spaces and it is not all spaces, one space
+  goes from each end, a line ending counting as a space; a line ending at an end
+  stays, as the boundary between the pieces. The spaces before a line end inside a
+  code span are code. Nothing else is read inside a code span, an autolink or inline
+  HTML, so a bracket or a `*` there is in no other node.
+- **Autolinks.** `<scheme:rest>`, with a scheme of 2 to 32 letters, digits, `+`, `.`
+  or `-` that starts with a letter and a rest with no space, control character or
+  `<`, is a `Link` of form `Markdown` to what it shows, which is its only child. So is
+  `<address>` for an email address, to `mailto:address`.
+- **Inline HTML.** An open tag, with its attributes, a closing tag, a comment
+  (`<!-->`, `<!--->`, or up to `-->`), a processing instruction (`<?` to `?>`), a
+  declaration (`<!` and a letter, to `>`) or a CDATA section (`<![CDATA[` to `]]>`) is
+  an `Html` node holding what is written. The spaces and tabs inside a tag may hold one
+  line ending each.
+- **Links and images.** `[text](destination "title")` is an inline link;
+  `[text][label]`, `[label][]` and `[label]` are reference links, which take the
+  target and the title of the definition of their label. The inline form is tried
+  first. A label with no definition stays text, and so does `[text]` before a
+  `[label]` with no definition. `!` before a link form makes an image. A link and an
+  image record which form they were written in, `Markdown` or `Wiki`.
+- **Labels, destinations and titles.** A label holds no unescaped `[`, at most 999
+  characters, not all of them white space. Labels match by Unicode case folding, each
+  run of spaces, tabs and line endings counting as one space and none at either end.
+  A destination is written between `<` and `>` on one line, or as a nonempty run with
+  no space or control character whose parentheses pair up, nested at most 32 deep; one
+  nested deeper is no destination, and its brackets stay text. A title is written
+  between `"`, `'`, or `(` and `)`. The spaces and tabs around a destination and a
+  title may hold one line ending, and a title keeps the spaces before a line ending
+  inside it. `target` and `title` hold their escapes and character references
+  resolved.
+- **Balanced brackets.** Brackets pair as CommonMark's stack of brackets pairs them, in
+  one pass over each paragraph that keeps every code span, autolink, inline HTML and
+  link target it reads for the scanner. Link text may hold balanced brackets:
+  `[a [b] c](d)` is a link holding `a [b] c`. Once a link is read, no `[` before it
+  opens a link, so a link never holds a link, at any depth, also through an image:
+  `[a ![[b](c)](d) e](f)` is the text `[a `, an image of `d`, and the text ` e](f)`.
+  A bracket after a backslash, or inside a code span, an autolink, inline HTML, a wiki
+  link, or a link's destination or label, is in no pair.
+- **Wiki links.** `[[target]]` and `[[target|alias]]` are read before a bracketed link
+  at the same `[`, on one line, with something between the brackets and no bracket
+  inside them. The target is the text before the first `|`, and the alias the rest; an
+  empty alias is none. A wiki link's alias is its text, one `Text` child, and a wiki
+  embed's alias is its `alt`.
+- **An image's alt.** The text between an image's brackets, as written, without the
+  spaces and tabs before each line ending in it. No node is read in it.
+- **Emphasis and strong.** Runs of `*` and of `_` pair by CommonMark's procedure for
+  emphasis. A run can open when it is left-flanking and close when it is
+  right-flanking, by the Unicode white space and punctuation around it, symbols
+  counting as punctuation and a line end as white space; a `_` run inside a word does
+  neither. A closer pairs with the nearest opener of its character that the rule of
+  three allows. Two characters on each side make `Strong`, one makes `Emphasis`, so
+  `***a***` is emphasis around strong. Pairing keeps one list of the runs not yet
+  paired and, for each kind of closer, the first run that may still open for it, so a
+  paragraph is read in time linear in its length.
+- **Escapes.** A backslash before an ASCII punctuation character makes that character
+  text. Any other backslash is text.
+- **Entity and numeric references.** `&name;` with a name of the HTML5 list, `&#` and
+  one to seven digits then `;`, and `&#x` or `&#X` and one to six hexadecimal digits
+  then `;` are the characters they name; a code point that is zero or names no
+  character gives U+FFFD. They are resolved in text, in link destinations and in
+  titles, and kept as written in code spans, autolinks and inline HTML.
+- **Line breaks.** A line of a paragraph that another line follows ends with a
+  `LineBreak` when it ends with a backslash, or with spaces and tabs that end with two
+  spaces. Otherwise the spaces and tabs before a line ending are dropped, as are the
+  spaces that start a line. The last line of a paragraph has no line break.
+- **Text.** Neighbouring text, escapes and references on one line become one `Text`
+  node. Brackets, backticks and runs of `*` or `_` that complete no rule are text.
+- **The inline cap.** Inline nodes nest at most 1000 deep. A pair of runs or a link
+  that would nest deeper is not made: its marks stay text. The parser reads, cuts and
+  joins nested nodes from stacks of its own, so how deep they nest costs it no call
+  depth; the cap comes from the tree's derived traits, cloning first, which must stay
+  within a 2 MB stack in a debug build.
 
 ## TOML frontmatter
 
 ```text
-toml         := ( pair | COMMENT | NEWLINE )*
-pair         := key "=" value COMMENT? NEWLINE
-key          := BARE_KEY | basic_string | literal_string
-value        := basic_string | literal_string | BARE_VALUE | array | inline_table
-array        := "[" ( value ( "," value )* ","? )? "]"
-inline_table := "{" ( key "=" value ( "," key "=" value )* )? "}"
+toml          := ( statement? COMMENT? NEWLINE )*
+statement     := header | pair
+header        := "[" key_path "]" | "[[" key_path "]]"
+pair          := key_path "=" value
+key_path      := key ( "." key )*
+key           := BARE_KEY | basic_string | literal_string
+value         := basic_string | literal_string | multi_basic | multi_literal
+               | BARE_VALUE | array | inline_table
+array         := "[" ( value ( "," value )* ","? )? "]"
+inline_table  := "{" ( pair ( "," pair )* )? "}"
 ```
 
-- `BARE_KEY` is letters, digits, `_` and `-`.
+- `BARE_KEY` is ASCII letters, digits, `_` and `-`. Spaces and tabs may sit around
+  `=`, around each `.` of a key path, and inside a header's brackets. A `.` inside a
+  quoted key is part of the key.
 - `COMMENT` is `#` to the end of the line.
-- Inside an array, line breaks and comments are allowed between the values. Inside
-  an inline table they are not.
-- A key written more than once in one mapping or inline table becomes one key, in
-  the place where it was first written. Its value is a list of every value written
-  for it, in the order of the file: a list adds its items, and any other value adds
-  itself as one item. `title = "Draft"` then `title = "Final"` is
-  `title = ["Draft", "Final"]`.
+- Inside an array, line breaks and comments may sit between the values, and a `,` may
+  follow the last one. An inline table stays on one line, and no `,` follows its last
+  pair.
+- `basic_string` is `"..."` and `literal_string` is `'...'`, on one line.
+  `multi_basic` is `"""..."""` and `multi_literal` is `'''...'''`, over any lines: a
+  line ending right after the opening quotes is not part of the text, up to two quotes
+  right before the closing three are, and in `multi_basic` a `\` at the end of a line
+  removes the line ending and the white space after it.
+- `BARE_VALUE` runs to the first `,`, `]`, `}`, `#`, space, tab or line ending. A date
+  followed by one space and a time is one value.
+- A header opens the table it names, and the pairs after it, up to the next header,
+  go into it. `[[name]]` adds an empty mapping at the end of the list `name` and opens
+  it. A dotted key `a.b = 1` writes `b = 1` into the table `a`.
+- At every part of its path but the last, a dotted key or a header goes on into the
+  table that a dotted key or a header made there, also into the last mapping of a list
+  of them: `a.b = 1` then `a.c = 2` is one table `a` holding both, and `[[authors]]`
+  then `[authors.site]` opens `site` in the last author.
+- A header names a table again only when nothing but a deeper header made it:
+  `[server.tls]` then `[server]` adds to `server`.
+- A key or a table written more than once in one mapping becomes one key, in the place
+  where it was first written. Its value is a list of every value written for it, in
+  the order of the file: a list adds its items, and any other value adds itself as one
+  item. `title = "Draft"` then `title = "Final"` is `title = ["Draft", "Final"]`. A key
+  is written again by a second `key = value`, by a header that names a table a header
+  or a dotted key made, such as `[params]` twice or `site.name = "x"` then `[site]`,
+  and by a dotted key or a header through a key whose value was written with `=`,
+  because TOML closes an inline table at its brace and an array at its bracket:
+  `a = {b = 1}` then `a.c = 2` is `a = [{b = 1}, {c = 2}]`. A later dotted key or
+  header through such a key goes on into the last mapping of its list.
+- Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
+  dotted keys and of headers count together, and in YAML so do flow and block
+  collections, tags on collections and explicit keys. Past that depth the file fails
+  with `the value nests deeper than 400 levels`, pointing at the value that passes it,
+  so that every operation on the tree stays within a 2 MB stack in a debug build. The
+  same cap holds for a code block's args, which past it stay `Text`.
 
 A value's type comes from how it is written:
 
 | Written as | Type |
 |---|---|
-| `"..."`, with the escapes `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX` | String |
-| `'...'`, with no escapes | String |
+| `"..."`, `"""..."""`, with the escapes `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX` | String |
+| `'...'`, `'''...'''`, with no escapes | String |
 | `true`, `false` | Boolean |
 | `2026-10-10`, when that day exists in the calendar; `2026-02-30` is not a value | Date |
 | `07:32:00`, optionally with a fraction such as `.250` | Time |
 | A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | DateTime |
 | A date, then `T`, `t` or one space, then a time, with no offset | LocalDateTime |
 | An optional sign and digits; or `0x`, `0o`, `0b` and digits in that base | Integer, 64 bits |
-| Digits with a fraction, an exponent or both | Float, finite |
+| Digits with a fraction of digits, an exponent or both, with an optional sign | Float, finite |
 | `inf` and `nan`, with an optional sign; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 
 ## YAML frontmatter
@@ -270,8 +520,8 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   `the frontmatter must be a mapping`.
 - `INDENT` is a line indented more than the key above it; `DEDENT` is the return to
   an earlier indentation. Every key of one mapping starts at the same column.
-- A `block` may be a sequence written at the same column as its key (its third
-  form).
+- A `block` may be a sequence written at the same column as its key (the second form
+  of `block`).
 - After a key or a bare `-`, the next line indented more than it may hold any
   value: a mapping, a list, a scalar, a quoted string, a flow collection, a block
   scalar or a tagged value. `title:` then `  Notes` is `"Notes"`.
@@ -335,9 +585,9 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   string. `? - a` then `: v`, and `? a: 1` then `: v`, both fail.
 - A `:` line indented more than its `?` does not give the pair's value: `? k` then
   `  : v` fails the file with `this line is indented more than the keys above it`.
-- `PLAIN_KEY` runs to the first `:` followed by a space or by the end of the line.
-  `FLOW_KEY` runs to the first `:` followed by a space or by one of `, [ ] { }`, or
-  to the first of `, [ ] { }`.
+- `PLAIN_KEY` runs to the first `:` followed by a space, a tab or the end of the
+  line. `FLOW_KEY` runs to the first `:` followed by a space, a tab, the end of the
+  line or one of `, [ ] { }`, to the first of `, [ ] { }`, or to a comment.
 - Inside a flow mapping, and after a `?` inside a flow list, a `FLOW_KEY` that runs
   to the end of its line goes on over the following lines up to its `:`, or up to a
   `,`, `[`, `]`, `{` or `}`, as a `PLAIN` inside a flow collection does: a comment
@@ -348,7 +598,7 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   `{a: [{"x y": 1}]}`. Inside a flow list, a key with no `?` before it stays on its
   line: `[x` then `  y: 1]`, and `a: [x` then `  y: 1]`, fail the file with
   ``expected `,` or `]` in the list``.
-- Spaces may sit between a quoted key and its `:`: `"a" : 1` is `{a: 1}`.
+- Spaces and tabs may sit between a key and its `:`: `"a" : 1` is `{a: 1}`.
 - Outside a flow collection, a space, a tab or the end of the line must follow the
   `:` of a key. `"a":1` fails the file with ``expected a space after the `:` ``,
   and `{"a":1}` is `{a: 1}`.
@@ -416,7 +666,8 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   is read as the value after a key's `:` is, and the empty key written more than
   once holds a list as any key does. `: v` is `{"": v}`, and `a: 1` then `: v` is
   `{a: 1, "": v}`. After an explicit key, the first such line at the `?`'s column
-  gives that key's value: `? k` then `: v` then `: w` is `{k: v, "": w}`.
+  gives that key's value: `? k` then `: v` then `: w` is `{k: v, "": w}`, and `? a`
+  then `:` then `: b` is `{a: null, "": b}`.
 - A `flow_entry` of a flow list that is a key followed by `:`, an explicit key or an
   empty key is a mapping of one pair: `[a: b, c]` is a list holding `{a: b}` and
   `c`, `[? x]` is `[{x: null}]`, `[: x]` is `[{"": x}]`, and `[?]` is
@@ -442,17 +693,21 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   `k: b` is `k: [a, b]`.
 - An anchor (`&name`) or an alias (`*name`), on a value or on a key, fails the file
   with `anchors and aliases are not read`.
+- Values nest at most 400 deep, by the cap stated under
+  [TOML frontmatter](#toml-frontmatter). A tag on a collection and an explicit key
+  each count as a level of their own.
 
 `BLOCK_SCALAR` is read whole, by YAML 1.2.2 section 8.1:
 
 - Its header is `|` (literal) or `>` (folded), then in either order an optional
   chomping indicator, `-` (strip) or `+` (keep), and an optional indentation digit
-  from 1 to 9, then the end of the line.
+  from 1 to 9, then the end of the line, or a comment.
 - Its lines are those indented more than the key or the `-` it belongs to. The
   column of its text is that key's or that `-`'s column plus the digit; with no
   digit, it is the column of the first line of text, and a blank line before that
-  line may not be indented more. The scalar ends before the first line of text
-  indented less than that column.
+  line may not be indented more: such a line fails the file with
+  `a blank line before the text of a block scalar is indented more than the text`.
+  The scalar ends before the first line of text indented less than that column.
 - A literal scalar keeps every line break. A folded scalar joins two lines of text
   with a space, turns each empty line into a line break, and keeps the line breaks
   around a line indented more than the text.
@@ -462,13 +717,16 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
 `TAG` is `!!` followed by `str`, `int`, `float`, `bool`, `null`, `map`, `seq` or
 `timestamp`, or the same type written in full, such as `!<tag:yaml.org,2002:str>`.
 Any other tag, such as `!point`, fails the file with
-``the tag `!point` is not one archie reads``.
+``the tag `!point` is not one archie reads``. A value has at most one tag:
+`a: !!str !!str x` fails the file with `a value has at most one tag`, pointing at the
+second tag, and so does a second tag on a key, inside a flow collection, or on the
+line under a tag that ends its line.
 
 - A tagged scalar's text is read again by the rules for an unquoted value of the
   tag's type in the table below: `!!str 01234` is the String `"01234"`, and
-  `!!timestamp` reads a Date or a DateTime. `!!float` reads a Float or a NonFinite,
-  and also reads the text of a decimal integer, so `!!float 1` is the Float `1`.
-  `!!map` and `!!seq` only check that the value is a mapping or a list.
+  `!!timestamp` reads a Date, a DateTime or a LocalDateTime. `!!float` reads a Float
+  or a NonFinite, and also reads the text of a decimal integer, so `!!float 1` is the
+  Float `1`. `!!map` and `!!seq` only check that the value is a mapping or a list.
 - A value that does not fit its tag fails the file, as
   ``"`abc` is not a value of the tag `!!int`"``, or
   ``"a list is not a value of the tag `!!map`"``.
@@ -478,7 +736,8 @@ Any other tag, such as `!point`, fails the file with
   and it is checked against the tag as an empty value. `!!str : v` is `{"": v}`,
   `a: 1` then `!!str : v` is `{a: 1, "": v}`, `{!!str : v}` is `{"": v}`,
   `{!!str :}` is `{"": null}`, `{!!str :, a: 1}` is `{"": null, a: 1}`, and
-  `a: [!!str :]` is `{a: [{"": null}]}`. `!!int : v` fails the file with
+  `a: [!!str :]` is `{a: [{"": null}]}`. A tag written in full ends at its `>`, so
+  `!<tag:yaml.org,2002:str>: v` is `{"": v}` too. `!!int : v` fails the file with
   ``an empty value is not a value of the tag `!!int` ``.
 
 A `PLAIN` value's type comes from how it is written:
@@ -488,7 +747,7 @@ A `PLAIN` value's type comes from how it is written:
 | Nothing, `~`, `null`, `Null`, `NULL` | Null |
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
 | An optional sign and digits; or `0x`, `0o` and digits in that base | Integer, 64 bits |
-| Digits with a fraction, an exponent or both | Float, finite |
+| Digits with a fraction of digits, an exponent or both, with an optional sign | Float, finite |
 | `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 | `2026-10-10`, when that day exists in the calendar | Date |
 | A date-time, written as in TOML, whose date exists in the calendar | DateTime, or LocalDateTime when it has no offset |
@@ -500,132 +759,296 @@ A `PLAIN` value's type comes from how it is written:
 |---|---|---|
 | `Document` | The first byte of the file | The last |
 | `Frontmatter` | The opening delimiter | The end of the closing delimiter |
-| `Mapping` written as lines | The first key | The end of the last value written |
-| `Mapping` with no pairs | Empty, on the line after the opening delimiter | |
 | `Mapping` written as `{ ... }` | `{` | `}` |
-| `Pair` | Its key, or the `?` of an explicit key | The end of its value, where the key is first written; `repeats` holds the same range for each later occurrence |
+| `Mapping` with no pairs, at the root | Empty, on the line after the opening delimiter | |
+| `Mapping` of a TOML table with no pairs | Empty, right after its header | |
+| Any other `Mapping` | The start of its first pair | The end of the last value written in it |
+| `Pair` | Its key, the `?` of an explicit key, the first part of a dotted key, or the header that makes it | The end of its value, or for a header, the end of the last line of the table it opens, where the key is first written; `repeats` holds the same range for each later place the key is written |
 | `Sequence` written as `[ ... ]` | `[` | `]` |
-| `Sequence` of the values of a key written more than once | The first value's start | The first value's end |
 | `Sequence` written as `-` lines | The first `-` | The end of the last value |
+| `Sequence` written as `[[name]]` headers | The first header | The end of the last line of the last table |
+| `Sequence` of the values of a key written more than once | The first value's start | The first value's end; for tables a header wrote again, the end of the last line of the last table |
 | `Scalar` | Its first character, quotes included | Its last |
-| `Scalar` that is null because nothing is written | Empty, right after the `:` or the `-` | |
+| `Scalar` that is null because nothing is written | Empty, right after the `:`, the `-` or the tag, or at the end of a flow key with no `:` | |
 | `Scalar` that is null because an explicit key has no `:` line | Empty, at the end of the key | |
 | `Scalar` written as a block scalar | `\|` or `>` | The end of its last line of text, or of its header when it has none |
 | `Scalar`, `Mapping` or `Sequence` after a tag | The value, without its tag | |
-| `Body` | The line after the frontmatter, or the first byte of a file with none | The last byte of the file |
-| `Section` | Its heading | The end of its last block |
-| `Heading` | The first `#` | The end of the line's text |
+| `MarkdownBlock` of the document | The line after the frontmatter, or the first byte of a file with none | The last byte of the file |
+| `MarkdownBlock` of an item or a table cell | The start of its first section | The end of its last section; empty at the end of the item's marker, or at the start of the cell, when it has no section |
+| `MarkdownBlock` that a `markdown` code block holds | The first byte of the block's lines between its fences | The end of the last of them |
+| `Section` | Its heading, or its first block or subsection when it has no heading | The end of its last block or subsection |
+| `Heading` written with `#` | The first `#` | The end of the line's text |
+| `Heading` written underlined | Its first line's text | The end of its underline |
+| `Heading` with no text | Empty, at its first `#` | |
 | `Paragraph` | Its first character | The end of its last line's text |
-| `List` | The first bullet | The end of the last item |
-| `Item` | Its bullet | The end of its last block, or of the bullet when the item is empty |
-| `CodeBlock` | The opening fence | The end of the closing fence, or of its last line when no fence closes it |
+| `Line` | Its first character | The end of its text, or past the spaces of a line break that ends it, or past the spaces and tabs before its line ending when a code span or inline HTML goes on from it |
+| `List` | The first marker | The end of the last item |
+| `Item` | Its marker | The end of its last section, or of the marker when the item is empty |
+| `CodeBlock` written fenced | The opening fence | The end of the closing fence, or of its last line when no fence closes it |
+| `CodeBlock` written indented | The code column of its first line | The end of its last line |
+| `BlockQuote` | Its first `>` | The end of its last line |
+| `Html` block | Its first line, from the column of the enclosing item's text | The end of its last line |
+| `ThematicBreak` | Its first mark | Its last mark |
 | `Table` | Its first line's text | Its last line's text |
-| `TableRow` | The row line's text | Its end |
-| `TableCell` | The cell's text without the spaces around it; empty when the cell is | Its end |
-| `Text`, `Code`, `Link`, `Image` | The first character, delimiters included | The last |
+| `TableRow` | The row line's text, or the first line's text of a grid row | The end of that line, or of the grid row's last line |
+| `TableCell` | The cell's text without the spaces around it, or for a grid cell from the first of its lines that holds text; empty at the start of an empty cell, and at the end of its row for a cell added to fill the row | The end of that text |
+| `Text`, `Code`, `Link`, `Image`, `Emphasis`, `Strong`, inline `Html` | The first character, delimiters included | The last |
+| `LineBreak` | Its backslash, or the spaces that make it | |
+| A piece of a node cut over lines | The node's start, or the start of its line's text | The node's end, or the end of its `Line` |
 
-Apart from `Document` and `Body`, a span never includes the line ending after the
-node. Inside a paragraph, a `Text`
-that continues onto the next line covers the line ending and the indentation
-between the two lines.
+Apart from `Document` and the document's `MarkdownBlock`, a span never includes the
+line ending after the node. Inside an underlined heading, a `Text` that goes on from
+one line to the next covers the line ending and the indentation between them.
+
+## Extensions
+
+A consumer of archie gives its own node types to the constructs it claims, through
+the `Extension` trait in [`src/parser/extension.rs`](src/parser/extension.rs):
+
+```rust
+pub struct Kind<E>(pub Option<Box<E::Node<E>>>)
+where
+    E: Extension;
+
+pub trait Extension: Clone + Debug + PartialEq + Sized {
+    type Node<T>: Clone + Debug + PartialEq
+    where
+        T: Extension;
+
+    fn claim<T>(
+        construct: Construct<'_, T>,
+        context: &Context<'_>,
+    ) -> Option<Result<Self::Node<T>, ParseError>>
+    where
+        T: Extension;
+
+    fn write<T>(node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension;
+}
+```
+
+- Every node of the markdown tree takes the extension set as a type parameter and
+  carries `kind: Kind<E>`: the node an extension gave it, or `None`. The node is boxed,
+  because a markdown block can hold a markdown block. `T`, the full set of extensions
+  the file is parsed with, types the archie nodes an extension's own node holds.
+- `Construct<'node, T>` has one variant per node type, each holding a reference to
+  that node: `BlockQuote`, `Code`, `CodeBlock`, `Document`, `Emphasis`, `Heading`,
+  `Html`, `Image`, `Item`, `Line`, `LineBreak`, `Link`, `List`, `MarkdownBlock`,
+  `Paragraph`, `Section`, `Strong`, `Table`, `TableCell`, `TableRow`, `Text` and
+  `ThematicBreak`.
+- archie builds the whole tree first, then offers every node to the extensions,
+  children before parents: a section's heading, blocks and subsections before the
+  section, an item's or a cell's markdown block before the item or the cell, a
+  document's markdown block before the document. A claimed node goes into `kind`, and
+  the plain node stays in the tree under it.
+- `claim` returns `None` to leave the node as archie built it, and `Some(Ok(..))` to
+  claim it. `Some(Err(..))` leaves the plain node by default
+  (`OnExtensionError::Fallback`), and archie reads the rest of the file. A strict
+  parse, `ParseOptions::strict()`, which sets `OnExtensionError::Fail`, fails with
+  that error instead.
+- `Context` holds the `source`, whether the parse is `strict`, the `column` the
+  offered construct's first line starts at (counted from its cell's line in a grid
+  cell), the `depth`, how many list items, markdown blocks and table cells hold the
+  construct, and the `lines` of the grid cell it lies in, or `None` outside grid
+  cells. `context.markdown::<T>(range)` reads a range of the source as a markdown
+  block with the extensions `T`, one container deeper, each line with at most `column`
+  of its leading spaces left out; in a grid cell it reads only the parts of the range
+  on the cell's lines. Its spans count from the start of the source.
+- No node that the block cap of list items, markdown blocks and table cells holds is
+  offered, so a markdown block an extension reads with `context.markdown` nests under
+  the same cap as the file's own.
+- `Plain` claims nothing; its `Node<T>` is `Infallible`. `Markdown` is archie's own
+  extension, written as a consumer writes one: it claims a code block whose language
+  is `markdown` or `md`, in any case, as the markdown block its content reads as, and
+  writes it back fenced with the block's info string.
+- `(A, B)` is two extensions, whose `Node<T>` is `Either<A::Node<T>, B::Node<T>>`: the
+  first one that claims a construct gets it. More nest as pairs.
+- `With<E>` is `(Markdown, E)`. `parse(source)` reads with `Markdown` alone, and
+  `parse_with::<E>(source, &options)` reads with `With<E>`, so archie's markdown
+  extension is always first.
+- A code block's `language` and `args`, `Args::Toml` or `Args::Text`, come from its
+  info string by the rule under [Blocks](#blocks).
+- `read_toml(source, range)` and `read_yaml(source, range)` read the TOML or YAML
+  written at any range of a source into a `Mapping`, as the frontmatter is read, with
+  spans counting from the start of the source.
+- `to_json(document)` writes a document as JSON, and `from_json::<E>(text)` reads it
+  back, at any depth archie reads. No node writes its `kind`.
+  `rebuild_with::<E>(document, &options)` builds the extension nodes again on such a
+  document: it writes the plain tree in archie's form, with the frontmatter in the
+  syntax it was read in, or in YAML when TOML cannot hold a null in it, and parses that
+  text with `E`, so the spans count from the text written. It fails with
+  `RebuildError::Write`, naming the key, when the `Toml` args of a code block hold a
+  null, and with `RebuildError::Parse` when the parse fails.
+- `Writer`, which `write` hands to an extension, has `push_str`, which adds text as
+  it is; `markdown_block`, which writes a markdown block with its levels counted from
+  one; `construct`, which writes a plain node in archie's form, each of its children
+  by the extension that claimed it, if one did; `fenced`, which writes a fenced block
+  with the info string it is given; and `info_string`, which gives a code block's info
+  string as the writer writes it and records the error of a null in its `Toml` args.
+- The tree types that take the extension as a parameter compare with `PartialEq`
+  only, so an extension's own node types need not implement `Eq`.
+
+## Writing
+
+`write(document, &options)` writes a document in archie's own form: one form for each
+construct, whatever form the file used. It uses another form only where its own form
+would read back as another tree. Every form meets one rule: a file read and written,
+then read and written again, gives the same text the second time.
+
+| Construct | Written as |
+|---|---|
+| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; then its markdown block. The text ends with one line ending; an empty document is empty text. |
+| Blank lines | One between two blocks and after a heading. Inside a tight list, none between the blocks of an item. |
+| Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A heading line with no text is its marks alone. Every heading line is written. |
+| A heading that holds a line break | At depth 1 or 2, written underlined: its lines, each but the last ended by the break's `\`, guarded as a paragraph's lines, then `===` at depth 1 or `---` at depth 2 on a line of its own, because a `#` heading is one line. At depth 3 to 6, and right after other text in a tight list item, where a blank line would make the list loose, the one-line form, with the break written `&#10;`. |
+| A section with no heading | No line where a later read builds it again: as the first section of a markdown block that holds blocks or subsections, or as the first subsection of its parent that holds subsections and no blocks, a skipped level. Any other section with no heading, which only a tree built in code holds, gets a heading line with no text, the `#` marks of its depth. |
+| A section seven or more levels deep | Inside its parent, as a ```` ```markdown ```` block where the levels start over at `#`. The rule repeats inside each block, and each block's fence is longer than any fence inside it. |
+| Paragraph | Each line on a line of its own. |
+| Bullet list | `-` and one space before each item. A bullet list right after another bullet list in the same section uses `*`, and the next one `-` again, in turn; a list an extension claimed, or any other block between them, ends the turn. An item of a `*` list whose first line is the thematic break `***` writes it `___`, because `* ***` reads as a thematic break. |
+| Ordered list | The number, `.` and one space before each item, numbered up from the list's first number. An ordered list right after another ordered list in the same section uses `)`, as in `1)`, and the next one `.` again, in turn. |
+| Item | Its lines after the first indented to its text. An empty item is its marker alone. A first line that starts with a space goes on the line after the marker, indented to the item's text. |
+| Loose list | A blank line between its items. |
+| Code block | Fenced, also when it was indented: a fence of backticks one longer than the longest run of backticks in its content, and at least three, or of tildes, measured on the tildes, when its info string holds a backtick, because a backtick fence's info string cannot hold one. The info string is the language, then one space and the args: `Text` args as written, and `Toml` args as one line of `key = value` pairs separated by `, `, each value in the TOML form below, with a mapping as an inline table, such as `site = { lang = "en" }`. Empty `Toml` args write nothing. A pair holding a null is left out, and the write fails with an error that names its key. |
+| Block quote | `> ` before each line of its text, and `>` alone on an empty line. |
+| HTML block | As written. |
+| Thematic break | `***`. A `***` line is always a thematic break: `---` right under a line of text underlines a heading, and `---` on a file's first line opens frontmatter. |
+| Table | A pipe table, its columns padded to the widest cell and at least three wide, its delimiter row holding the alignments, and every `\|` of a cell escaped, when it has exactly one header row and every cell's content fits on one line. Otherwise a grid table: `+---+` borders, a `+===+` border under the header rows, and the alignments on the `+===+` border, or on the top one when there is no header row. |
+| Emphasis, strong | `*a*` and `**b**`. Emphases next to each other, or strongs, each whole on its line, are written as one span: `*a*_b_` is written `*ab*`, because `*a**b*` reads as one emphasis holding `a**b`. Strong around emphasis is written `***a***`, which reads back as emphasis around strong and looks the same. |
+| Code span | Backticks, a run one longer than any run of backticks inside, and the same run on every piece of a span cut over lines. A space pads the content inside them when it starts or ends with a backtick, or starts and ends with a space and is not all spaces, because the reader strips one space from each end. |
+| Link | Inline, `[text](destination "title")`, also for a reference link, whose definition is not written, and for an autolink. A wiki link stays `[[target\|text]]`. |
+| Image | `![alt](destination "title")`, or `![[target\|alt]]` for a wiki embed. |
+| Destination, title | A destination that holds a space or a control character, starts with `<`, or whose parentheses do not pair up, between `<` and `>`; an empty one with a title as `<>`. A title between `"`. A backslash goes before each `<` and `>` of a destination between them, each `"` of a title, each `&` that would start a reference, and each backslash before punctuation or the end. A line ending in a destination or a title is written `&#10;`. |
+| Hard line break | A backslash at the end of the line. |
+| Inline HTML | As written. |
+| A node cut over lines | Once, over the same lines: its opening mark before its first piece, its closing mark, or a link's target, after its last. |
+
+Text is written so that it reads back as the same text:
+
+- a backslash goes before each character that would read as markup there: a
+  backslash that stands before punctuation or the end of the line, a backtick, a run
+  of `*` or `_` that could open or close emphasis by the reader's flanking rules, a
+  `&` that would start a reference, a `<` before anything but white space or the end
+  of the line, a `[` before `[`, a `]` before `(`, and a `!` before `[`; between a
+  link's brackets, every `[` and `]`;
+- a space or a tab at the start or at the end of a line of text is written `&#32;` or
+  `&#9;`, and a line ending inside a text `&#10;`, because the reader drops a plain
+  space or tab there and reads a plain line ending as a new line.
+
+A line that starts with text gets a backslash before its first character when that
+character would start a block: a heading, a block quote, a bullet, a thematic break, a
+tilde fence, or, on a line after a paragraph's first, a heading underline; and before
+the `.` or `)` of what would read as an ordered list's number. The lines of a
+paragraph, and those of an underlined heading, are guarded as a whole:
+
+- a backslash goes before the `[` of a first line that starts with text when the lines
+  would read as a link reference definition;
+- the first line of a file with no frontmatter, `+++`, is written `\+++`, so that it
+  does not open a TOML frontmatter;
+- when the lines would read as a table, every `|` of their text is escaped.
+
+The frontmatter keeps its keys in the order they were read, and a key read twice is
+written once, with its list.
+
+- **YAML**, between `---` lines. Mappings in block form, the first key of a mapping in
+  a list on its `-` line. A list that holds a mapping, also inside a list it holds, in
+  block form; any other list in flow form, `[a, b]`, and an empty mapping as `{}`.
+  Text plain, unless written plain it would read as something else: when it starts
+  with a space or an indicator, one of `` ! " # % & ' * , - : > ? @ [ ] ` { | } ``,
+  ends with a space or `:`, holds `: `, ` #` or a control character, holds `,`, `[`,
+  `]`, `{` or `}` inside a flow collection, has the form of a time of day, or reads as
+  another type; then in double quotes, with `\"`, `\\`, `\n`, `\r`, `\t` and `\xXX`
+  escapes. `null` for a null; `true` and `false`; a float as the shortest text that
+  reads back as it, with `.0` when that text would read as an integer, and `.inf`,
+  `-.inf` and `.nan`; dates and date-times after the tag `!!timestamp`, such as
+  `!!timestamp 2026-10-10T07:32:00Z`, with `Z` for UTC or an offset such as `+02:00`;
+  a time of day as quoted text, such as `at: "07:32:00"`, which reads back as text.
+- **TOML**, between `+++` lines. The plain keys of a table first, then, in the order
+  they were read, a `[path]` header for each mapping it holds and a `[[path]]` header
+  for each mapping of a list that holds mappings and nothing else, each after a blank
+  line unless it opens the frontmatter. Any other list as an inline array, a mapping
+  in it as an inline table. A key bare when it is ASCII letters, digits, `_` and `-`,
+  and quoted otherwise. Text always in double quotes, with `\"`, `\\`, `\n`, `\r`,
+  `\t`, `\b`, `\f` and `\uXXXX` escapes; dates, times and date-times bare; `inf`,
+  `-inf` and `nan`. TOML cannot hold a null: writing one fails with
+  `TOML cannot hold a null`, naming the key's path.
+
+One case is set aside for now: emphasis directly inside emphasis, such as `_*a*_`, is
+written `**a**`, and reads back as strong.
+
+[`src/writer/tests.rs`](src/writer/tests.rs) holds the full list of written forms, each
+with the text it reads from and the text it writes.
 
 ## Where it differs
 
 ### From CommonMark
 
-1. A line that continues a list item is indented to the item's text. A line further
-   left ends the list; CommonMark would continue the paragraph.
-2. An item's text column is always the bullet's column plus two, however many
-   spaces follow the bullet.
-3. Items that follow each other form one list, whichever bullet each uses and
-   whether or not blank lines separate them.
-4. Indentation outside a list means nothing: text indented four spaces is a
-   paragraph, not code. A tab is a character of text, not indentation.
-5. A heading is written with `#`, outside any list item. Closing `#`s are part of
-   its text.
-6. An inline node does not cross a line break. A link's text holds no brackets
-   other than an image's, and a link with a title is text.
-7. A table is read only when it is well formed. GitHub fills a short row with empty
-   cells and drops the extra cells of a long one; archie reads the whole table as
-   text instead. A pipe table also ends at the first line with no pipe.
-8. These have no node and stay as text: block quotes, ordered lists, emphasis and
-   strong, thematic breaks, underlined headings, reference links, autolinks and
-   HTML.
+1. A block quote holds text: nothing is read inside it, and only its `>` lines belong
+   to it. CommonMark reads blocks inside it, and a line with no `>` can continue its
+   paragraph.
+2. A table cell holds markdown: paragraphs, lists, code blocks, tables and sections
+   with headings, as long as they stay inside the cell.
+3. A fenced block whose language is `markdown` or `md` holds a markdown block, read by
+   these same rules. CommonMark reads it as code.
+4. A line further left than a list item's text ends the list and starts a new
+   paragraph. CommonMark would continue the item's paragraph with it.
+5. A tab is a character of text. It does not indent a line, and it does not separate a
+   heading's `#`s, a list marker or the marks of a thematic break from what follows, so
+   a tab and `code`, `#`, a tab and `Title`, and `-`, a tab and `item` are paragraph
+   text.
+6. A heading's closing `#`s are part of its text: `# Title ##` holds `Title ##`.
+7. A closing fence may be indented any number of spaces past the enclosing item's
+   text. CommonMark allows up to three, and reads a fence indented further as content.
+8. An image's `alt` is the text between its brackets as written. CommonMark reads
+   inline nodes there.
+9. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
+   reads both as text.
+10. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
+    cells at most 40 deep together. Past either cap, the marks stay text.
+
+### From GitHub's tables
+
+1. No cell is dropped. A row with more cells than the header widens the table, and
+   every shorter row gets empty cells. GitHub drops the extra cells.
+2. A dash line of another width than the header still makes a table, as wide as the
+   widest of its rows. GitHub reads it as text.
+3. A link definition in a pipe cell is a definition of the file. GitHub keeps it as
+   the cell's text.
 
 ### From Pandoc's tables
 
-1. A grid table whose rows run over several lines is text: a cell written over
-   several lines is not one byte range.
-2. Simple tables without a header line, and multiline tables, are text.
+1. A simple table needs its header line, and multiline tables are not read: the dash
+   line that opens either of them is a thematic break, and the lines after it are read
+   on their own.
+2. A simple table's rows run to the next blank line, so a dash line that closes the
+   table is one more row. Pandoc ends the table at that line.
+3. A wall out of line in a grid row stays text in the cell it falls in, and the row
+   keeps one cell per column. Pandoc joins the cells on either side of it into one.
 
 ### From TOML
 
-1. Table headers (`[name]` and `[[name]]`), dotted keys and multi-line strings are
-   not read. Each is refused with an error that names it.
+1. A key or a table written more than once becomes one key holding a list of its
+   values, and so does a key that a dotted key or a header goes through after its value
+   was written with `=`, or a table a header names after a header or a dotted key made
+   it. TOML refuses each of them.
 2. Numbers are read more loosely: underscores are dropped wherever they are, and
    leading zeros are accepted.
-3. A key written more than once becomes one key holding a list of its values. TOML
-   does not allow it.
 
 ### From YAML
 
-1. Anchors and aliases are refused, and so is every tag other than the eight above.
+1. Dates and date-times are in the schema: an unquoted date whose day exists in the
+   calendar, or a date-time whose date does, is a Date, a DateTime or a LocalDateTime.
+   The YAML 1.2.2 core schema has no date type and reads it as a string.
+2. Anchors and aliases are refused, and so is every tag other than the eight above.
    Each is refused with an error that names it.
-2. A key written more than once becomes one key holding a list of its values. YAML
+3. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
-3. An unquoted date or date-time whose day exists in the calendar is a Date, a
-   DateTime or a LocalDateTime. The YAML 1.2.2 core schema has no date type and
-   reads it as a string.
-4. A number written with nothing before the dot, such as `.5`, is a string. YAML
-   reads it as a float.
-
-## Extensions
-
-A consumer of archie declares its own subtypes of fenced code blocks by implementing
-the `Extension` trait, and parses with `parse_with::<E>`:
-
-```rust
-pub trait Extension {
-    type CodeBlock: Debug + Clone + PartialEq;
-    fn code_block(block: &FencedCode<'_>) -> Option<Result<Self::CodeBlock, ParseError>>;
-}
-```
-
-- For each `CODE_BLOCK`, the parser hands the extension a `FencedCode`: the info
-  string, the source, the range of the lines between the fences, and those lines as
-  the block holds them.
-- `None` leaves a plain code block. `Some(Ok(..))` becomes the block's `kind`.
-  `Some(Err(..))` fails the whole parse with that error.
-- The tree types that hold blocks take the extension as a type parameter, which
-  defaults to `Plain`. `Plain` claims nothing, and `parse` is `parse_with::<Plain>`.
-- An extension reads structured text inside a block with `read_yaml` and
-  `read_toml`, which read the YAML and TOML above from any range of a source and
-  keep its offsets.
-
-## Choices made without a requirement
-
-Each of these was needed to write the parser and none was asked for.
-
-1. A pair written inside a flow list, such as `[a: b]`, is refused with the error
-   for a plain value holding `: `.
-2. A frontmatter construct the reader does not know fails the whole file. It is not
-   kept as opaque text.
-3. A key written more than once keeps the range of its first occurrence in `span` and
-   that of each later one in `repeats`. The list of its values keeps the first
-   value's range, so the values from a later occurrence lie outside it.
-4. TOML table headers are refused instead of read: one mapping written in several
-   separate places has no single byte range to put in `span`.
-5. The rule for an item's text column, and one list across different bullets.
-6. A line break inside a paragraph is a `\n` inside a `Text`, not a node of its
-   own.
-7. A malformed table is text as a whole, even where GitHub would read it.
-8. What each span covers, as listed above. A section's span ends at its last block,
-   not at the next heading.
-9. The additions to the tree: `CodeBlock`, `Code`, `Image`, `Table` with its rows
-   and cells, one `Link` node with a `form`, and `Mapping` as an ordered map with the
-   key held outside `Pair`.
-10. A grid table whose rows run over several lines is text, because a cell written
-    over several lines has no single byte range to put in `span`.
-11. A block an extension claims and fails to read fails the whole parse.
-12. The tree types that take the extension as a parameter compare with `PartialEq`
-    only, so an extension's own types need not support `Eq`.
+4. A number written with nothing before or after its dot, such as `.5` or `5.`, is a
+   string. YAML's core schema reads it as a float.
+5. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
+   archie follows the grammar. `? k` then `  : v` fails, where the library reads
+   `{k: v}`: the `:` of an explicit key's value stands at the column of its `?`. `? a`
+   then `:` then `: b` is `{a: null, "": b}`, where the library reads
+   `{a: {"": b}}`. `a:` then two spaces, a tab and `!!str x` is `{a: "x"}`, and
+   `!<tag:yaml.org,2002:str>: v` is `{"": v}`, both of which the library refuses.
+   `!!int : v` fails, where the library reads `{"": v}`.
