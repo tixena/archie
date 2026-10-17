@@ -11,10 +11,10 @@ use crate::parser::ast::{
 };
 use crate::parser::block::Cells;
 use crate::parser::error::ParseError;
-use crate::parser::extension::{Construct, Context, Extension};
+use crate::parser::extension::{Construct, Context, Extension, Frame};
 use crate::parser::inline::children_mut;
 use crate::parser::lexer::BLOCK_CAP;
-use crate::parser::line::width;
+use crate::parser::line::{Base, line_from, width};
 
 /// What the pass carries down the tree: the context of the nodes it offers,
 /// each grid cell's lines, by the cell's span, and where each line of the
@@ -28,8 +28,8 @@ struct Pass<'text> {
 
 impl<'text> Pass<'text> {
     /// The context of a node whose span starts at `start`: its `column` is
-    /// the column `start` is at, counted from the start of its line, or of
-    /// its cell's line in a grid cell.
+    /// the column `start` is at on its line, or on its cell's line in a grid
+    /// cell, once the line is read past the context's frame.
     fn at(&self, start: usize) -> Context<'text> {
         let line_start = self
             .context
@@ -42,8 +42,20 @@ impl<'text> Pass<'text> {
                 },
                 |line| line.start,
             );
+        let source = self.context.source;
+        let base = Base {
+            frame: self.context.frame.columns(),
+            ..Base::default()
+        };
+        let line = line_from(source, line_start, base);
         Context {
-            column: width(&self.context.source[line_start..start]),
+            // A span that starts in the white space the frame leaves out, as
+            // a markdown block's own span does, starts at the frame's column 0.
+            column: if start < line.start {
+                0
+            } else {
+                width(&source[line.start..start], line.column)
+            },
             ..self.context
         }
     }
@@ -60,10 +72,11 @@ impl<'text> Pass<'text> {
     }
 
     /// The pass inside the cell that spans `span`: a grid cell's nodes read
-    /// only its lines.
+    /// only its lines, and its lines start their frame.
     fn inside(&self, span: &Range<usize>) -> Self {
         self.cells.get(span).map_or(*self, |lines| Self {
             context: Context {
+                frame: Frame::NONE,
                 lines: Some(lines),
                 ..self.context
             },

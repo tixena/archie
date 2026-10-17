@@ -204,7 +204,7 @@ impl Spot {
 
 struct Lexer<'src> {
     /// What each line is read past.
-    base: Base,
+    base: Base<'src>,
     /// The content column of each open list item, outermost first.
     levels: Vec<usize>,
     /// How many containers hold the text read: list items, markdown blocks
@@ -600,7 +600,7 @@ impl Lexer<'_> {
 
 /// The tokens of `source` from byte `start`, each line read past `base`, so
 /// its columns count from `base.columns`. `outer` containers hold the text.
-pub fn lex_from(source: &str, start: usize, base: Base, outer: usize) -> Vec<Token> {
+pub fn lex_from(source: &str, start: usize, base: Base<'_>, outer: usize) -> Vec<Token> {
     let mut lexer = Lexer {
         base,
         levels: Vec::new(),
@@ -732,7 +732,7 @@ fn join(lines: &[Cut<'_>]) -> String {
 /// Reads `lines`, ranges of `source`, as consecutive lines of one text, each
 /// read past `base`, the way `lex_from` reads a file, held by `outer`
 /// containers. Spans count from the start of `source`.
-pub fn lex_lines(source: &str, lines: &[Range<usize>], base: Base, outer: usize) -> Vec<Token> {
+pub fn lex_lines(source: &str, lines: &[Range<usize>], base: Base<'_>, outer: usize) -> Vec<Token> {
     let mut starts = Vec::with_capacity(lines.len());
     let mut text = String::new();
     for line in lines {

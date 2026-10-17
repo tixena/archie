@@ -452,17 +452,16 @@ pub fn parse<E>(source: &str, start: usize) -> (MarkdownBlock<E>, Definitions, C
 where
     E: Extension,
 {
-    parse_from(source, start, 0, 0)
+    parse_from(source, start, Base::default(), 0)
 }
 
 /// The markdown block that starts at byte `start` of `source`, each line read
-/// with at most `base` columns of its leading white space left out and its tab
-/// stops counted from there, its link definitions, each destination by its
-/// label, folded, and its grid cells' lines. `outer` containers hold it.
+/// past `base`, its link definitions, each destination by its label, folded,
+/// and its grid cells' lines. `outer` containers hold it.
 pub fn parse_from<E>(
     source: &str,
     start: usize,
-    base: usize,
+    base: Base<'_>,
     outer: usize,
 ) -> (MarkdownBlock<E>, Definitions, Cells)
 where
@@ -470,47 +469,25 @@ where
 {
     read(
         source,
-        lex_from(
-            source,
-            start,
-            Base {
-                columns: base,
-                restart: true,
-            },
-            outer,
-        ),
+        lex_from(source, start, base, outer),
         start..source.len(),
     )
 }
 
 /// The markdown block written on `lines`, ranges of `source` read as
-/// consecutive lines, each with at most `base` columns of its leading white
-/// space left out and its tab stops counted from there, with its link
-/// definitions and its grid cells' lines. It spans `span`, and `outer`
-/// containers hold it.
+/// consecutive lines, each read past `base`, with its link definitions and
+/// its grid cells' lines. It spans `span`, and `outer` containers hold it.
 pub fn parse_lines<E>(
     source: &str,
     lines: &[Range<usize>],
-    base: usize,
+    base: Base<'_>,
     outer: usize,
     span: Range<usize>,
 ) -> (MarkdownBlock<E>, Definitions, Cells)
 where
     E: Extension,
 {
-    read(
-        source,
-        lex_lines(
-            source,
-            lines,
-            Base {
-                columns: base,
-                restart: true,
-            },
-            outer,
-        ),
-        span,
-    )
+    read(source, lex_lines(source, lines, base, outer), span)
 }
 
 fn read<E>(

@@ -13,6 +13,7 @@ use crate::parser::ast::{
     ThematicBreak,
 };
 use crate::parser::error::ParseError;
+use crate::parser::line::Base;
 use crate::parser::{block, claim};
 use crate::writer::Writer;
 
@@ -80,12 +81,14 @@ where
 #[non_exhaustive]
 pub struct Context<'text> {
     /// The column the offered construct's first line starts at, counted
-    /// from the start of its cell's line in a grid cell.
+    /// from the start of its cell's line in a grid cell, in the frame of the
+    /// markdown block that holds it.
     pub column: usize,
     /// How many list items, markdown blocks and table cells hold the offered
     /// construct. No construct that `BLOCK_CAP` or more of them hold is
     /// offered.
     pub depth: usize,
+    pub frame: Frame<'text>,
     /// The lines of the grid cell the offered construct lies in, as ranges
     /// of the source, or `None` outside grid cells.
     pub lines: Option<&'text [Range<usize>]>,
@@ -95,7 +98,8 @@ pub struct Context<'text> {
 
 impl Context<'_> {
     /// Reads `range` of the source as a markdown block, with the extensions
-    /// `T`, each line with at most `column` columns of its leading white
+    /// `T`, each line read past the frame of the markdown block that holds
+    /// the construct, then with at most `column` columns of its leading white
     /// space left out and its tab stops counted from there.
     /// In a grid cell, only the parts of `range` on the cell's lines are
     /// read, one after another.
@@ -111,18 +115,40 @@ impl Context<'_> {
         T: Extension,
     {
         let depth = self.depth + 1;
-        let (mut read, _, cells) = match self.lines {
-            Some(lines) => block::parse_lines(
-                self.source,
-                &within(lines, &range),
-                self.column,
-                depth,
-                range,
-            ),
-            None => block::parse_from(&self.source[..range.end], range.start, self.column, depth),
+        let base = Base {
+            columns: self.column,
+            frame: self.frame.0,
+            restart: true,
         };
-        claim::markdown_block(&mut read, &Self { depth, ..*self }, &cells)?;
+        let (mut read, _, cells) = match self.lines {
+            Some(lines) => {
+                block::parse_lines(self.source, &within(lines, &range), base, depth, range)
+            }
+            None => block::parse_from(&self.source[..range.end], range.start, base, depth),
+        };
+        let frame = [self.frame.0, &[self.column]].concat();
+        let inside = Context {
+            depth,
+            frame: Frame(&frame),
+            ..*self
+        };
+        claim::markdown_block(&mut read, &inside, &cells)?;
         Ok(read)
+    }
+}
+
+/// The column each markdown block that holds a construct reads its lines
+/// past, outermost first, from the start of the line or, in a grid cell, of
+/// its cell's line. Only archie reads it.
+#[derive(Debug, Clone, Copy)]
+pub struct Frame<'text>(&'text [usize]);
+
+impl<'text> Frame<'text> {
+    /// The frame of a construct that no markdown block holds.
+    pub(crate) const NONE: Self = Self(&[]);
+
+    pub(crate) const fn columns(self) -> &'text [usize] {
+        self.0
     }
 }
 

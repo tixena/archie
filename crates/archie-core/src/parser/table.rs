@@ -85,7 +85,7 @@ pub fn read(
     first: Range<usize>,
     next: usize,
     level: usize,
-    base: Base,
+    base: Base<'_>,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let head = TableLine {
         column,
@@ -101,7 +101,7 @@ pub fn read(
 
 /// The line starting at `at`, when it holds text and is indented at least
 /// `level` columns once read past `base`.
-fn line_after(source: &str, at: usize, level: usize, base: Base) -> Option<TableLine> {
+fn line_after(source: &str, at: usize, level: usize, base: Base<'_>) -> Option<TableLine> {
     if at >= source.len() {
         return None;
     }
@@ -127,7 +127,7 @@ fn pipe(
     source: &str,
     head: &TableLine,
     level: usize,
-    base: Base,
+    base: Base<'_>,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let head_cells = pipe_cells(source, head)?;
     let delimiter = line_after(source, head.next, level, base)?;
@@ -210,7 +210,7 @@ fn grid(
     source: &str,
     head: &TableLine,
     level: usize,
-    base: Base,
+    base: Base<'_>,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let top: Vec<char> = source[head.start..head.end].chars().collect();
     let (corners, mut alignments) = border(&top, '-')?;
@@ -358,7 +358,7 @@ fn simple(
     source: &str,
     head: &TableLine,
     level: usize,
-    base: Base,
+    base: Base<'_>,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let dashes = line_after(source, head.next, level, base)?;
     let groups = dash_groups(&columns(source, &dashes, base))?;
@@ -472,7 +472,7 @@ fn simple_cells(
 
 /// The byte and the character at each column of `line` read past `base`,
 /// from its column 0 on: a tab fills the columns up to its next tab stop.
-fn columns(source: &str, line: &TableLine, base: Base) -> Vec<(usize, char)> {
+fn columns(source: &str, line: &TableLine, base: Base<'_>) -> Vec<(usize, char)> {
     let read = line_from(source, line.line_start, base);
     let text = &source[read.start..line.end];
     let split = read.start - usize::from(read.column > 0);

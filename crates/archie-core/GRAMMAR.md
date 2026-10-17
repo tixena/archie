@@ -859,15 +859,20 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   parse, `ParseOptions::strict()`, which sets `OnExtensionError::Fail`, fails with
   that error instead.
 - `Context` holds the `source`, whether the parse is `strict`, the `column` the
-  offered construct's first line starts at (counted from its cell's line in a grid
-  cell), the `depth`, how many list items, markdown blocks and table cells hold the
-  construct, and the `lines` of the grid cell it lies in, or `None` outside grid
-  cells. `context.markdown::<T>(range)` reads a range of the source as a markdown
-  block with the extensions `T`, one container deeper, each line with at most `column`
-  columns of its leading white space left out and its tab stops counted from `column`,
-  as in a code block's value: a tab moves to the next multiple of 4 past it. In a grid
-  cell it reads only the parts of the range on the cell's lines, and its tab stops
-  count from `column` there too. Its spans count from the start of the source.
+  offered construct's first line starts at, the `depth`, how many list items, markdown
+  blocks and table cells hold the construct, its `frame`, and the `lines` of the grid
+  cell it lies in, or `None` outside grid cells. The `frame` holds the column each
+  markdown block around the construct reads its lines past, outermost first, and only
+  archie reads it. The `column` counts in the frame of the markdown block that holds
+  the construct: on its line, or its cell's line in a grid cell, read past each column
+  of the frame in turn, its tab stops restarting where each ends. A grid cell's lines
+  start a frame of their own. `context.markdown::<T>(range)` reads a range of the
+  source as a markdown block with the extensions `T`, one container deeper, each line
+  read past the frame, then with at most `column` columns of its leading white space
+  left out and its tab stops counted from `column`, as in a code block's value: a tab
+  moves to the next multiple of 4 past it. In a grid cell it reads only the parts of
+  the range on the cell's lines, and its tab stops count from `column` there too. Its
+  spans count from the start of the source.
 - No node that the block cap of list items, markdown blocks and table cells holds is
   offered, so a markdown block an extension reads with `context.markdown` nests under
   the same cap as the file's own.

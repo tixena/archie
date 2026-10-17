@@ -13,12 +13,15 @@ pub struct Line {
     pub start: usize,
 }
 
-/// What each line is read past: at most `columns` columns of the white
-/// space that starts it. Its tab stops count from its column 0 when
-/// `restart` is set, or else from the start of the source line.
+/// What each line is read past: each column of `frame` in turn, its tab
+/// stops restarting where each ends, then at most `columns` columns of the
+/// white space left. Its tab stops count from its column 0 when `restart`
+/// is set, or else from where `frame` ends, the start of the source line
+/// when it is empty.
 #[derive(Clone, Copy, Default)]
-pub struct Base {
+pub struct Base<'frame> {
     pub columns: usize,
+    pub frame: &'frame [usize],
     pub restart: bool,
 }
 
@@ -50,16 +53,32 @@ pub fn line_at(source: &str, start: usize) -> Line {
     }
 }
 
-/// The line at `start`, read past `base`. A tab that `base.columns` falls
-/// inside is passed, and its columns past them are the line's first
+/// The line at `start`, read past `base`. A tab that a column of `base`
+/// falls inside is passed, and its columns past it are the line's first
 /// columns, before `start`.
-pub fn line_from(source: &str, start: usize, base: Base) -> Line {
-    let line = line_at(source, start);
-    let left_out = space_to(&source[line.start..line.end], 0, base.columns);
-    let origin = left_out.columns.min(base.columns);
+pub fn line_from(source: &str, start: usize, base: Base<'_>) -> Line {
+    let framed = base
+        .frame
+        .iter()
+        .fold(line_at(source, start), |line, &columns| {
+            past(source, line, columns, true)
+        });
+    past(source, framed, base.columns, base.restart)
+}
+
+/// `line` read past at most `columns` more columns of the white space at
+/// its start, its tab stops restarting there when `restart` is set.
+fn past(source: &str, line: Line, columns: usize, restart: bool) -> Line {
+    let left_out = space_to(
+        &source[line.start..line.end],
+        line.origin + line.column,
+        line.origin + columns,
+    );
+    let reached = line.column + left_out.columns;
+    let origin = reached.min(columns);
     Line {
-        column: left_out.columns - origin,
-        origin: if base.restart { 0 } else { origin },
+        column: reached - origin,
+        origin: if restart { 0 } else { line.origin + origin },
         start: line.start + left_out.bytes,
         ..line
     }
@@ -94,11 +113,11 @@ pub fn space_to(text: &str, column: usize, limit: usize) -> Space {
     }
 }
 
-/// The column that `text`, written from the start of its source line, ends
-/// at: a tab moves to the next multiple of 4, and any other character one
-/// column on.
-pub fn width(text: &str) -> usize {
-    text.chars().fold(0, |column, character| {
+/// The column that `text`, written from column `from` of its line, ends at:
+/// a tab moves to the next multiple of 4, and any other character one column
+/// on.
+pub fn width(text: &str, from: usize) -> usize {
+    text.chars().fold(from, |column, character| {
         if character == '\t' {
             next_stop(column)
         } else {

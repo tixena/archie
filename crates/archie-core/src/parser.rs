@@ -27,7 +27,7 @@ use serde::{Deserialize as _, Serialize as _};
 
 use crate::parser::ast::{Document, Kind, Mapping};
 use crate::parser::error::{ParseError, RebuildError};
-use crate::parser::extension::{Context, Extension, Markdown, With};
+use crate::parser::extension::{Context, Extension, Frame, Markdown, With};
 use crate::writer;
 
 /// What happens when an extension claims a construct and cannot read it.
@@ -155,6 +155,7 @@ where
     let context = Context {
         column: 0,
         depth: 0,
+        frame: Frame::NONE,
         lines: None,
         source,
         strict: options.on_extension_error == OnExtensionError::Fail,

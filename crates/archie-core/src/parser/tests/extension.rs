@@ -515,6 +515,23 @@ fn comment_depth(body: &MarkdownBlock<With<Comments>>) -> (usize, &MarkdownBlock
     (depth, inner)
 }
 
+/// The value of the code block in the first item of the markdown block
+/// that the first code block of `read` holds, and the outline of the
+/// markdown block it holds.
+fn inner_claimed(read: &Document<With<Plain>>) -> (String, Option<String>) {
+    let outer = code_blocks(&read.body)[0]
+        .kind
+        .0
+        .as_deref()
+        .and_then(first)
+        .unwrap();
+    let block = code_blocks(first_item(outer))[0];
+    (
+        block.value.clone(),
+        block.kind.0.as_deref().and_then(first).map(block_outline),
+    )
+}
+
 #[test]
 fn an_extension_turns_the_blocks_it_claims_into_its_own_typed_node() {
     let document = parse_with::<Comments>(SOURCE, &ParseOptions::default()).unwrap();
@@ -1002,6 +1019,57 @@ fn a_markdown_block_at_column_0_counts_its_tab_stops_from_the_start_of_the_line(
                   Text "36"
 "#
     );
+}
+
+#[test]
+fn a_markdown_block_in_a_markdown_block_reads_as_its_value_when_a_tab_comes_before_its_fence() {
+    let source = "  ````md\n  -\t```md\n          x\n      ```\n  ````\n";
+    let options = ParseOptions::default();
+    let document = parse_with::<Plain>(source, &options).unwrap();
+    let (value, markdown) = inner_claimed(&document);
+    assert_eq!(value, "    x");
+    assert_eq!(markdown, Some(block_outline(&parse(&value).unwrap().body)));
+    assert_eq!(
+        markdown.as_deref(),
+        Some("MarkdownBlock\n  Section\n    CodeBlock value=\"x\"\n")
+    );
+    let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+    let again = rebuild_with::<Plain>(&back, &options).unwrap();
+    assert_eq!(inner_claimed(&again), inner_claimed(&document));
+    let written = "`````md\n- ````md\n  ```\n  x\n  ```\n  ````\n`````\n";
+    assert_eq!(write(&document, &WriteOptions::default()).unwrap(), written);
+    assert_eq!(write(&again, &WriteOptions::default()).unwrap(), written);
+}
+
+#[test]
+fn a_markdown_block_in_a_markdown_block_reads_as_its_value_with_any_white_space_before_its_fence() {
+    let options = ParseOptions::default();
+    for column in 0..4 {
+        let pad = " ".repeat(column);
+        for gap in ["\t", " ", "  ", "   "] {
+            let source =
+                format!("{pad}````md\n{pad}-{gap}```md\n{pad}        x\n{pad}    ```\n{pad}````\n");
+            let document = parse_with::<Plain>(&source, &options).unwrap();
+            let (value, markdown) = inner_claimed(&document);
+            assert_eq!(
+                markdown,
+                Some(block_outline(&parse(&value).unwrap().body)),
+                "{source:?}"
+            );
+            let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+            let again = rebuild_with::<Plain>(&back, &options).unwrap();
+            assert_eq!(
+                inner_claimed(&again),
+                inner_claimed(&document),
+                "{source:?}"
+            );
+            assert_eq!(
+                write(&again, &WriteOptions::default()).unwrap(),
+                write(&document, &WriteOptions::default()).unwrap(),
+                "{source:?}"
+            );
+        }
+    }
 }
 
 #[test]
