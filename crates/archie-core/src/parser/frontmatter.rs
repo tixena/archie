@@ -9,7 +9,7 @@ use indexmap::map::Entry;
 use crate::parser::ast::{
     BrokenFrontmatter, Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value,
 };
-use crate::parser::cursor::{Cursor, Dropped};
+use crate::parser::cursor::{Cursor, Dropped, Undo};
 use crate::parser::error::ParseError;
 use crate::parser::line::{Line, line_at};
 use crate::parser::{toml, yaml};
@@ -140,6 +140,7 @@ pub fn caught<S, T, F>(
 ) -> Result<Result<T, ParseError>, Stop>
 where
     F: FnOnce(&mut Cursor<'_, S>),
+    S: Undo,
 {
     match read {
         Ok(value) => Ok(Ok(value)),

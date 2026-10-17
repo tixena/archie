@@ -800,7 +800,11 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   of its name. An alias that names a list or a mapping, as a key, drops its pair, as
   a key that is a list or a mapping does.
 - An alias copies the most recent anchor of its name before it: `a: &x 1`, `b: &x 2`,
-  `c: *x` is `{a: 1, b: 2, c: 2}`.
+  `c: *x` is `{a: 1, b: 2, c: 2}`. An anchor inside a dropped entry is forgotten with
+  it, so an anchor of its name before the entry is the most recent again:
+  `a: &x 1`, `b: [&x 2, @bad]`, `c: *x` is `{a: 1, c: 1}`, and `a: [&x 1, @bad]`,
+  `b: *x`, `c: 3` is `{c: 3}`, `b` dropped as an alias whose anchor is not defined
+  before it.
 - An alias inside the value its own anchor names drops the innermost key that holds
   it, with ``the alias `*A` lies inside the value its anchor names``, and so does an
   alias whose anchor is not defined before it, with

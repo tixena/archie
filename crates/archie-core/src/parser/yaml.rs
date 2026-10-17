@@ -140,15 +140,6 @@ impl Anchors {
         Err(Stop::Drop(ParseError::new(&message, span.clone())))
     }
 
-    /// Keeps a copy of `value` under `anchor`, written at `span`, once the
-    /// copy is charged.
-    fn keep(&mut self, anchor: String, value: &Value, span: &Range<usize>) -> Result<(), Stop> {
-        let (size, _) = measure(value, self.left());
-        self.charge(size, span)?;
-        let _: Option<Value> = self.named.insert(anchor, value.clone());
-        Ok(())
-    }
-
     /// What the anchors and aliases may still copy.
     const fn left(&self) -> Size {
         Size {
@@ -156,6 +147,22 @@ impl Anchors {
             values: COPY_CAP.saturating_sub(self.copied.values),
         }
     }
+
+    /// Makes `anchor` name `value`, or nothing, and gives the change that
+    /// undoes it.
+    fn set(&mut self, anchor: String, value: Option<Value>) -> Change {
+        let earlier = match value {
+            Some(named) => self.named.insert(anchor.clone(), named),
+            None => self.named.remove(&anchor),
+        };
+        Change { anchor, earlier }
+    }
+}
+
+/// A change to what an anchor names: the anchor, and what it named before.
+struct Change {
+    anchor: String,
+    earlier: Option<Value>,
 }
 
 /// The anchor and the tag of a node, at most one of each in either order,
@@ -227,6 +234,14 @@ struct State {
     failure: Option<ParseError>,
     /// Whether an entry of the frontmatter's own mapping reads.
     read: bool,
+}
+
+impl cursor::Undo for State {
+    type Change = Change;
+
+    fn undo(&mut self, change: Change) {
+        self.anchors.set(change.anchor, change.earlier);
+    }
 }
 
 /// How much a copy holds: its values, each list, mapping and scalar counting
@@ -1798,9 +1813,7 @@ fn propertied(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<
         None => None,
     };
     if let Some(anchor) = &properties.anchor {
-        let anchors = &mut cursor.state_mut().anchors;
-        let _: Option<Value> = anchors.named.remove(anchor);
-        anchors.open.push(anchor.clone());
+        open_anchor(cursor, anchor);
     }
     let read = if under {
         nested(cursor, context, properties.end, depth).inspect(|_| to_line_end(cursor))
@@ -1861,7 +1874,7 @@ fn finish_node(
     }
     let span = properties.span();
     if let Some(anchor) = properties.anchor {
-        cursor.state_mut().anchors.keep(anchor, &value, &span)?;
+        keep(cursor, anchor, &value, &span)?;
     }
     Ok(value)
 }
@@ -1961,7 +1974,7 @@ where
     };
     let at = properties.span();
     if let Some(anchor) = properties.anchor {
-        cursor.state_mut().anchors.keep(anchor, &node, &at)?;
+        keep(cursor, anchor, &node, &at)?;
     }
     Ok(text)
 }
@@ -2075,6 +2088,35 @@ fn typed(name: &str, text: &str) -> Option<ScalarValue> {
 fn misfit(written: &str, name: &str, span: Range<usize>) -> ParseError {
     let message = format!("{written} is not a value of the tag `!!{name}`");
     ParseError::new(&message, span)
+}
+
+/// Keeps a copy of `value` under `anchor`, written at `span`, once the copy
+/// is charged.
+fn keep(
+    cursor: &mut Cursor<'_>,
+    anchor: String,
+    value: &Value,
+    span: &Range<usize>,
+) -> Result<(), Stop> {
+    let anchors = &mut cursor.state_mut().anchors;
+    let (size, _) = measure(value, anchors.left());
+    anchors.charge(size, span)?;
+    set_anchor(cursor, anchor, Some(value.clone()));
+    Ok(())
+}
+
+/// Opens `anchor` while the value it is on is read: it names nothing until
+/// that value is kept.
+fn open_anchor(cursor: &mut Cursor<'_>, anchor: &str) {
+    set_anchor(cursor, anchor.to_owned(), None);
+    cursor.state_mut().anchors.open.push(anchor.to_owned());
+}
+
+/// Makes `anchor` name `value`, or nothing, until a dropped entry it is set
+/// inside undoes it.
+fn set_anchor(cursor: &mut Cursor<'_>, anchor: String, value: Option<Value>) {
+    let change = cursor.state_mut().anchors.set(anchor, value);
+    cursor.changed(change);
 }
 
 /// A copy of the value the alias at the cursor names, inside `open` values,

@@ -3,7 +3,7 @@ use crate::parser::ast::{BrokenFrontmatter, Document, Frontmatter, FrontmatterFo
 use crate::parser::error::ParseError;
 use crate::parser::extension::Plain;
 use crate::parser::frontmatter::VALUE_CAP;
-use crate::parser::{ParseOptions, parse, parse_with};
+use crate::parser::{ParseOptions, parse, parse_with, yaml};
 use crate::writer::{WriteOptions, write};
 
 /// The outline of a YAML frontmatter that holds no pair, before an empty body.
@@ -1892,6 +1892,103 @@ fn an_entry_dropped_inside_a_dropped_entry_or_a_lookahead_is_not_listed_again() 
     assert_eq!(
         kept_and_dropped("---\n{x: !point 1}: 3\nb: 2\n---\n"),
         one_dropped(&["b"], key, "{x: !point 1}: 3")
+    );
+}
+
+#[test]
+fn an_anchor_named_inside_a_dropped_yaml_entry_is_forgotten_with_it() {
+    let at = "a plain value cannot start with `@`; quote it";
+    let source = "---\na: [&x 1, @bad]\nb: *x\n---\n";
+    assert_eq!(broken(source).error.message, at);
+    let (_, dropped) = yaml::read(source, 4..source.len() - 4).unwrap();
+    let alias = source.find("*x").unwrap();
+    assert_eq!(dropped[1].error.span, alias..alias + 2);
+    let with_c = "---\na: [&x 1, @bad]\nb: *x\nc: 3\n---\n";
+    check(
+        with_c,
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=c
+        Scalar Integer 3
+  MarkdownBlock
+",
+    );
+    let undefined = "no anchor `&x` is defined before this alias";
+    assert_eq!(
+        kept_and_dropped(with_c),
+        (
+            vec!["c".to_owned()],
+            vec![
+                (at.to_owned(), "a: [&x 1, @bad]"),
+                (undefined.to_owned(), "b: *x")
+            ]
+        )
+    );
+}
+
+#[test]
+fn an_anchor_redefined_inside_a_dropped_yaml_entry_names_its_earlier_value_again() {
+    let source = "---\na: &x 1\nb: [&x 2, @bad]\nc: *x\n---\n";
+    check(
+        source,
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+      Pair key=c
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    let at = "a plain value cannot start with `@`; quote it";
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["a", "c"], at, "b: [&x 2, @bad]")
+    );
+}
+
+#[test]
+fn a_dropped_list_entry_flow_pair_or_pair_with_a_collection_key_forgets_its_anchors() {
+    check(
+        "---\na:\n- &x 1\n- [&x 2, @bad]\nb: *x\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Scalar Integer 1
+      Pair key=b
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: {p: &x 1, q: [&x 2, *y], r: *x}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=p
+            Scalar Integer 1
+          Pair key=r
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    let key = "a key cannot be a list or a mapping";
+    let undefined = "no anchor `&x` is defined before this alias";
+    assert_eq!(
+        kept_and_dropped("---\n[&x 1]: 2\nb: *x\nc: 3\n---\n"),
+        (
+            vec!["c".to_owned()],
+            vec![
+                (key.to_owned(), "[&x 1]: 2"),
+                (undefined.to_owned(), "b: *x")
+            ]
+        )
     );
 }
 

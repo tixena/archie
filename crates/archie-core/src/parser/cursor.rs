@@ -1,5 +1,6 @@
 //! A byte cursor over one region of the source.
 
+use core::convert::Infallible;
 use core::ops::Range;
 
 use crate::parser::error::ParseError;
@@ -11,25 +12,56 @@ pub struct Dropped {
     pub span: Range<usize>,
 }
 
-/// Where an entry starts: the cursor's position, and how many drops were
-/// noted before it.
+/// Where an entry starts: the cursor's position, and how many notes were
+/// made before it.
 #[derive(Clone, Copy)]
 pub struct Mark {
     pub noted: usize,
     pub pos: usize,
 }
 
+/// What a reader noted: an entry or a key it dropped, or a change it made to
+/// its state.
+enum Note<C> {
+    Changed(C),
+    Dropped(Dropped),
+}
+
+/// The state a reader keeps while it reads: a dropped entry undoes each
+/// change made to it inside the entry.
+pub trait Undo {
+    /// A change to the state, holding what it replaced.
+    type Change;
+
+    fn undo(&mut self, change: Self::Change);
+}
+
+impl Undo for () {
+    type Change = Infallible;
+
+    fn undo(&mut self, change: Infallible) {
+        match change {}
+    }
+}
+
 /// A byte cursor, with the `state` a reader keeps while it reads.
-pub struct Cursor<'src, S = ()> {
-    /// Each entry and key a reader dropped, in the order it met them.
-    dropped: Vec<Dropped>,
+pub struct Cursor<'src, S = ()>
+where
+    S: Undo,
+{
     end: usize,
+    /// Each entry and key a reader dropped and each change it made to
+    /// `state`, in the order it made them.
+    notes: Vec<Note<S::Change>>,
     pos: usize,
     source: &'src str,
     state: S,
 }
 
-impl<'src, S> Cursor<'src, S> {
+impl<'src, S> Cursor<'src, S>
+where
+    S: Undo,
+{
     pub const fn at_end(&self) -> bool {
         self.pos >= self.end
     }
@@ -40,9 +72,16 @@ impl<'src, S> Cursor<'src, S> {
         }
     }
 
+    /// Notes `change`, made to the state, so that dropping the entry it is
+    /// made inside undoes it.
+    pub fn changed(&mut self, change: S::Change) {
+        self.notes.push(Note::Changed(change));
+    }
+
     /// Notes the drop of the entry from `mark` to the cursor, with `error`, in
-    /// place of the drops noted inside it. Its text ends with its last line
-    /// that holds more than white space or a comment.
+    /// place of the drops noted inside it, and undoes the changes to the state
+    /// made inside it. Its text ends with its last line that holds more than
+    /// white space or a comment.
     pub fn drop_since(&mut self, mark: Mark, error: ParseError) {
         self.forget_since(mark);
         let mut end = mark.pos;
@@ -59,7 +98,7 @@ impl<'src, S> Cursor<'src, S> {
             at += line.len();
         }
         let span = mark.pos..end;
-        self.dropped.push(Dropped { error, span });
+        self.notes.push(Note::Dropped(Dropped { error, span }));
     }
 
     pub fn eat(&mut self, byte: u8) -> bool {
@@ -90,9 +129,14 @@ impl<'src, S> Cursor<'src, S> {
         Err(ParseError::new(message, self.pos..self.pos).into())
     }
 
-    /// Forgets the drops noted since `mark`.
+    /// Forgets the drops noted since `mark`, and undoes the changes to the
+    /// state made since, the last first.
     pub fn forget_since(&mut self, mark: Mark) {
-        self.dropped.truncate(mark.noted);
+        while self.notes.len() > mark.noted {
+            if let Some(Note::Changed(change)) = self.notes.pop() {
+                self.state.undo(change);
+            }
+        }
     }
 
     /// The character written as `digits` hexadecimal digits at the cursor.
@@ -107,20 +151,26 @@ impl<'src, S> Cursor<'src, S> {
     }
 
     pub fn into_dropped(self) -> Vec<Dropped> {
-        self.dropped
+        self.notes
+            .into_iter()
+            .filter_map(|note| match note {
+                Note::Changed(_) => None,
+                Note::Dropped(dropped) => Some(dropped),
+            })
+            .collect()
     }
 
     pub const fn mark(&self) -> Mark {
         Mark {
-            noted: self.dropped.len(),
+            noted: self.notes.len(),
             pos: self.pos,
         }
     }
 
     pub const fn new(source: &'src str, range: Range<usize>, state: S) -> Self {
         Self {
-            dropped: Vec::new(),
             end: range.end,
+            notes: Vec::new(),
             pos: range.start,
             source,
             state,
