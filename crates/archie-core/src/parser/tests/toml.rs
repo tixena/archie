@@ -600,6 +600,151 @@ Document
 }
 
 #[test]
+fn a_header_through_an_inline_table_writes_the_key_again() {
+    check(
+        "+++\na = {b = 1}\n\n[a.x]\ny = 1\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_through_an_array_written_with_equals_writes_the_key_again() {
+    check(
+        "+++\na = [{b = 1}]\n\n[a.x]\ny = 1\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_through_an_inline_table_under_a_header_writes_the_key_again() {
+    check(
+        "+++\n[p]\na = {x = 1}\n\n[p.a.b]\ny = 1\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=p repeats=1
+        Mapping
+          Pair key=a repeats=1
+            Sequence
+              Mapping
+                Pair key=x
+                  Scalar Integer 1
+              Mapping
+                Pair key=b
+                  Mapping
+                    Pair key=y
+                      Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn an_array_header_through_an_inline_table_writes_the_key_again() {
+    check(
+        "+++\na = {b = 1}\n\n[[a.x]]\ny = 1\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Sequence
+                Mapping
+                  Pair key=y
+                    Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_opens_a_sub_table_of_a_table_a_header_made() {
+    check(
+        "+++\n[a]\nb = 1\n\n[a.x]\ny = 1\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Mapping
+          Pair key=b
+            Scalar Integer 1
+          Pair key=x
+            Mapping
+              Pair key=y
+                Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_opens_a_sub_table_of_a_table_a_dotted_key_made() {
+    check(
+        r#"+++
+[fruit]
+apple.color = "red"
+
+[fruit.apple.texture]
+smooth = true
++++
+"#,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=fruit repeats=1
+        Mapping
+          Pair key=apple repeats=1
+            Mapping
+              Pair key=color
+                Scalar String "red"
+              Pair key=texture
+                Mapping
+                  Pair key=smooth
+                    Scalar Boolean true
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
 fn a_header_after_an_inline_table_writes_the_key_again() {
     check(
         "+++\na = {b = 1}\n\n[a]\nc = 2\n+++\n",

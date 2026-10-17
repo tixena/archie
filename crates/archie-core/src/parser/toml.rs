@@ -19,8 +19,8 @@ use crate::parser::scalar;
 type Part = (String, Range<usize>);
 
 /// The tables a dotted key or a header made, by key, each with those made
-/// inside it. A dotted key goes on into them; a key whose value was written
-/// with `=` is written again.
+/// inside it. A dotted key or a header goes on into them; a key whose value
+/// was written with `=` is written again.
 #[derive(Default)]
 struct Made(HashMap<String, Self>);
 
@@ -40,7 +40,7 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             break;
         }
         if cursor.peek() == Some(b'[') {
-            current = header(&mut cursor, &mut root, &mut implicit)?;
+            current = header(&mut cursor, &mut root, &mut implicit, &made)?;
             make(&mut made, &current);
         } else {
             let table = table_at(&mut root, &current);
@@ -55,11 +55,14 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
 
 /// Reads a `[a.b]` or `[[a.b]]` header, opens the table it names and returns
 /// its path. A table written again follows the repeated-key rule; a table
-/// made only by a deeper header takes the pairs of its own header.
+/// made only by a deeper header takes the pairs of its own header. Before the
+/// last part, the path goes on into the tables of `made`; any other value is
+/// the key written again.
 fn header(
     cursor: &mut Cursor<'_>,
     root: &mut IndexMap<String, Pair>,
     implicit: &mut Vec<Vec<String>>,
+    made: &Made,
 ) -> Result<Vec<String>, ParseError> {
     let start = cursor.pos();
     cursor.bump();
@@ -80,9 +83,11 @@ fn header(
         .map(|(name, _)| name)
         .collect();
     let mut table = root;
+    let mut tables = Some(made);
     for (depth, name) in path.iter().enumerate() {
         let prefix = &path[..=depth];
         let named = depth + 1 == path.len();
+        let inside = tables.and_then(|level| level.0.get(name));
         let pair = match table.entry(name.clone()) {
             Entry::Vacant(slot) => {
                 if !named {
@@ -108,17 +113,21 @@ fn header(
                 if named {
                     let adds = !array
                         && matches!(pair.value, Value::Mapping(_))
-                        && implicit.iter().any(|made| made.as_slice() == prefix);
+                        && implicit.iter().any(|other| other.as_slice() == prefix);
                     if adds {
-                        implicit.retain(|made| made.as_slice() != prefix);
+                        implicit.retain(|other| other.as_slice() != prefix);
                     } else {
-                        implicit.retain(|made| !made.starts_with(prefix));
+                        implicit.retain(|other| !other.starts_with(prefix));
                         append(&mut pair.value, mapping_at(span.end));
                     }
+                }
+                if !named && inside.is_none() {
+                    append(&mut pair.value, mapping_at(span.end));
                 }
                 pair
             }
         };
+        tables = inside;
         table = &mut table_of(&mut pair.value).pairs;
     }
     Ok(path)
