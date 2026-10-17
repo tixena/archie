@@ -9,7 +9,8 @@ use crate::parser::ast::{NonFinite, ScalarValue};
 const TOML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8), ("0b", 2)];
 const YAML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8)];
 
-/// The value of an unquoted TOML token, or `None` when it is not one.
+/// The value of an unquoted TOML token, or `None` when it is not one. An
+/// integer that 64 bits cannot hold is its text as written.
 pub fn toml(text: &str) -> Option<ScalarValue> {
     match text {
         "true" => Some(ScalarValue::Boolean(true)),
@@ -23,6 +24,10 @@ pub fn toml(text: &str) -> Option<ScalarValue> {
                 .or_else(|| date(text).map(ScalarValue::Date))
                 .or_else(|| time(text).map(ScalarValue::Time))
                 .or_else(|| integer(number.as_deref()?, TOML_RADIXES).map(ScalarValue::Integer))
+                .or_else(|| {
+                    is_oversized_toml_integer(number.as_deref()?)
+                        .then(|| ScalarValue::String(text.to_owned()))
+                })
                 .or_else(|| float(number.as_deref()?).map(finite_or_infinite))
         }
     }
@@ -52,14 +57,26 @@ pub fn yaml(text: &str) -> ScalarValue {
 /// Whether `text` is written as a YAML integer, decimal with an optional sign
 /// or `0o` or `0x` and digits in that base, that 64 bits cannot hold.
 pub fn is_oversized_integer(text: &str) -> bool {
+    is_oversized(text, YAML_RADIXES)
+}
+
+/// [`is_oversized_integer`] for a TOML number with its underscores dropped,
+/// which may also be `0b` and binary digits.
+fn is_oversized_toml_integer(number: &str) -> bool {
+    is_oversized(number, TOML_RADIXES)
+}
+
+/// Whether `text` is decimal digits with an optional sign, or a prefix of
+/// `radixes` and digits in its base, that 64 bits cannot hold.
+fn is_oversized(text: &str, radixes: &[(&str, u32)]) -> bool {
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
-    let (digits, radix) = YAML_RADIXES
+    let (digits, radix) = radixes
         .iter()
         .find_map(|&(prefix, radix)| Some((text.strip_prefix(prefix)?, radix)))
         .unwrap_or((unsigned, 10));
     !digits.is_empty()
         && digits.chars().all(|digit| digit.is_digit(radix))
-        && integer(text, YAML_RADIXES).is_none()
+        && integer(text, radixes).is_none()
 }
 
 /// Decimal digits with an optional sign, of any size, read as a float.

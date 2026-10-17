@@ -245,6 +245,16 @@ fn a_frontmatter_that_is_not_a_mapping_is_refused() {
         not_a_mapping("\"a\n  b\"")
     );
     assert_eq!(failed("---\n- a\n---\n"), not_a_mapping("- a"));
+    for digits in [
+        "99999999999999999999",
+        "- 99999999999999999999",
+        "[99999999999999999999]",
+    ] {
+        assert_eq!(
+            failed(&format!("---\n{digits}\n---\n")),
+            not_a_mapping(digits)
+        );
+    }
     assert_eq!(
         refusal("---\n{a: 1}\nb: 2\n---\n"),
         (
@@ -260,14 +270,6 @@ fn a_frontmatter_that_holds_one_value_or_one_list_that_does_not_read_is_not_a_ma
     for (source, at) in [
         ("---\nabc\n---\n", "abc"),
         ("---\n!!int abc\n---\n", "!!int abc"),
-        (
-            "---\n- 99999999999999999999\n---\n",
-            "- 99999999999999999999",
-        ),
-        (
-            "---\n[99999999999999999999]\n---\n",
-            "[99999999999999999999]",
-        ),
         ("---\n- !!int abc\n---\n", "- !!int abc"),
         ("---\n[!!int abc]\n---\n", "[!!int abc]"),
         ("---\n!!int abc\n\nb: 1\n\n---\n", "!!int abc\n\nb: 1"),
@@ -374,33 +376,21 @@ fn a_toml_time_or_offset_out_of_range_is_refused() {
 
 #[test]
 fn a_toml_number_with_a_leading_zero_or_a_misplaced_underscore_is_refused() {
-    for written in ["01", "1__0", "_1", "1_", "0x_ff", "01.5"] {
+    for written in [
+        "01",
+        "1__0",
+        "_1",
+        "1_",
+        "0x_ff",
+        "01.5",
+        "099999999999999999999",
+        "0x_ffffffffffffffffff",
+    ] {
         assert_eq!(
             failed(&format!("+++\na = {written}\n+++\n")),
             named(&format!("`{written}` is not a value"), written)
         );
     }
-}
-
-#[test]
-fn a_yaml_integer_too_large_for_64_bits_is_refused() {
-    for written in [
-        "99999999999999999999",
-        "-99999999999999999999",
-        "0xffffffffffffffffff",
-    ] {
-        assert_eq!(
-            failed(&format!("---\nbig: {written}\n---\n")),
-            named(
-                &format!("`{written}` is an integer too large for 64 bits"),
-                written
-            )
-        );
-    }
-    assert_eq!(
-        failed("---\n99999999999999999999\n---\n"),
-        named("the frontmatter must be a mapping", "99999999999999999999")
-    );
 }
 
 #[test]

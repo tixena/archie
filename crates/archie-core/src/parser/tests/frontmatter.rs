@@ -428,3 +428,156 @@ fn a_mapping_whose_every_pair_is_dropped_is_empty_at_its_first_pair() {
     let at = root.find('[').unwrap();
     assert_eq!(mapping.span, at..at);
 }
+
+#[test]
+fn a_yaml_integer_too_large_for_64_bits_is_the_text_of_its_digits() {
+    let source = "---\nn: 99999999999999999999\n---\n";
+    check_spans(
+        source,
+        &[
+            ("Document", source),
+            (
+                "Frontmatter format=Yaml",
+                "---\nn: 99999999999999999999\n---",
+            ),
+            ("Mapping", "n: 99999999999999999999"),
+            ("Pair key=n", "n: 99999999999999999999"),
+            (
+                "Scalar String \"99999999999999999999\"",
+                "99999999999999999999",
+            ),
+            ("MarkdownBlock", ""),
+        ],
+    );
+    check(
+        "---\nn: [1, 99999999999999999999]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=n
+        Sequence
+          Scalar Integer 1
+          Scalar String "99999999999999999999"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_yaml_integer_too_large_for_64_bits_is_its_text_as_written_wherever_it_stands() {
+    check(
+        "\
+---
+hex: 0xFFFFFFFFFFFFFFFFFF
+negative: -99999999999999999999
+under:
+  99999999999999999999
+entries:
+  - 99999999999999999999
+flow: {n: 99999999999999999999}
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=hex
+        Scalar String "0xFFFFFFFFFFFFFFFFFF"
+      Pair key=negative
+        Scalar String "-99999999999999999999"
+      Pair key=under
+        Scalar String "99999999999999999999"
+      Pair key=entries
+        Sequence
+          Scalar String "99999999999999999999"
+      Pair key=flow
+        Mapping
+          Pair key=n
+            Scalar String "99999999999999999999"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn digits_too_large_for_64_bits_under_an_int_tag_are_text_and_under_a_float_tag_a_float() {
+    check(
+        "\
+---
+int: !!int 99999999999999999999
+float: !!float 99999999999999999999
+text: !!str 99999999999999999999
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=int
+        Scalar String "99999999999999999999"
+      Pair key=float
+        Scalar Float 100000000000000000000
+      Pair key=text
+        Scalar String "99999999999999999999"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_toml_integer_too_large_for_64_bits_is_its_text_as_written() {
+    check(
+        "\
++++
+n = 99999999999999999999
+negative = -99999999999999999999
+underscores = 9_999_999_999_999_999_999
+hex = 0xFFFFFFFFFFFFFFFFFF
+binary = 0b11111111111111111111111111111111111111111111111111111111111111111
+list = [1, 99999999999999999999]
++++
+",
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=n
+        Scalar String "99999999999999999999"
+      Pair key=negative
+        Scalar String "-99999999999999999999"
+      Pair key=underscores
+        Scalar String "9_999_999_999_999_999_999"
+      Pair key=hex
+        Scalar String "0xFFFFFFFFFFFFFFFFFF"
+      Pair key=binary
+        Scalar String "0b11111111111111111111111111111111111111111111111111111111111111111"
+      Pair key=list
+        Sequence
+          Scalar Integer 1
+          Scalar String "99999999999999999999"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn an_integer_that_fits_64_bits_stays_an_integer_in_yaml_and_toml() {
+    let integers = |format: &str| {
+        format!(
+            "Document
+  Frontmatter format={format}
+    Mapping
+      Pair key=largest
+        Scalar Integer 9223372036854775807
+      Pair key=smallest
+        Scalar Integer -9223372036854775808
+  MarkdownBlock
+"
+        )
+    };
+    check(
+        "---\nlargest: 9223372036854775807\nsmallest: -9223372036854775808\n---\n",
+        &integers("Yaml"),
+    );
+    check(
+        "+++\nlargest = 9223372036854775807\nsmallest = -9223372036854775808\n+++\n",
+        &integers("Toml"),
+    );
+}

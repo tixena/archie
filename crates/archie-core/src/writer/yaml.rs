@@ -177,9 +177,9 @@ fn push_text(out: &mut String, text: &str, in_flow: bool) {
 
 /// Whether `text` written plain would read as something else: another type,
 /// a key, a comment, an indicator, a flow collection's end, or text without
-/// the spaces around it or its control characters; or would fail the file as
-/// an integer too large for 64 bits. Text in the form of a time of day is
-/// quoted as a time of day is, so a second write keeps it.
+/// the spaces around it or its control characters. Text in the form of a time
+/// of day is quoted as a time of day is, so a second write keeps it. Text of
+/// an integer too large for 64 bits is quoted too: archie reads one as text.
 fn needs_quotes(text: &str, in_flow: bool) -> bool {
     text.starts_with(INDICATORS)
         || text.starts_with(' ')

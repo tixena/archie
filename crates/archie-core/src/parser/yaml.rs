@@ -135,7 +135,7 @@ fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Range<usize>> {
     let read = if is_list {
         block_sequence(cursor, start - indent, indent, 0)
     } else {
-        inline_value(cursor, Context::Key(indent), 0, false)
+        inline_value(cursor, Context::Key(indent), 0)
             .and_then(|value| end_of_line(cursor).map(|()| value))
     };
     read.map_or_else(
@@ -284,14 +284,7 @@ fn explicit_entry(
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
     let depth = nest(open, start..start + 1)?;
-    let key = compact_value(
-        cursor,
-        start - indent,
-        indent,
-        Context::Key(indent),
-        depth,
-        false,
-    )?;
+    let key = compact_value(cursor, start - indent, indent, Context::Key(indent), depth)?;
     let key_end = key.span().end;
     let name = explicit_key(cursor, key);
     let value = if next_line(cursor) == Some(indent)
@@ -299,14 +292,7 @@ fn explicit_entry(
         && separated_at(cursor, indent + 1)
     {
         let line_start = cursor.pos();
-        compact_value(
-            cursor,
-            line_start,
-            indent,
-            Context::Key(indent),
-            depth,
-            true,
-        )?
+        compact_value(cursor, line_start, indent, Context::Key(indent), depth)?
     } else {
         null(key_end)
     };
@@ -337,7 +323,7 @@ where
     if !is_collection_key(cursor) {
         return text(cursor).map(Some);
     }
-    let _: Value = inline_value(cursor, context, open, true)?;
+    let _: Value = inline_value(cursor, context, open)?;
     Ok(None)
 }
 
@@ -364,9 +350,9 @@ fn indicated_value(
     cursor.skip_spaces();
     if at_line_end(cursor) {
         end_of_line(cursor)?;
-        return nested(cursor, Context::Key(indent), after, open, true);
+        return nested(cursor, Context::Key(indent), after, open);
     }
-    let value = inline_value(cursor, Context::Key(indent), open, true)?;
+    let value = inline_value(cursor, Context::Key(indent), open)?;
     end_of_line(cursor)?;
     Ok(value)
 }
@@ -419,7 +405,7 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
             }
             // Reading the key checks the indentation of its lines.
             Some(b'[' | b'{') => {
-                let is_key = inline_value(cursor, Context::Flow(None), open, true).is_ok();
+                let is_key = inline_value(cursor, Context::Flow(None), open).is_ok();
                 cursor.skip_spaces();
                 is_key && cursor.peek() == Some(b':') && separated_at(cursor, 1)
             }
@@ -438,14 +424,12 @@ fn is_explicit_key(cursor: &Cursor<'_>) -> bool {
 
 /// The value of a key, a list entry or a tag with nothing after it on its
 /// line, inside `open` values: what the lines indented more than it hold, a
-/// list at a key's own column, or null. A plain scalar there is read as
-/// `plain` reads it with `check_size`.
+/// list at a key's own column, or null.
 fn nested(
     cursor: &mut Cursor<'_>,
     context: Context,
     null_at: usize,
     open: usize,
-    check_size: bool,
 ) -> Result<Value, ParseError> {
     let Some((found, is_list)) = under(cursor, context) else {
         return Ok(null(null_at));
@@ -465,7 +449,7 @@ fn nested(
     }
     // A tab after the indentation separates a flow node from it.
     cursor.skip_spaces();
-    line_value(cursor, context, open, check_size)
+    line_value(cursor, context, open)
 }
 
 /// The indentation of the line that holds the value of a key, a list entry
@@ -523,7 +507,6 @@ fn block_sequence(
             indent,
             Context::Entry(indent),
             depth,
-            true,
         )?);
         let Some(found) = next_line(cursor) else {
             break;
@@ -549,15 +532,13 @@ fn block_sequence(
 /// The value after the `-`, `?` or `:` at column `indent` of the line
 /// starting at `line_start`, written in `context` inside `open` values. A `-`
 /// after it starts a list at its own column, and a `key:` or a `?` there a
-/// mapping, unless a tab comes before them: a tab is never indentation. A
-/// plain scalar is read as `plain` reads it with `check_size`.
+/// mapping, unless a tab comes before them: a tab is never indentation.
 fn compact_value(
     cursor: &mut Cursor<'_>,
     line_start: usize,
     indent: usize,
     context: Context,
     open: usize,
-    check_size: bool,
 ) -> Result<Value, ParseError> {
     cursor.set_pos(line_start + indent + 1);
     let after_indicator = cursor.pos();
@@ -566,7 +547,7 @@ fn compact_value(
     let column = at - line_start;
     if at_line_end(cursor) {
         end_of_line(cursor)?;
-        return nested(cursor, context, after_indicator, open, check_size);
+        return nested(cursor, context, after_indicator, open);
     }
     let indented = !cursor.slice(after_indicator..at).contains('\t');
     if indented && is_dash(cursor, 0) {
@@ -577,19 +558,13 @@ fn compact_value(
         let depth = nest(open, at..at + 1)?;
         return Ok(Value::Mapping(entry_mapping(cursor, column, depth)?));
     }
-    line_value(cursor, context, open, check_size)
+    line_value(cursor, context, open)
 }
 
 /// The value that starts a line of a block or follows its `-`, `?` or `:`,
-/// inside `open` values, up to the end of that line. A plain scalar is read
-/// as `plain` reads it with `check_size`.
-fn line_value(
-    cursor: &mut Cursor<'_>,
-    context: Context,
-    open: usize,
-    check_size: bool,
-) -> Result<Value, ParseError> {
-    let value = inline_value(cursor, context, open, check_size)?;
+/// inside `open` values, up to the end of that line.
+fn line_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, ParseError> {
+    let value = inline_value(cursor, context, open)?;
     end_of_line(cursor)?;
     Ok(value)
 }
@@ -597,13 +572,11 @@ fn line_value(
 /// A value that starts at the cursor, inside `open` values. It ends on its
 /// own line, except a flow collection, which may run over several, and a
 /// block scalar, which takes the lines under it; either way the cursor stops
-/// after its last text. A plain scalar is read as `plain` reads it with
-/// `check_size`.
+/// after its last text.
 fn inline_value(
     cursor: &mut Cursor<'_>,
     context: Context,
     open: usize,
-    check_size: bool,
 ) -> Result<Value, ParseError> {
     let start = cursor.pos();
     match cursor.peek() {
@@ -620,11 +593,11 @@ fn inline_value(
         }
         Some(b'|' | b'>') => match context {
             Context::Entry(indent) | Context::Key(indent) => block_scalar(cursor, indent),
-            Context::Flow(_) => plain(cursor, context, check_size),
+            Context::Flow(_) => plain(cursor, context),
         },
         Some(b'!') => tagged(cursor, context, open),
         Some(b'&' | b'*') => anchor(cursor),
-        Some(_) | None => plain(cursor, context, check_size),
+        Some(_) | None => plain(cursor, context),
     }
 }
 
@@ -669,7 +642,7 @@ fn flow_item(
 ) -> Result<Value, ParseError> {
     let start = cursor.pos();
     if is_collection_key(cursor) {
-        let item = inline_value(cursor, Context::Flow(column), open, true);
+        let item = inline_value(cursor, Context::Flow(column), open);
         if item.is_err() || !colon_follows(cursor) {
             return item;
         }
@@ -678,7 +651,7 @@ fn flow_item(
     if is_flow_pair(cursor) {
         return one_pair(cursor, column, open, start, true);
     }
-    inline_value(cursor, Context::Flow(column), open, true)
+    inline_value(cursor, Context::Flow(column), open)
 }
 
 /// The mapping of the one pair of a flow list that starts at `start`, inside
@@ -785,7 +758,7 @@ fn flow_pair(
         if matches!(cursor.peek(), Some(b',' | b'}' | b']')) {
             null(after_colon)
         } else {
-            inline_value(cursor, Context::Flow(column), open, true)?
+            inline_value(cursor, Context::Flow(column), open)?
         }
     } else {
         null(key_end)
@@ -917,10 +890,8 @@ fn skip_flow_space(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<(),
 /// An unquoted scalar: the rest of the line up to a comment, or inside a
 /// flow collection up to the next `,`, `[`, `]`, `{` or `}`. A line that
 /// runs to its end goes on over the lines below it that are indented more
-/// than its key or `-`. With `check_size`, an integer too large for 64 bits
-/// fails the file; a tag's value, an explicit key and `lone_value`'s probe go
-/// unchecked.
-fn plain(cursor: &mut Cursor<'_>, context: Context, check_size: bool) -> Result<Value, ParseError> {
+/// than its key or `-`.
+fn plain(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
     no_indicator(cursor, matches!(context, Context::Flow(_)), "value")?;
     let start = cursor.pos();
     let line = cursor.rest_of_line();
@@ -937,10 +908,6 @@ fn plain(cursor: &mut Cursor<'_>, context: Context, check_size: bool) -> Result<
     };
     cursor.set_pos(end);
     let written = folded(cursor.slice(start..end));
-    if check_size && scalar::is_oversized_integer(&written) {
-        let message = format!("`{written}` is an integer too large for 64 bits");
-        return Err(ParseError::new(&message, start..end));
-    }
     Ok(Value::Scalar(Scalar {
         span: start..end,
         value: scalar::yaml(&written),
@@ -1251,18 +1218,18 @@ fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Valu
             if at_line_end(cursor) {
                 end_of_line(cursor)?;
                 let depth = depth_under(cursor, context, &tag, open)?;
-                let block = nested(cursor, context, tag.span.end, depth, false)?;
+                let block = nested(cursor, context, tag.span.end, depth)?;
                 cursor.set_pos(block.span().end);
                 block
             } else {
                 let depth = tagged_depth(cursor, &tag, open)?;
-                inline_value(cursor, context, depth, false)?
+                inline_value(cursor, context, depth)?
             }
         }
         Context::Flow(column) => {
             skip_flow_space(cursor, column)?;
             let depth = tagged_depth(cursor, &tag, open)?;
-            inline_value(cursor, context, depth, false)?
+            inline_value(cursor, context, depth)?
         }
     };
     retag(cursor, &tag, value)
@@ -1414,6 +1381,9 @@ fn typed(name: &str, text: &str) -> Option<ScalarValue> {
     match (name, scalar::yaml(text)) {
         ("str", _) => Some(ScalarValue::String(text.to_owned())),
         ("float", ScalarValue::Integer(_) | ScalarValue::String(_)) => scalar::decimal_float(text),
+        ("int", oversized @ ScalarValue::String(_)) if scalar::is_oversized_integer(text) => {
+            Some(oversized)
+        }
         ("bool", fitting @ ScalarValue::Boolean(_))
         | ("float", fitting @ (ScalarValue::Float(_) | ScalarValue::NonFinite(_)))
         | ("int", fitting @ ScalarValue::Integer(_))

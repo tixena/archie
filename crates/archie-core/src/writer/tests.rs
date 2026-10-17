@@ -1454,6 +1454,20 @@ fn text_of_an_integer_too_large_for_64_bits_is_written_into_yaml_quoted_and_read
 }
 
 #[test]
+fn an_integer_too_large_for_64_bits_read_from_either_format_is_written_as_quoted_text() {
+    let yaml = "---\nn: 99999999999999999999\n---\n";
+    let toml_source = "+++\nn = 99999999999999999999\n+++\n";
+    for source in [yaml, toml_source] {
+        let yaml_text = written(source);
+        assert_eq!(yaml_text, "---\nn: \"99999999999999999999\"\n---\n");
+        assert_eq!(mapping(&yaml_text), mapping(source));
+        let toml_text = toml(source);
+        assert_eq!(toml_text, "+++\nn = \"99999999999999999999\"\n+++\n");
+        assert_eq!(mapping(&toml_text), mapping(source));
+    }
+}
+
+#[test]
 fn toml_quotes_all_text_and_puts_tables_after_the_plain_keys() {
     let source = "---
 title: Notes

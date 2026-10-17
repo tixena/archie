@@ -492,7 +492,7 @@ A value's type comes from how it is written:
 | `07:32:00`, optionally with a fraction such as `.250` | Time |
 | A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | DateTime |
 | A date, then `T`, `t` or one space, then a time, with no offset | LocalDateTime |
-| An optional sign, then `0` or a digit from 1 to 9 followed by any digits; or, with no sign, `0x`, `0o` or `0b` and digits in that base. An underscore may stand between two digits, but not right after `0x`, `0o` or `0b`: `0`, `1_000` and `0xff_ff` are integers, and `01`, `1__0`, `_1`, `1_` and `0x_ff` are not values | Integer, 64 bits |
+| An optional sign, then `0` or a digit from 1 to 9 followed by any digits; or, with no sign, `0x`, `0o` or `0b` and digits in that base. An underscore may stand between two digits, but not right after `0x`, `0o` or `0b`: `0`, `1_000` and `0xff_ff` are integers, and `01`, `1__0`, `_1`, `1_` and `0x_ff` are not values. An integer that does not fit 64 bits is the String of its text as written, underscores and prefix kept, such as `"9_999_999_999_999_999_999"`, and is written back as quoted text | Integer, 64 bits; String when it does not fit |
 | A whole part written as a decimal integer, with its optional sign, then a fraction of digits, an exponent or both. The exponent is `e` or `E`, an optional sign and digits, which may start with zeros. An underscore may stand between two digits of the whole part, of the fraction or of the exponent: `0.5`, `1e02` and `1e0_1` are floats, and `01.5` is not a value | Float, finite |
 | `inf` and `nan`, with an optional sign; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 
@@ -751,7 +751,9 @@ line under a tag that ends its line.
   `!!timestamp` reads a Date, a DateTime or a LocalDateTime. `!!float` reads a Float
   or a NonFinite, and also reads decimal digits of any size with an optional sign, so
   `!!float 1` is the Float `1` and `!!float 99999999999999999999` is the Float
-  `1e20`. `!!map` and `!!seq` only check that the value is a mapping or a list.
+  `1e20`. `!!int 99999999999999999999` is the String `"99999999999999999999"`, as
+  the same digits are untagged. `!!map` and `!!seq` only check that the value is a
+  mapping or a list.
 - A value that does not fit its tag fails the file, as
   ``"`abc` is not a value of the tag `!!int`"``, or
   ``"a list is not a value of the tag `!!map`"``.
@@ -771,7 +773,7 @@ A `PLAIN` value's type comes from how it is written:
 |---|---|
 | Nothing, `~`, `null`, `Null`, `NULL` | Null |
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
-| An optional sign and digits; or `0x`, `0o` and digits in that base. A decimal, octal or hexadecimal integer that does not fit 64 bits fails the file, as ``"`99999999999999999999` is an integer too large for 64 bits"`` | Integer, 64 bits |
+| An optional sign and digits; or `0x`, `0o` and digits in that base. A decimal, octal or hexadecimal integer that does not fit 64 bits is the String of its text as written, such as `"0xFFFFFFFFFFFFFFFFFF"`, and is written back as quoted text | Integer, 64 bits; String when it does not fit |
 | An optional sign; then digits, a dot and optional digits, or a dot and digits, or digits alone when an exponent follows; then an optional exponent: `e` or `E`, an optional sign and digits. `.5`, `5.`, `-.5e3` and `1e3` are floats, and `.` is a string | Float, finite |
 | `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 | `2026-10-10`, when that day exists in the calendar | Date |
@@ -1069,6 +1071,8 @@ with the text it reads from and the text it writes.
    values, and so does a key that a dotted key or a header goes through after its value
    was written with `=`, or a table a header names after a header or a dotted key made
    it. TOML refuses each of them.
+2. An integer that does not fit 64 bits is the String of its text as written. TOML
+   refuses it.
 
 ### From YAML
 
