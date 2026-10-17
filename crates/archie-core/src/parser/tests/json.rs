@@ -6,11 +6,12 @@ use super::blocks::{nested_grid_tables, nested_markdown_blocks};
 use super::extension::Comments;
 use super::on_two_megabytes;
 use crate::parser::ast::{
-    Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
+    Args, Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
     Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock,
     NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Strong, Table, TableCell,
     TableRow, Text, ThematicBreak, Value,
 };
+use crate::parser::error::RebuildError;
 use crate::parser::extension::{Plain, With};
 use crate::parser::inline::INLINE_CAP;
 use crate::parser::lexer::BLOCK_CAP;
@@ -137,6 +138,26 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
         Some(FrontmatterFormat::Yaml)
     );
     assert_eq!(rebuilt, written);
+}
+
+#[test]
+fn a_null_in_the_toml_args_of_a_code_block_fails_the_rebuild_naming_the_key() {
+    let options = ParseOptions::default();
+    let mut parsed = parse_with::<Plain>("```sh a = 1, b = 2\n```\n", &options).unwrap();
+    if let Block::CodeBlock(code) = &mut parsed.body.sections[0].blocks[0]
+        && let Args::Toml(mapping) = &mut code.args
+    {
+        mapping.pairs["a"].value = Value::Scalar(Scalar {
+            span: 0..0,
+            value: ScalarValue::Null,
+        });
+    }
+    let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+    let rebuilt = rebuild_with::<Plain>(&back, &options);
+    assert!(
+        matches!(&rebuilt, Err(RebuildError::Write(error)) if error.key == "a"),
+        "{rebuilt:?}"
+    );
 }
 
 #[test]

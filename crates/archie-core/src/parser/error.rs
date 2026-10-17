@@ -1,8 +1,10 @@
-//! The error a document fails to parse with.
+//! The errors a document fails to parse or to be rebuilt with.
 
 use core::ops::Range;
 
 use thiserror::Error;
+
+use crate::writer::WriteError;
 
 /// Why a document could not be parsed, and where.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -21,4 +23,15 @@ impl ParseError {
             span,
         }
     }
+}
+
+/// Why a stored tree could not be built again: it could not be written, or
+/// the written text could not be parsed.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum RebuildError {
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+    #[error(transparent)]
+    Write(#[from] WriteError),
 }

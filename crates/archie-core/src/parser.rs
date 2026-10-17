@@ -26,7 +26,7 @@ use serde::ser::Error as _;
 use serde::{Deserialize as _, Serialize as _};
 
 use crate::parser::ast::{Document, Kind, Mapping};
-use crate::parser::error::ParseError;
+use crate::parser::error::{ParseError, RebuildError};
 use crate::parser::extension::{Context, Extension, Markdown, With};
 use crate::writer;
 
@@ -92,16 +92,18 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the parse fails, as `parse_with` does.
+/// Returns `RebuildError::Write`, naming the key, when the `Toml` args of a
+/// code block hold a null, which TOML cannot hold, and `RebuildError::Parse`
+/// when the parse fails, as `parse_with` does.
 pub fn rebuild_with<E>(
     document: &Document<With<E>>,
     options: &ParseOptions,
-) -> Result<Document<With<E>>, ParseError>
+) -> Result<Document<With<E>>, RebuildError>
 where
     E: Extension,
 {
-    let text = writer::write_for_rebuild(document);
-    parse_with::<E>(&text, options)
+    let text = writer::write_for_rebuild(document)?;
+    Ok(parse_with::<E>(&text, options)?)
 }
 
 /// Reads a document from the JSON `to_json` writes, at any depth archie reads.

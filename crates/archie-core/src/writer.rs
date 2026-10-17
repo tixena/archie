@@ -10,6 +10,7 @@ use core::fmt::{self, Write as _};
 use core::{iter, mem};
 
 use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use thiserror::Error;
 
 use crate::parser::ast::{
     Args, Block, BlockQuote, CodeBlock, Document, FrontmatterFormat, Heading, Kind, Line, List,
@@ -50,7 +51,8 @@ impl Place {
 
 /// Why a document could not be written: the key, of the frontmatter or of a
 /// code block's TOML args, whose value the chosen syntax cannot hold.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
 #[non_exhaustive]
 pub struct WriteError {
     pub key: String,
@@ -670,7 +672,12 @@ where
 /// Writes `document` in archie's form, its frontmatter in the syntax it was
 /// read in, or in YAML when that syntax is TOML and the frontmatter holds a
 /// null, which TOML cannot hold.
-pub(crate) fn write_for_rebuild<E>(document: &Document<E>) -> String
+///
+/// # Errors
+///
+/// Returns an error naming the key when the `Toml` args of a code block hold
+/// a null.
+pub(crate) fn write_for_rebuild<E>(document: &Document<E>) -> Result<String, WriteError>
 where
     E: Extension,
 {
@@ -682,7 +689,8 @@ where
                 .unwrap_or_else(|_| yaml::frontmatter(&frontmatter.mapping)),
             FrontmatterFormat::Yaml => yaml::frontmatter(&frontmatter.mapping),
         });
-    with_body(frontmatter, document).0
+    let (text, error) = with_body(frontmatter, document);
+    error.map_or(Ok(text), Err)
 }
 
 /// `frontmatter`, the written frontmatter of `document`, then its body, and
