@@ -68,16 +68,20 @@ pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<Dropped
             }
             Err(Stop::Drop(error)) => {
                 outcome = Some(Ok(()));
-                (error, if is_header { skip_table } else { skip_pair })
+                (error, skip_pair)
             }
             Err(Stop::Fail(error)) => {
                 let _: &mut Result<(), ParseError> =
                     outcome.get_or_insert_with(|| Err(error.clone()));
-                (error, skip_statement)
+                (error, skip_broken_pair)
             }
         };
         cursor.set_pos(mark.pos);
-        skip(&mut cursor);
+        if is_header {
+            skip_table(&mut cursor);
+        } else {
+            skip(&mut cursor);
+        }
         cursor.drop_since(mark, error);
     }
     if let Some(Err(error)) = outcome {
@@ -348,7 +352,7 @@ fn skip_pair(cursor: &mut Cursor<'_>) {
             Some(b'[' | b'{') => depth += 1,
             Some(b']' | b'}') => depth -= 1,
             Some(b'"' | b'\'') => {
-                let _: Result<Value, ParseError> = quoted(cursor);
+                skip_string(cursor);
                 continue;
             }
             Some(b'#') => {
@@ -358,6 +362,99 @@ fn skip_pair(cursor: &mut Cursor<'_>) {
             Some(_) => {}
         }
         cursor.bump();
+    }
+}
+
+/// Moves the cursor from the start of a pair that does not read past its
+/// value, as [`skip_value`] does from its `=`, then on as [`skip_statement`]
+/// does.
+fn skip_broken_pair(cursor: &mut Cursor<'_>) {
+    loop {
+        match cursor.peek() {
+            None | Some(b'\n' | b'#') => break,
+            Some(b'=') => {
+                skip_value(cursor);
+                break;
+            }
+            Some(b'"' | b'\'') => skip_string(cursor),
+            Some(_) => cursor.bump(),
+        }
+    }
+    skip_statement(cursor);
+}
+
+/// Moves the cursor from the `=` of a pair that does not read to the line
+/// ending where every bracket after it is closed. When one never closes, it
+/// stops at the line ending before the first later line that starts a key
+/// followed by `=`. Strings and comments are passed over whole.
+fn skip_value(cursor: &mut Cursor<'_>) {
+    let mut depth = 0_usize;
+    let mut next_pair = None;
+    loop {
+        match cursor.peek() {
+            None => break,
+            Some(b'\n') if depth == 0 => return,
+            Some(b'\n') => {
+                let at = cursor.pos();
+                cursor.bump();
+                if next_pair.is_none() && starts_pair(cursor) {
+                    next_pair = Some(at);
+                }
+                continue;
+            }
+            Some(b'[' | b'{') => depth += 1,
+            Some(b']' | b'}') => depth = depth.saturating_sub(1),
+            Some(b'"' | b'\'') => {
+                skip_string(cursor);
+                continue;
+            }
+            Some(b'#') => {
+                skip_comment(cursor);
+                continue;
+            }
+            Some(_) => {}
+        }
+        cursor.bump();
+    }
+    if depth > 0
+        && let Some(at) = next_pair
+    {
+        cursor.set_pos(at);
+    }
+}
+
+/// Moves the cursor past the string at it to where [`quoted`] would close
+/// it, also past an escape that does not read. One left open runs to the end
+/// of its line, or for `"""` and `'''`, to the end.
+fn skip_string(cursor: &mut Cursor<'_>) {
+    let Some(quote) = cursor.peek() else {
+        return;
+    };
+    let multi = cursor.eat_str(if quote == b'"' { "\"\"\"" } else { "'''" });
+    if !multi {
+        cursor.bump();
+    }
+    loop {
+        match cursor.peek() {
+            None => return,
+            Some(b'\n') if !multi => return,
+            Some(b'\\') if quote == b'"' => {
+                cursor.bump();
+                if matches!(cursor.peek(), Some(b'"' | b'\\')) {
+                    cursor.bump();
+                }
+            }
+            Some(byte) if byte == quote => {
+                if !multi {
+                    cursor.bump();
+                    return;
+                }
+                if quotes(cursor, quote, &mut String::new()) {
+                    return;
+                }
+            }
+            Some(_) => cursor.bump(),
+        }
     }
 }
 
@@ -386,17 +483,28 @@ fn skip_statement(cursor: &mut Cursor<'_>) {
 /// Whether the line at the cursor starts a statement: after spaces and tabs,
 /// a `[`, or a key followed by `=`.
 fn starts_statement(cursor: &mut Cursor<'_>) -> bool {
+    cursor
+        .rest()
+        .trim_start_matches([' ', '\t'])
+        .starts_with('[')
+        || starts_pair(cursor)
+}
+
+/// Whether the line at the cursor starts, after spaces and tabs, with a key
+/// followed by `=`.
+fn starts_pair(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
     cursor.skip_spaces();
-    let starts =
-        cursor.peek() == Some(b'[') || key_path(cursor).is_ok_and(|_| cursor.peek() == Some(b'='));
+    let starts = key_path(cursor).is_ok_and(|_| cursor.peek() == Some(b'='));
     cursor.set_pos(start);
     starts
 }
 
 /// Moves the cursor from a header that is dropped past its table and the
 /// pairs in it: to the line ending before the next header, or to the end.
+/// The header's line is passed as text, as a broken one may leave a `[` open.
 fn skip_table(cursor: &mut Cursor<'_>) {
+    let _: &str = cursor.take_until(b"\n");
     loop {
         skip_pair(cursor);
         let rest = cursor.rest();

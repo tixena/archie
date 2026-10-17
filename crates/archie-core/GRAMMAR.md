@@ -492,14 +492,20 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   because TOML closes an inline table at its brace and an array at its bracket:
   `a = {b = 1}` then `a.c = 2` is `a = [{b = 1}, {c = 2}]`. A later dotted key or
   header through such a key goes on into the last mapping of its list.
-- A pair or a header that does not read is refused, up to the next line that starts
-  a key followed by `=`, or a `[`, after spaces or tabs. The pairs after a refused
-  header go into the table open before it. Strings are passed over whole, so a `"""`
-  or `'''` string left open runs to the end of the frontmatter, dropping the rest, and
-  a frontmatter that keeps no statement before it is broken. `title = Notes` then
+- A pair that does not read is refused with its whole value: from its `=` to the line
+  where every `[` and `{` after it is closed, then up to the next line that starts a
+  key followed by `=`, or a `[`, after spaces or tabs. A line inside the value is not a
+  statement. When a bracket never closes, the pair ends before the first later line
+  that starts a key followed by `=`; a line that starts with `[` does not end it. A
+  header that does not read is refused with its table and the pairs under it, up to
+  the next header. Strings and comments are passed over whole, so a `"""` or `'''`
+  string left open runs to the end of the frontmatter, dropping the rest, and a
+  frontmatter that keeps no statement before it is broken. `title = Notes` then
   `date = 2026-10-17` is `{date: 2026-10-17}`, and so is `tags = ["a", "b"` then
-  `date = 2026-10-17`. A pair is read to the end of its line before it is kept:
-  `a = 1 2` is refused with `expected the end of the line after the value`.
+  `date = 2026-10-17`. `a = [`, `[1],`, `@` and `]` on four lines, then `b = 2`, is
+  `{b: 2}`, with one drop. `[a]`, `x = 1`, `[owner` then `y = 2` is `{a: {x: 1}}`. A
+  pair is read to the end of its line before it is kept: `a = 1 2` is refused with
+  `expected the end of the line after the value`.
 - Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
   dotted keys and of headers count together, and in YAML so do flow and block
   collections, properties on collections and explicit keys. The innermost pair that holds a

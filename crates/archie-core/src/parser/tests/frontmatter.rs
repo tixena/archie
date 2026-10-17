@@ -1662,8 +1662,9 @@ fn a_toml_header_that_does_not_read_is_dropped_and_a_string_left_open_drops_the_
         kept_and_dropped("+++\nname = \"Ada\"\n[owner\n[t]\nx = 1\n+++\n"),
         one_dropped(&["name", "t"], header, "[owner")
     );
+    let source = "+++\n[a]\nx = 1\n[owner\ny = 2\n+++\n";
     check(
-        "+++\n[a]\nx = 1\n[owner\ny = 2\n+++\n",
+        source,
         "Document
   Frontmatter format=Toml
     Mapping
@@ -1671,15 +1672,52 @@ fn a_toml_header_that_does_not_read_is_dropped_and_a_string_left_open_drops_the_
         Mapping
           Pair key=x
             Scalar Integer 1
-          Pair key=y
-            Scalar Integer 2
   MarkdownBlock
 ",
+    );
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["a"], header, "[owner\ny = 2")
     );
     let open = "the string is not closed";
     assert_eq!(
         kept_and_dropped("+++\na = 1\nt = \"\"\"never\nb = 2\n+++\n"),
         one_dropped(&["a"], open, "t = \"\"\"never\nb = 2")
+    );
+}
+
+#[test]
+fn a_toml_pair_that_does_not_read_is_dropped_up_to_where_its_value_ends() {
+    let source = "+++\na = [\n[1],\n@\n]\nb = 2\n+++\n";
+    check(
+        source,
+        "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=b
+        Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["b"], "`@` is not a value", "a = [\n[1],\n@\n]")
+    );
+    assert_eq!(
+        kept_and_dropped("+++\na = {x = 1,\ny = 2}\nb = 3\n+++\n"),
+        one_dropped(&["b"], "expected a key", "a = {x = 1,\ny = 2}")
+    );
+    assert_eq!(
+        kept_and_dropped("+++\na = [\n[1],\nb = 2\n+++\n"),
+        one_dropped(&["b"], "`b` is not a value", "a = [\n[1],")
+    );
+    assert_eq!(
+        kept_and_dropped("+++\npaths = [\"C:\\dev\"]\ntitle = \"x\"\n+++\n"),
+        one_dropped(
+            &["title"],
+            "unknown escape in the string",
+            "paths = [\"C:\\dev\"]"
+        )
     );
 }
 
