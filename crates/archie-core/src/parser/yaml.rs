@@ -1212,7 +1212,8 @@ fn flow_mapping(
 
 /// Settles the flow pair `read` gave from `mark`, as [`settle_pair`] does, and
 /// tells whether a `,` or a `}` follows: one that does not read runs to the
-/// mapping's next line that starts no further right, and with none fails it.
+/// mapping's next line that starts no further right, and fails the mapping
+/// when there is none or when the mapping closes on the pair's line.
 fn settle_flow_pair(
     cursor: &mut Cursor<'_>,
     mark: Mark,
@@ -1234,6 +1235,9 @@ fn settle_flow_pair(
         }
         Err(Stop::Fail(error)) => error,
     };
+    if closes_on_its_line(cursor, mark.pos) {
+        return Err(Stop::Fail(error));
+    }
     let Some(next) = next_pair_line(cursor, mark.pos, column) else {
         return Err(Stop::Fail(error));
     };
@@ -1259,6 +1263,21 @@ fn next_pair_line(cursor: &mut Cursor<'_>, at: usize, column: Option<usize>) -> 
         }
         if found <= own {
             return Some(cursor.pos());
+        }
+    }
+}
+
+/// Whether the flow mapping holding the entry at `at` closes on that entry's line.
+fn closes_on_its_line(cursor: &mut Cursor<'_>, at: usize) -> bool {
+    cursor.set_pos(at);
+    loop {
+        skip_flow_entry(cursor);
+        let closed = cursor.peek() == Some(b'}');
+        if cursor.slice(at..cursor.pos()).contains('\n') {
+            return false;
+        }
+        if closed || !cursor.eat(b',') {
+            return closed;
         }
     }
 }

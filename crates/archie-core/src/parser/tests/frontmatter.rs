@@ -1638,6 +1638,46 @@ fn a_missing_comma_in_a_flow_mapping_on_one_line_fails_the_mapping() {
 }
 
 #[test]
+fn a_broken_pair_of_a_flow_mapping_that_closes_on_its_line_fails_the_mapping() {
+    let at_sign = "a plain value cannot start with `@`; quote it";
+    let separator = "expected `,` or `}` in the mapping";
+    for (source, message, text, at) in [
+        (
+            "---\nm: {a: @x}\n  c: 1\nd: 2\n---\n",
+            at_sign,
+            "m: {a: @x}\n  c: 1",
+            11..12,
+        ),
+        (
+            "---\nm: {a: @x, b: 1}\n  c: 1\nd: 2\n---\n",
+            at_sign,
+            "m: {a: @x, b: 1}\n  c: 1",
+            11..12,
+        ),
+        (
+            "---\nm: {a: \"x\" b}\n  c: 1\nd: 2\n---\n",
+            separator,
+            "m: {a: \"x\" b}\n  c: 1",
+            15..15,
+        ),
+    ] {
+        check(
+            source,
+            "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=d
+        Scalar Integer 2
+  MarkdownBlock
+",
+        );
+        assert_eq!(kept_and_dropped(source), one_dropped(&["d"], message, text));
+        let strict = parse_with::<Plain>(source, &ParseOptions::strict());
+        assert_eq!(strict.unwrap_err(), ParseError::new(message, at));
+    }
+}
+
+#[test]
 fn a_yaml_line_indented_more_than_the_value_above_it_drops_that_entry() {
     let deeper = "this line is indented more than the keys above it";
     assert_eq!(

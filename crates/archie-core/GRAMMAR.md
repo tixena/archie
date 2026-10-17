@@ -590,10 +590,13 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   `  name: Ada` then `  @handle: ada` then `  role: dev` is
   `{owner: {name: Ada, role: dev}}`, `items:` then `- [a` then `- b` is
   `{items: [b]}`, and `{`, `  title: Notes,`, `  tags: [a, b,`, `  date: 2026-10-17`,
-  `}` is `{title: Notes, date: 2026-10-17}`. Text where a `,` or a `}` is expected
-  after a pair of a flow mapping is refused with ``expected `,` or `}` in the mapping``:
-  on the line the pair starts on, it is dropped with the pair, and on a later line it
-  starts an entry of its own, which runs as a pair does. `{`, `  a: "x" junk,`,
+  `}` is `{title: Notes, date: 2026-10-17}`. A broken pair of a flow mapping that
+  closes on the pair's line fails the mapping: `m: {a: @x}` then `  c: 1` then
+  `d: 2` is `{d: 2}`, refused with ``a plain value cannot start with `@`; quote it``.
+  Text where a `,` or a `}` is expected after a pair of a flow mapping is refused
+  with ``expected `,` or `}` in the mapping``: on the line the pair starts on, it is
+  dropped with the pair, and on a later line it starts an entry of its own, which
+  runs as a pair does. `{`, `  a: "x" junk,`,
   `  b: 1`, `}` is `{b: 1}`, and `{`, `  title: Notes`, `  date: 2026-10-17`, `}` is
   `{title: Notes}`, dropping `date: 2026-10-17`. The lines a pair's value does not take
   belong to the pair: `a: 1` then `  b: 2` then `c: 3` is `{c: 3}`, refused with
