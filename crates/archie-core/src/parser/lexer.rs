@@ -368,8 +368,7 @@ impl Lexer<'_> {
         let end = text.at + trim_end_spaces(&source[text.at..line.end]).len();
         let continues = end > text.at
             && (text.column >= level + 4
-                || (text.column >= level
-                    && self.start(line.start, text, end, line.next, true).is_none()));
+                || (text.column >= level && self.start(at, text, end, line.next, true).is_none()));
         continues.then_some((text.at..end, line.next))
     }
 
@@ -500,7 +499,8 @@ impl Lexer<'_> {
 
     fn line(&mut self) {
         let source = self.source;
-        let line = line_from(source, self.pos, self.base);
+        let line_start = self.pos;
+        let line = line_from(source, line_start, self.base);
         self.pos = line.next;
         let white = Spot::start(&line);
         let text = white.text(source, line.end);
@@ -525,7 +525,7 @@ impl Lexer<'_> {
             .is_some_and(|token| matches!(token.kind, TokenKind::Text));
         self.close_items(text.column, line.start);
         let continues = after_text && self.levels.len() == open;
-        self.content(line.start, white, text.at + trimmed.len(), continues);
+        self.content(line_start, white, text.at + trimmed.len(), continues);
     }
 
     fn push(&mut self, kind: TokenKind, span: Range<usize>) {

@@ -64,14 +64,15 @@ impl Cell {
 }
 
 /// One line of a table: its text from `start` to `end`, the column the text
-/// starts at, the start of the line it is on, and where the next line
-/// starts.
+/// starts at, the start of the line it is on, where the next line starts,
+/// and the column of that line its columns count from.
 #[derive(Clone)]
 struct TableLine {
     column: usize,
     end: usize,
     line_start: usize,
     next: usize,
+    origin: usize,
     start: usize,
 }
 
@@ -93,6 +94,7 @@ pub fn read(
         end: first.end,
         line_start,
         next,
+        origin: line_from(source, line_start, base).origin,
         start: first.start,
     };
     pipe(source, &head, level, base)
@@ -114,8 +116,9 @@ fn line_after(source: &str, at: usize, level: usize, base: usize) -> Option<Tabl
     (!trimmed.is_empty() && column >= level).then(|| TableLine {
         column,
         end: line.start + indent.bytes + trimmed.len(),
-        line_start: line.start,
+        line_start: at,
         next: line.next,
+        origin: line.origin,
         start: line.start + indent.bytes,
     })
 }
@@ -362,7 +365,7 @@ fn simple(
     base: usize,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let dashes = line_after(source, head.next, level, base)?;
-    let groups = dash_groups(&source[dashes.line_start..dashes.end])?;
+    let groups = dash_groups(&columns(source, &dashes))?;
     let mut lines = Vec::new();
     let mut last = dashes;
     while let Some(line) = line_after(source, last.next, level, base) {
@@ -372,13 +375,14 @@ fn simple(
     if lines.is_empty() {
         return None;
     }
-    let head_cells = simple_cells(source, head, &groups);
+    let head_columns = columns(source, head);
+    let head_cells = simple_cells(source, head, &head_columns, &groups);
     let alignments = head_cells
         .iter()
         .zip(&groups)
         .map(|(cell, group)| {
-            let left = column_of(source, head.line_start, cell.start);
-            let right = column_of(source, head.line_start, cell.end);
+            let left = column_of(&head_columns, cell.start);
+            let right = column_of(&head_columns, cell.end);
             match (left == group.start, right == group.end) {
                 _ if cell.is_empty() => Alignment::Default,
                 (true, true) => Alignment::Default,
@@ -394,7 +398,12 @@ fn simple(
     };
     let rows = lines
         .iter()
-        .map(|line| row(line, simple_cells(source, line, &groups)))
+        .map(|line| {
+            row(
+                line,
+                simple_cells(source, line, &columns(source, line), &groups),
+            )
+        })
         .collect();
     let table = TableToken {
         alignments,
@@ -405,17 +414,17 @@ fn simple(
     Some((table, head.start..last.end, last.next))
 }
 
-/// The columns, counted from the start of the line, of each run of dashes
-/// in a line made only of dashes and spaces. At least two runs.
-fn dash_groups(text: &str) -> Option<Vec<Range<usize>>> {
-    if !text
-        .chars()
-        .all(|character| character == '-' || character == ' ')
+/// The columns of each run of dashes in a line made only of dashes, spaces
+/// and tabs. At least two runs.
+fn dash_groups(columns: &[(usize, char)]) -> Option<Vec<Range<usize>>> {
+    if !columns
+        .iter()
+        .all(|&(_, character)| matches!(character, '-' | ' ' | '\t'))
     {
         return None;
     }
     let mut groups: Vec<Range<usize>> = Vec::new();
-    for (column, character) in text.chars().enumerate() {
+    for (column, &(_, character)) in columns.iter().enumerate() {
         if character != '-' {
             continue;
         }
@@ -430,13 +439,16 @@ fn dash_groups(text: &str) -> Option<Vec<Range<usize>>> {
 /// The cells of a simple row. Each column runs from its dash group to the
 /// next group, the first one from the start of the line, and a word that
 /// crosses into the next column stays in the column it starts in.
-fn simple_cells(source: &str, line: &TableLine, groups: &[Range<usize>]) -> Vec<Range<usize>> {
-    let text = &source[line.line_start..line.end];
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
+fn simple_cells(
+    source: &str,
+    line: &TableLine,
+    columns: &[(usize, char)],
+    groups: &[Range<usize>],
+) -> Vec<Range<usize>> {
     let written = |column: usize| {
-        chars
+        columns
             .get(column)
-            .is_some_and(|&(_, character)| character != ' ')
+            .is_some_and(|&(_, character)| !matches!(character, ' ' | '\t'))
     };
     let mut edges: Vec<usize> = Vec::new();
     for group in groups.iter().skip(1) {
@@ -448,23 +460,37 @@ fn simple_cells(source: &str, line: &TableLine, groups: &[Range<usize>]) -> Vec<
         }
         edges.push(edge);
     }
-    let byte_at = |column: usize| chars.get(column).map_or(text.len(), |&(offset, _)| offset);
+    let byte_at = |column: usize| columns.get(column).map_or(line.end, |&(at, _)| at);
     let starts = iter::once(0).chain(edges.iter().copied());
-    let ends = edges.iter().copied().chain([chars.len()]);
+    let ends = edges.iter().copied().chain([columns.len()]);
     starts
         .zip(ends)
-        .map(|(from, to)| {
-            trim(
-                source,
-                line.line_start + byte_at(from)..line.line_start + byte_at(to),
-            )
-        })
+        .map(|(from, to)| trim(source, byte_at(from)..byte_at(to)))
         .collect()
 }
 
-/// The column of byte `at` on the line starting at `line_start`.
-fn column_of(source: &str, line_start: usize, at: usize) -> usize {
-    source[line_start..at].chars().count()
+/// The byte and the character at each column of `line`, from its column
+/// `origin` on: a tab fills the columns up to the next multiple of 4.
+fn columns(source: &str, line: &TableLine) -> Vec<(usize, char)> {
+    let text = &source[line.line_start..line.end];
+    let mut columns = Vec::new();
+    let mut reached = 0;
+    for (at, character) in text.char_indices() {
+        let next = if character == '\t' {
+            reached + space(&text[at..=at], reached).columns
+        } else {
+            reached + 1
+        };
+        let kept = next.saturating_sub(reached.max(line.origin));
+        columns.extend(iter::repeat_n((line.line_start + at, character), kept));
+        reached = next;
+    }
+    columns
+}
+
+/// The column that byte `at` starts at among `columns`.
+fn column_of(columns: &[(usize, char)], at: usize) -> usize {
+    columns.partition_point(|&(byte, _)| byte < at)
 }
 
 /// The alignment a cell such as `:--:` sets: a colon at the left, the

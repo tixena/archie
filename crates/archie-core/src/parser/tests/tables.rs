@@ -812,6 +812,134 @@ Name    Role
 }
 
 #[test]
+fn a_simple_table_whose_lines_a_tab_indents_reads_as_one_that_spaces_indent() {
+    for source in [
+        "- x\n\n    a    b\n\t---  ---\n\t1    2\n",
+        "- x\n\n    a    b\n    ---  ---\n    1    2\n",
+    ] {
+        check(
+            source,
+            r#"Document
+  MarkdownBlock
+    Section
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "x"
+              Table format=Simple alignments=Left,Left
+                TableRow head
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "a"
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "b"
+                TableRow
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "1"
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "2"
+"#,
+        );
+    }
+}
+
+#[test]
+fn a_tab_between_dash_groups_reaches_the_next_multiple_of_4_as_spaces_do() {
+    for source in ["a    b\n---\t---\n1    2\n", "a    b\n--- ---\n1    2\n"] {
+        check(
+            source,
+            r#"Document
+  MarkdownBlock
+    Section
+      Table format=Simple alignments=Left,Center
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "a"
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "b"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "1"
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "2"
+"#,
+        );
+    }
+}
+
+#[test]
+fn a_tab_in_a_simple_cell_stays_in_its_text() {
+    check(
+        "a\tx  b\n---  ---\n1    2\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Table format=Simple alignments=Left,Right
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "a\tx"
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "b"
+        TableRow
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "1"
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "2"
+"#,
+    );
+}
+
+#[test]
 fn a_table_spans_from_its_first_line_to_its_last_and_a_cell_spans_its_text() {
     let whole = "| a | b |\n|---|---|\n| 1 |   |\n";
     check_spans(

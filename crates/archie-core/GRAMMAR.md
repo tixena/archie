@@ -286,7 +286,7 @@ least to the enclosing item's text.
 |---|---|---|
 | Pipe | A header row, then a delimiter row such as `\|:--\|:-:\|--:\|`, then body rows, each with cells between `\|`. The pipes at either end of a row are optional. | The header line holds a `\|`, and every cell of the delimiter row is one or more dashes with an optional colon at either end. The body rows run to the first line with no `\|`, or to a blank line. |
 | Grid | `+---+---+` borders around rows of `\| a \| b \|` lines; a `+===+===+` border under the header rows. | Every border has its `+` at the same columns as the top border, every row line starts with `\|` at the top border's column, a border follows the lines of each row, and at most one border is `+===+`. A row runs over every line between two borders. |
-| Simple | A header line, then a line of dash groups separated by spaces, then rows up to a blank line. | The dash line has at least two groups of dashes and nothing but spaces between them, and at least one row follows it. |
+| Simple | A header line, then a line of dash groups separated by spaces or tabs, then rows up to a blank line. Its columns count with tab stops of 4: a tab moves to the next multiple of 4, as in a line's indentation. | The dash line has at least two groups of dashes and nothing but spaces and tabs before and between them, and at least one row follows it. |
 
 - A cell holds a markdown block, read from its text by the same rules as the document,
   one container deeper. A pipe or simple cell is its text on its line, without the
