@@ -213,7 +213,7 @@ pub fn extent(pairs: &IndexMap<String, Pair>) -> Option<Range<usize>> {
         .map(|((_, first), last_end)| first.span.start..last_end)
 }
 
-fn closing(source: &str, from: usize, format: FrontmatterFormat) -> Option<Line> {
+pub fn closing(source: &str, from: usize, format: FrontmatterFormat) -> Option<Line> {
     let mut start = from;
     while start < source.len() {
         let line = line_at(source, start);

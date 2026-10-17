@@ -1047,7 +1047,8 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   syntax it was read in, or in YAML when TOML cannot hold a null in it, a broken one as
   it was read, and parses that text with `E`, so the spans count from the text
   written. It fails with `RebuildError::Write`, naming the key, when the `Toml` args of
-  a code block hold a null, and with `RebuildError::Parse` when the parse fails.
+  a code block hold a null, or naming the line when the text of a broken frontmatter
+  holds one that would close it, and with `RebuildError::Parse` when the parse fails.
 - `Writer`, which `write` hands to an extension, has `push_str`, which adds text as
   it is; `markdown_block`, which writes a markdown block with its levels counted from
   one; `construct`, which writes a plain node in archie's form, each of its children
@@ -1066,7 +1067,7 @@ then read and written again, gives the same text the second time.
 
 | Construct | Written as |
 |---|---|
-| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; a broken frontmatter as it was read, its text between `---` lines for YAML and `+++` lines for TOML, whatever `WriteOptions::frontmatter` picks, because the text reads only in its own syntax; then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
+| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; a broken frontmatter as it was read, its text between `---` lines for YAML and `+++` lines for TOML, whatever `WriteOptions::frontmatter` picks, because the text reads only in its own syntax. When that text holds a line that would close the frontmatter, as `TOML_CLOSE` or `YAML_CLOSE` does, such as `---` alone on its line for YAML, the write fails with an error that names that line, because the text would read back cut at it. Then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
 | Blank lines | One between two blocks and after a heading. Inside a tight list, none between the blocks of an item. |
 | Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A final run of `#`s in its text that a space or a tab precedes, or that is the whole text, gets a backslash before its first `#`, because the reader would take the run for the closing sequence: `Title ##` is written `# Title \##`. A heading line with no text is its marks alone. Every heading line is written. |
 | A heading that holds a line break | At depth 1 or 2, written underlined: its lines, each but the last ended by the break's `\`, guarded as a paragraph's lines, then `===` at depth 1 or `---` at depth 2 on a line of its own, because a `#` heading is one line. At depth 3 to 6, and right after other text in a tight list item, where a blank line would make the list loose, the one-line form, with the break written `&#10;`. |

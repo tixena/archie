@@ -11,7 +11,7 @@ use crate::parser::ast::{
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension, Markdown};
 use crate::parser::{ParseOptions, parse, parse_with};
-use crate::writer::{WriteError, WriteOptions, Writer, write};
+use crate::writer::{WriteError, WriteOptions, Writer, write, write_for_rebuild};
 
 /// Every file under `parser/tests/fixtures/`.
 const FIXTURES: [(&str, &str); 21] = [
@@ -1150,6 +1150,51 @@ fn a_broken_frontmatter_is_written_back_as_it_was_read_whatever_syntax_is_picked
     for source in [
         "---\n{a: 1, b: [}\n---\n# A\n",
         "+++\na = \"\"\"never closed\n+++\n# A\n",
+    ] {
+        let document = parse(source).unwrap();
+        assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");
+        for options in [WriteOptions::default(), TOML] {
+            let text = write(&document, &options).unwrap();
+            assert_eq!(text, source);
+            assert_eq!(parse(&text).unwrap(), document);
+        }
+    }
+}
+
+#[test]
+fn a_broken_frontmatter_whose_text_holds_a_line_that_would_close_it_fails_the_write() {
+    for (source, text, line) in [
+        ("---\na: [\n---\n# A\n", "a: [\n---\nb: 1", "---"),
+        ("---\na: [\n---\n# A\n", "a: [\n...  \nb: 1", "..."),
+        ("+++\na = [\n+++\n# A\n", "a = [\n+++\nb = 1", "+++"),
+    ] {
+        let mut document = parse(source).unwrap();
+        document
+            .frontmatter
+            .as_mut()
+            .unwrap()
+            .as_mut()
+            .unwrap_err()
+            .text = text.to_owned();
+        let error = WriteError {
+            key: String::new(),
+            message: format!(
+                "the broken frontmatter's text holds the line `{line}`, which would close it"
+            ),
+        };
+        for options in [WriteOptions::default(), TOML] {
+            assert_eq!(write(&document, &options), Err(error.clone()), "{text:?}");
+        }
+        assert_eq!(write_for_rebuild(&document), Err(error), "{text:?}");
+    }
+}
+
+#[test]
+fn a_broken_frontmatter_whose_text_holds_a_delimiter_inside_a_line_is_written_as_it_was_read() {
+    for source in [
+        "---\n{a: ---x, b: [}\n---\n# A\n",
+        "---\n{a: 1, b: [}\n---x\n---\n# A\n",
+        "+++\na = \"\"\"never closed\n---\n+++\n# A\n",
     ] {
         let document = parse(source).unwrap();
         assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");

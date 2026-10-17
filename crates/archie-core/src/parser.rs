@@ -10,7 +10,7 @@ mod claim;
 mod cursor;
 pub(crate) mod definition;
 pub(crate) mod entity;
-mod frontmatter;
+pub(crate) mod frontmatter;
 pub(crate) mod html;
 pub(crate) mod inline;
 pub(crate) mod lexer;
@@ -98,8 +98,9 @@ where
 /// # Errors
 ///
 /// Returns `RebuildError::Write`, naming the key, when the `Toml` args of a
-/// code block hold a null, which TOML cannot hold, and `RebuildError::Parse`
-/// when the parse fails, as `parse_with` does.
+/// code block hold a null, which TOML cannot hold, or naming the line when
+/// the text of a broken frontmatter holds one that would close it, and
+/// `RebuildError::Parse` when the parse fails, as `parse_with` does.
 pub fn rebuild_with<E>(
     document: &Document<With<E>>,
     options: &ParseOptions,

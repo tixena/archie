@@ -17,6 +17,7 @@ use crate::parser::ast::{
     Kind, Line, List, MarkdownBlock, Paragraph, Section,
 };
 use crate::parser::extension::{Construct, Extension};
+use crate::parser::frontmatter;
 use crate::writer::inline::{Near, Pieces, Segments};
 
 /// The deepest heading level markdown has. A section deeper than this is
@@ -73,6 +74,9 @@ impl Place {
 
 /// Why a document could not be written: the key, of the frontmatter or of a
 /// code block's TOML args, whose value the chosen syntax cannot hold.
+///
+/// The key is empty when the text of a broken frontmatter holds a line that
+/// would close it.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 #[non_exhaustive]
@@ -695,14 +699,15 @@ where
 ///
 /// Returns an error naming the key when TOML is picked and the frontmatter
 /// holds a null, which TOML cannot hold, or when the `Toml` args of a code
-/// block hold one.
+/// block hold one, and an error naming the line when the text of a broken
+/// frontmatter holds one that would close it.
 pub fn write<E>(document: &Document<E>, options: &WriteOptions) -> Result<String, WriteError>
 where
     E: Extension,
 {
     let frontmatter = match (&document.frontmatter, options.frontmatter) {
         (None, _) => String::new(),
-        (Some(Err(broken)), _) => as_read(broken),
+        (Some(Err(broken)), _) => as_read(broken)?,
         (Some(Ok(frontmatter)), FrontmatterFormat::Toml) => {
             toml::frontmatter(&frontmatter.mapping)?
         }
@@ -719,14 +724,15 @@ where
 /// # Errors
 ///
 /// Returns an error naming the key when the `Toml` args of a code block hold
-/// a null.
+/// a null, and an error naming the line when the text of a broken
+/// frontmatter holds one that would close it.
 pub(crate) fn write_for_rebuild<E>(document: &Document<E>) -> Result<String, WriteError>
 where
     E: Extension,
 {
     let frontmatter = match &document.frontmatter {
         None => String::new(),
-        Some(Err(broken)) => as_read(broken),
+        Some(Err(broken)) => as_read(broken)?,
         Some(Ok(frontmatter)) => match frontmatter.format {
             FrontmatterFormat::Toml => toml::frontmatter(&frontmatter.mapping)
                 .unwrap_or_else(|_| yaml::frontmatter(&frontmatter.mapping)),
@@ -738,13 +744,23 @@ where
 }
 
 /// The text of `broken` between the delimiters of its syntax, the only
-/// syntax the text reads in.
-fn as_read(broken: &BrokenFrontmatter) -> String {
+/// syntax the text reads in, or an error naming a line of the text that
+/// would close it, as the reader closes a frontmatter.
+fn as_read(broken: &BrokenFrontmatter) -> Result<String, WriteError> {
+    if let Some(line) = frontmatter::closing(&broken.text, 0, broken.format) {
+        let text = broken.text[line.start..line.end].trim_end();
+        return Err(WriteError {
+            key: String::new(),
+            message: format!(
+                "the broken frontmatter's text holds the line `{text}`, which would close it"
+            ),
+        });
+    }
     let delimiter = match broken.format {
         FrontmatterFormat::Toml => "+++",
         FrontmatterFormat::Yaml => "---",
     };
-    format!("{delimiter}\n{}\n{delimiter}\n", broken.text)
+    Ok(format!("{delimiter}\n{}\n{delimiter}\n", broken.text))
 }
 
 /// `frontmatter`, the written frontmatter of `document`, then its body, and
