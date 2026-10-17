@@ -303,7 +303,7 @@ dependencies = [
 [[package]]
 name = "tixschema"
 version = "0.1.0"
-source = "git+https://github.com/tixena/tixschema.git#4f826eae9e826cbc0d20982ba3cf12ce3746f33c"
+source = "git+https://github.com/tixena/tixschema.git#f389bed4641a1149224de555ea9e2aa96ffa1c22"
 dependencies = [
  "log",
  "proc-macro2",

@@ -1,5 +1,6 @@
-use super::{check, check_spans, on_two_megabytes};
-use crate::parser::ast::Value;
+use super::{broken, check, check_spans, on_two_megabytes};
+use crate::parser::ast::{BrokenFrontmatter, Document, Frontmatter, FrontmatterFormat, Value};
+use crate::parser::error::ParseError;
 use crate::parser::extension::Plain;
 use crate::parser::frontmatter::VALUE_CAP;
 use crate::parser::{ParseOptions, parse, parse_with};
@@ -11,6 +12,13 @@ const EMPTY_YAML: &str = "Document
     Mapping
   MarkdownBlock
 ";
+
+/// The outline of a YAML frontmatter whose every pair is dropped for a key
+/// that is a list or a mapping, before an empty body.
+const LIST_OR_MAPPING_KEY: &str = r#"Document
+  BrokenFrontmatter format=Yaml error="a key cannot be a list or a mapping"
+  MarkdownBlock
+"#;
 
 /// The outline of a YAML frontmatter that holds no pair, before the heading
 /// `A`.
@@ -317,14 +325,14 @@ fn an_explicit_key_that_is_a_list_or_a_mapping_drops_its_pair() {
         "---\n? !!seq [x]\n: v\n---\n",
         "---\n? [x]\n---\n",
     ] {
-        check(source, EMPTY_YAML);
+        check(source, LIST_OR_MAPPING_KEY);
     }
 }
 
 #[test]
 fn a_mapping_that_held_only_a_dropped_pair_is_an_empty_mapping() {
-    check("---\n{x: 2}: 3\n---\n", EMPTY_YAML);
-    check("---\n[x]: y\n---\n", EMPTY_YAML);
+    check("---\n{x: 2}: 3\n---\n", LIST_OR_MAPPING_KEY);
+    check("---\n[x]: y\n---\n", LIST_OR_MAPPING_KEY);
     check(
         "---\nc:\n  [x]: y\n---\n",
         "Document
@@ -408,7 +416,7 @@ fn a_flow_pair_whose_key_is_a_list_or_a_mapping_is_dropped() {
   MarkdownBlock
 ",
     );
-    check("---\n{[x]: 1}\n---\n", EMPTY_YAML);
+    check("---\n{[x]: 1}\n---\n", LIST_OR_MAPPING_KEY);
 }
 
 #[test]
@@ -439,9 +447,8 @@ fn a_mapping_whose_every_pair_is_dropped_is_empty_at_its_first_pair() {
         ],
     );
     let root = "---\n# a comment\n  [x]: y\n---\n";
-    let mapping = parse(root).unwrap().frontmatter.unwrap().mapping;
     let at = root.find('[').unwrap();
-    assert_eq!(mapping.span, at..at);
+    assert_eq!(broken(root).error.span, at..at + "[x]".len());
 }
 
 #[test]
@@ -707,7 +714,7 @@ fn a_tag_that_ends_its_line_over_a_mapping_whose_every_pair_is_dropped_holds_it_
 #[test]
 fn a_frontmatter_with_a_dropped_tag_is_written_without_its_key() {
     let document = parse("---\ntitle: Notes\nshape: !point {x: 1, y: 2}\n---\n# Notes\n").unwrap();
-    let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+    let pairs = &frontmatter_of(&document).mapping.pairs;
     assert_eq!(pairs.keys().collect::<Vec<_>>(), ["title"]);
     assert_eq!(
         write(&document, &WriteOptions::default()).unwrap(),
@@ -741,7 +748,7 @@ fn a_yaml_value_nested_past_the_value_cap_drops_the_key_that_holds_it() {
         }
         for source in deep_yaml_lists(VALUE_CAP) {
             let document = parse(&source).unwrap();
-            let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+            let pairs = &frontmatter_of(&document).mapping.pairs;
             assert_eq!(pairs.keys().collect::<Vec<_>>(), ["deep", "b"]);
         }
     });
@@ -802,7 +809,12 @@ fn a_toml_table_keeps_its_span_to_its_last_pair_that_is_not_dropped() {
             "[".repeat(VALUE_CAP + 1),
             "]".repeat(VALUE_CAP + 1)
         );
-        let mapping = parse(&source).unwrap().frontmatter.unwrap().mapping;
+        let mapping = parse(&source)
+            .unwrap()
+            .frontmatter
+            .unwrap()
+            .unwrap()
+            .mapping;
         let pair = &mapping.pairs["t"];
         assert_eq!(&source[pair.span.clone()], "[t]\na = 1");
     });
@@ -1129,7 +1141,7 @@ fn an_alias_of_a_list_or_a_mapping_as_a_key_drops_its_pair() {
         "---\nm: &m [1]\n? *m\n: v\nb: 2\n---\n",
     ] {
         let document = parse(source).unwrap();
-        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        let pairs = &frontmatter_of(&document).mapping.pairs;
         assert_eq!(pairs.keys().collect::<Vec<_>>(), ["m", "b"], "{source:?}");
     }
     check(
@@ -1333,7 +1345,7 @@ fn ten_anchors_of_ten_aliases() -> String {
 fn aliases_that_copy_more_than_the_cap_drop_the_key_that_passes_it_and_every_later_alias() {
     on_two_megabytes(|| {
         let document = parse(&ten_anchors_of_ten_aliases()).unwrap();
-        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        let pairs = &frontmatter_of(&document).mapping.pairs;
         // With the copy each anchor keeps, `a3` brings the copies to 24674
         // values, and the seventh alias in `a4` passes 100000.
         assert_eq!(
@@ -1358,7 +1370,7 @@ fn nested_anchors_that_keep_more_than_the_cap_drop_the_key_that_holds_them() {
         check(&nested_anchors(20_000), &only_b("Yaml"));
         // Around 100 integers, the anchors keep 37145 values.
         let document = parse(&nested_anchors(100)).unwrap();
-        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        let pairs = &frontmatter_of(&document).mapping.pairs;
         assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
     });
 }
@@ -1389,7 +1401,7 @@ fn aliases_that_copy_more_than_the_text_cap_drop_the_key_that_holds_them() {
         // The anchor's own copy and 99 aliases come to 1000000 bytes, and a
         // hundredth alias passes.
         let document = parse(&aliases_of_a_long_string(99)).unwrap();
-        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        let pairs = &frontmatter_of(&document).mapping.pairs;
         assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
         check(&aliases_of_a_long_string(100), &only_a);
     });
@@ -1421,11 +1433,16 @@ fn anchors_and_aliases_under_the_copy_budget_read_as_before() {
     });
 }
 
+/// The frontmatter of `document`, one of which an entry reads.
+fn frontmatter_of(document: &Document) -> &Frontmatter {
+    document.frontmatter.as_ref().unwrap().as_ref().unwrap()
+}
+
 /// The keys of the frontmatter `source` reads, and the message and the text
 /// of each entry it dropped. A strict parse fails with the error of the
 /// first, which points into the entry, at its text or after.
 fn kept_and_dropped(source: &str) -> (Vec<String>, Vec<(String, &str)>) {
-    let frontmatter = parse(source).unwrap().frontmatter.unwrap();
+    let frontmatter = parse(source).unwrap().frontmatter.unwrap().unwrap();
     let keys = frontmatter.mapping.pairs.keys().cloned().collect();
     let dropped: Vec<(String, &str)> = frontmatter
         .dropped
@@ -1551,7 +1568,7 @@ fn a_pair_of_a_flow_mapping_over_several_lines_is_dropped_up_to_the_next_line_at
         one_dropped(&["title", "date"], list, "tags: [a, b,")
     );
     let nested = "---\na: {x: [1,\n    y: 2}\nb: 3\n---\n";
-    let mapping = parse(nested).unwrap().frontmatter.unwrap().mapping;
+    let mapping = parse(nested).unwrap().frontmatter.unwrap().unwrap().mapping;
     assert_eq!(mapping.pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
     let inner = match &mapping.pairs["a"].value {
         Value::Mapping(inner) => inner.pairs.keys().collect(),
@@ -1736,10 +1753,10 @@ fn every_drop_is_listed_in_file_order() {
 }
 
 #[test]
-fn a_frontmatter_of_which_no_entry_reads_fails_with_the_error_of_the_first() {
-    let refused = |source: &str| parse(source).unwrap_err().message;
+fn a_frontmatter_of_which_no_entry_reads_is_broken_with_the_error_of_the_first() {
+    let refused = |source: &str| broken(source).error.message;
     let open = "---\ntitle: \"Notes\n---\n# Body\n";
-    let error = parse(open).unwrap_err();
+    let error = broken(open).error;
     assert_eq!(error.message, "the string is not closed");
     assert_eq!(&open[error.span.start..], "---\n# Body\n");
     let at = "a plain key cannot start with `@`; quote it";
@@ -1756,6 +1773,96 @@ fn a_frontmatter_of_which_no_entry_reads_fails_with_the_error_of_the_first() {
 }
 
 #[test]
+fn a_flow_mapping_that_does_not_read_is_kept_as_its_text_with_its_error() {
+    let source = "---\n{a: 1, b: [}\n---\n# A\n";
+    check(
+        source,
+        r#"Document
+  BrokenFrontmatter format=Yaml error="expected `,` or `]` in the list"
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+"#,
+    );
+    let at = source.find('}').unwrap();
+    assert_eq!(
+        broken(source),
+        BrokenFrontmatter {
+            error: ParseError::new("expected `,` or `]` in the list", at..at),
+            format: FrontmatterFormat::Yaml,
+            span: 0..source.find("\n# A").unwrap(),
+            text: "{a: 1, b: [}".to_owned(),
+        }
+    );
+    assert_eq!(
+        broken("---\r\n{a: 1, b: [}\r\n---\r\n").text,
+        "{a: 1, b: [}"
+    );
+}
+
+#[test]
+fn a_yaml_frontmatter_is_broken_only_when_every_entry_is_dropped() {
+    let flow = "a line of a flow collection must be indented more than its key";
+    let unclosed = broken("---\na: [\nb: {\n---\n");
+    assert_eq!(
+        (unclosed.error.message.as_str(), unclosed.text.as_str()),
+        (flow, "a: [\nb: {")
+    );
+    let tag = "the tag `!point` is not one archie reads";
+    let tagged = "---\na: !point 1\nb: !point 2\n---\n";
+    assert_eq!(broken(tagged).error.message, tag);
+    let at = tagged.find('!').unwrap();
+    assert_eq!(broken(tagged).error.span, at..at + "!point".len());
+    let (keys, dropped) = kept_and_dropped("---\na: !point 1\nb: 2\nc: [x\n---\n");
+    assert_eq!(keys, ["b"]);
+    let texts: Vec<&str> = dropped.iter().map(|(_, text)| *text).collect();
+    assert_eq!(texts, ["a: !point 1", "c: [x"]);
+}
+
+#[test]
+fn a_toml_frontmatter_whose_first_entry_opens_a_string_it_never_closes_is_broken() {
+    let source = "+++\na = \"\"\"never closed\n+++\n# A\n";
+    check(
+        source,
+        r#"Document
+  BrokenFrontmatter format=Toml error="the string is not closed"
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+"#,
+    );
+    assert_eq!(broken(source).text, "a = \"\"\"never closed");
+}
+
+#[test]
+fn an_empty_frontmatter_or_one_that_holds_no_key_is_an_empty_mapping() {
+    for source in [
+        "---\n---\n",
+        "+++\n+++\n",
+        "---\nabc\n---\n",
+        "---\n- a\n- b\n---\n",
+        "---\n[a, !point b]\n---\n",
+    ] {
+        let frontmatter = parse(source).unwrap().frontmatter.unwrap().unwrap();
+        assert!(frontmatter.mapping.pairs.is_empty(), "{source:?}");
+    }
+}
+
+#[test]
+fn a_strict_parse_fails_with_the_error_of_a_broken_frontmatter() {
+    for source in [
+        "---\n{a: 1, b: [}\n---\n# A\n",
+        "---\na: !point 1\nb: !point 2\n---\n",
+        "+++\na = \"\"\"never closed\n+++\n# A\n",
+    ] {
+        let strict = parse_with::<Plain>(source, &ParseOptions::strict());
+        assert_eq!(strict.unwrap_err(), broken(source).error, "{source:?}");
+    }
+}
+
+#[test]
 fn a_frontmatter_with_no_drop_lists_none() {
     for source in [
         "---\ntitle: Notes\ntags: [a, b]\n---\n",
@@ -1763,7 +1870,7 @@ fn a_frontmatter_with_no_drop_lists_none() {
         "---\n---\n",
         "---\n- a\n---\n",
     ] {
-        let frontmatter = parse(source).unwrap().frontmatter.unwrap();
+        let frontmatter = parse(source).unwrap().frontmatter.unwrap().unwrap();
         assert!(frontmatter.dropped.is_empty(), "{source:?}");
     }
 }

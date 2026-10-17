@@ -1,6 +1,6 @@
 use chrono::{Datelike as _, Timelike as _};
 
-use super::check;
+use super::{broken, check};
 use crate::parser::ast::{ScalarValue, Value};
 use crate::parser::parse;
 
@@ -227,9 +227,9 @@ Document
 }
 
 #[test]
-fn a_float_with_no_digit_before_its_dot_or_none_after_it_fails_the_file() {
+fn a_float_with_no_digit_before_its_dot_or_none_after_it_is_not_a_value() {
     for written in [".5", "5."] {
-        let error = parse(&format!("+++\na = {written}\n+++\n")).unwrap_err();
+        let error = broken(&format!("+++\na = {written}\n+++\n")).error;
         assert_eq!(error.message, format!("`{written}` is not a value"));
     }
 }
@@ -1122,7 +1122,7 @@ pattern = '''
 
 /// The value under `key` in the frontmatter of `source`, when it is a scalar.
 fn scalar(source: &str, key: &str) -> Option<ScalarValue> {
-    let mapping = parse(source).ok()?.frontmatter?.mapping;
+    let mapping = parse(source).ok()?.frontmatter?.ok()?.mapping;
     match &mapping.pairs.get(key)?.value {
         Value::Scalar(scalar) => Some(scalar.value.clone()),
         Value::Mapping(_) | Value::Sequence(_) => None,

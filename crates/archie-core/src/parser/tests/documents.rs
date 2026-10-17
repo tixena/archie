@@ -18,7 +18,7 @@ macro_rules! document {
                 include_str!(concat!("fixtures/", stringify!($name), ".tree")),
             );
             let frontmatter = parse(source).unwrap().frontmatter;
-            assert!(frontmatter.is_none_or(|read| read.dropped.is_empty()));
+            assert!(frontmatter.is_none_or(|read| read.is_ok_and(|kept| kept.dropped.is_empty())));
             reads_back_from_json(source);
             rebuilds_from_json(source);
         }

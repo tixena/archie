@@ -46,10 +46,22 @@ where
 {
     pub body: MarkdownBlock<E>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frontmatter: Option<Frontmatter>,
+    pub frontmatter: Option<Result<Frontmatter, BrokenFrontmatter>>,
     #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,
+}
+
+/// A frontmatter that archie could read no entry of: its text as written,
+/// kept so that a write gives it back, and the reader's error.
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct BrokenFrontmatter {
+    pub error: ParseError,
+    pub format: FrontmatterFormat,
+    pub span: Range<usize>,
+    pub text: String,
 }
 
 /// The metadata block at the top of a file: TOML between `+++` lines or

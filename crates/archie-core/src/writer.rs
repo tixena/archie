@@ -13,8 +13,8 @@ use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use thiserror::Error;
 
 use crate::parser::ast::{
-    Args, Block, BlockQuote, CodeBlock, Document, FrontmatterFormat, Heading, Kind, Line, List,
-    MarkdownBlock, Paragraph, Section,
+    Args, Block, BlockQuote, BrokenFrontmatter, CodeBlock, Document, FrontmatterFormat, Heading,
+    Kind, Line, List, MarkdownBlock, Paragraph, Section,
 };
 use crate::parser::extension::{Construct, Extension};
 use crate::writer::inline::{Near, Pieces, Segments};
@@ -688,7 +688,8 @@ where
 }
 
 /// Writes `document` in archie's form: its frontmatter, if it has one, in
-/// the syntax `options` picks, then its body.
+/// the syntax `options` picks, or as it was read when no entry of it reads,
+/// then its body.
 ///
 /// # Errors
 ///
@@ -701,8 +702,11 @@ where
 {
     let frontmatter = match (&document.frontmatter, options.frontmatter) {
         (None, _) => String::new(),
-        (Some(frontmatter), FrontmatterFormat::Toml) => toml::frontmatter(&frontmatter.mapping)?,
-        (Some(frontmatter), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
+        (Some(Err(broken)), _) => as_read(broken),
+        (Some(Ok(frontmatter)), FrontmatterFormat::Toml) => {
+            toml::frontmatter(&frontmatter.mapping)?
+        }
+        (Some(Ok(frontmatter)), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
     };
     let (text, error) = with_body(frontmatter, document);
     error.map_or(Ok(text), Err)
@@ -710,7 +714,7 @@ where
 
 /// Writes `document` in archie's form, its frontmatter in the syntax it was
 /// read in, or in YAML when that syntax is TOML and the frontmatter holds a
-/// null, which TOML cannot hold.
+/// null, which TOML cannot hold, or as it was read when no entry of it reads.
 ///
 /// # Errors
 ///
@@ -720,16 +724,27 @@ pub(crate) fn write_for_rebuild<E>(document: &Document<E>) -> Result<String, Wri
 where
     E: Extension,
 {
-    let frontmatter = document
-        .frontmatter
-        .as_ref()
-        .map_or_else(String::new, |frontmatter| match frontmatter.format {
+    let frontmatter = match &document.frontmatter {
+        None => String::new(),
+        Some(Err(broken)) => as_read(broken),
+        Some(Ok(frontmatter)) => match frontmatter.format {
             FrontmatterFormat::Toml => toml::frontmatter(&frontmatter.mapping)
                 .unwrap_or_else(|_| yaml::frontmatter(&frontmatter.mapping)),
             FrontmatterFormat::Yaml => yaml::frontmatter(&frontmatter.mapping),
-        });
+        },
+    };
     let (text, error) = with_body(frontmatter, document);
     error.map_or(Ok(text), Err)
+}
+
+/// The text of `broken` between the delimiters of its syntax, the only
+/// syntax the text reads in.
+fn as_read(broken: &BrokenFrontmatter) -> String {
+    let delimiter = match broken.format {
+        FrontmatterFormat::Toml => "+++",
+        FrontmatterFormat::Yaml => "---",
+    };
+    format!("{delimiter}\n{}\n{delimiter}\n", broken.text)
 }
 
 /// `frontmatter`, the written frontmatter of `document`, then its body, and

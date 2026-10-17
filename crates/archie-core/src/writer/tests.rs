@@ -1145,6 +1145,22 @@ fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
     }
 }
 
+#[test]
+fn a_broken_frontmatter_is_written_back_as_it_was_read_whatever_syntax_is_picked() {
+    for source in [
+        "---\n{a: 1, b: [}\n---\n# A\n",
+        "+++\na = \"\"\"never closed\n+++\n# A\n",
+    ] {
+        let document = parse(source).unwrap();
+        assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");
+        for options in [WriteOptions::default(), TOML] {
+            let text = write(&document, &options).unwrap();
+            assert_eq!(text, source);
+            assert_eq!(parse(&text).unwrap(), document);
+        }
+    }
+}
+
 fn toml(source: &str) -> String {
     write(&parse(source).unwrap(), &TOML).unwrap()
 }
@@ -1155,7 +1171,7 @@ fn toml_error(source: &str) -> WriteError {
 
 /// The frontmatter mapping `source` reads as, every span emptied.
 fn mapping(source: &str) -> Mapping {
-    let mut read = parse(source).unwrap().frontmatter.unwrap().mapping;
+    let mut read = parse(source).unwrap().frontmatter.unwrap().unwrap().mapping;
     clear_mapping(&mut read);
     read
 }
@@ -1223,12 +1239,12 @@ fn text(value: &str) -> Value {
 /// A document whose frontmatter holds `pairs` and whose body is empty.
 fn with_frontmatter(pairs: IndexMap<String, Pair>) -> Document {
     Document {
-        frontmatter: Some(Frontmatter {
+        frontmatter: Some(Ok(Frontmatter {
             dropped: Vec::new(),
             format: FrontmatterFormat::Yaml,
             mapping: Mapping { pairs, span: 0..0 },
             span: 0..0,
-        }),
+        })),
         ..document(Vec::new())
     }
 }
@@ -1732,7 +1748,7 @@ fn text_reads_back_as_the_same_text_whether_it_is_quoted_or_not() {
         },
     );
     let built = with_frontmatter(pairs);
-    let mut expected = built.frontmatter.clone().unwrap().mapping;
+    let mut expected = built.frontmatter.clone().unwrap().unwrap().mapping;
     clear_mapping(&mut expected);
     for frontmatter in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
         let written_text = write(&built, &WriteOptions { frontmatter }).unwrap();

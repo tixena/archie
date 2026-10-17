@@ -127,7 +127,8 @@ impl Extension for Tickets {
         let Construct::Document(document) = construct else {
             return None;
         };
-        let pair = document.frontmatter.as_ref()?.mapping.pairs.get("title")?;
+        let read = document.frontmatter.as_ref()?.as_ref().ok()?;
+        let pair = read.mapping.pairs.get("title")?;
         let Value::Scalar(scalar) = &pair.value else {
             return None;
         };

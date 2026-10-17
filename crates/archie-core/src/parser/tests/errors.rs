@@ -1,4 +1,4 @@
-use super::on_two_megabytes;
+use super::{broken, on_two_megabytes};
 use crate::parser::ast::{Document, FrontmatterFormat, Mapping, Value};
 use crate::parser::error::ParseError;
 use crate::parser::extension::Plain;
@@ -7,17 +7,16 @@ use crate::parser::{ParseOptions, from_json, parse, parse_with, to_json};
 use crate::writer::{WriteOptions, write};
 
 /// The error a strict parse of `source` fails with. A parse that is not
-/// strict fails with it too when no entry of the frontmatter reads, and else
-/// drops an entry first with its message.
+/// strict holds it in a broken frontmatter when no entry of the frontmatter
+/// reads, and else drops an entry first with its message.
 fn strict_error(source: &str) -> ParseError {
     let error = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
-    match parse(source) {
-        Ok(document) => {
-            let dropped = document.frontmatter.unwrap().dropped;
-            let first = dropped.first().map(|drop| &drop.message);
+    match parse(source).unwrap().frontmatter.unwrap() {
+        Ok(frontmatter) => {
+            let first = frontmatter.dropped.first().map(|drop| &drop.message);
             assert_eq!(first, Some(&error.message), "{source:?}");
         }
-        Err(failure) => assert_eq!(failure, error, "{source:?}"),
+        Err(broken) => assert_eq!(broken.error, error, "{source:?}"),
     }
     error
 }
@@ -39,7 +38,7 @@ fn refusal(source: &str) -> (String, &str) {
 
 #[test]
 fn the_error_names_the_byte_it_points_at() {
-    let error = parse("+++\ndue = tomorrow\n+++\n").unwrap_err();
+    let error = broken("+++\ndue = tomorrow\n+++\n").error;
     assert_eq!(error.to_string(), "`tomorrow` is not a value (at byte 10)");
 }
 
@@ -200,7 +199,7 @@ fn a_second_anchor_on_a_value_or_a_key_is_refused_where_it_starts() {
         "---\na: [&x &y 1]\n---\n",
         "---\na: &x\n  &y 1\n---\n",
     ] {
-        let error = parse(source).unwrap_err();
+        let error = broken(source).error;
         assert_eq!(error.message, "a value has at most one anchor");
         let at = source.rfind('&').unwrap();
         assert_eq!(error.span, at..at + 1);
@@ -247,10 +246,7 @@ fn a_plain_value_cannot_hold_a_colon_and_a_tab() {
             "b:\tc"
         )
     );
-    assert_eq!(
-        parse(tab).unwrap_err(),
-        parse("---\na: b: c\n---\n").unwrap_err()
-    );
+    assert_eq!(broken(tab).error, broken("---\na: b: c\n---\n").error);
 }
 
 #[test]
@@ -264,7 +260,7 @@ fn a_line_whose_text_before_its_comment_holds_no_key_is_refused_in_a_mapping() {
 #[test]
 fn an_empty_entry_of_a_flow_collection_is_refused_at_its_comma() {
     let refused = |source: &str| {
-        let error = parse(source).unwrap_err();
+        let error = broken(source).error;
         (error.message, error.span)
     };
     let before_comma = |at: usize| ("expected a value before `,`".to_owned(), at..at + 1);
@@ -633,12 +629,14 @@ fn value_depth(mapping: &Mapping) -> usize {
     deepest
 }
 
-/// The depth of the values of the frontmatter of `document`.
-fn frontmatter_depth(document: &Document) -> usize {
-    document
-        .frontmatter
-        .as_ref()
-        .map_or(0, |frontmatter| value_depth(&frontmatter.mapping))
+/// The depth of the values of the frontmatter of `document`, or `None` when
+/// no entry of it reads.
+fn frontmatter_depth(document: &Document) -> Option<usize> {
+    match &document.frontmatter {
+        Some(Ok(frontmatter)) => Some(value_depth(&frontmatter.mapping)),
+        Some(Err(_)) => None,
+        None => Some(0),
+    }
 }
 
 #[test]
@@ -646,13 +644,14 @@ fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
     on_two_megabytes(|| {
         for source in nested_frontmatter(VALUE_CAP) {
             let document = parse(&source).unwrap();
-            assert_eq!(frontmatter_depth(&document), VALUE_CAP);
+            assert_eq!(frontmatter_depth(&document), Some(VALUE_CAP));
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
                 let options = WriteOptions {
                     frontmatter: format,
                 };
                 let written = write(&document, &options).unwrap();
-                assert_eq!(frontmatter_depth(&parse(&written).unwrap()), VALUE_CAP);
+                let depth = frontmatter_depth(&parse(&written).unwrap());
+                assert_eq!(depth, Some(VALUE_CAP));
             }
             let copy = document.clone();
             assert_eq!(copy, document);
@@ -668,9 +667,10 @@ fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
     });
 }
 
-/// Reads `source`, checks that its frontmatter nests `depth` deep, and writes
-/// it in YAML and in TOML, each written text reading back to that depth.
-fn reads_and_writes_at_depth(source: &str, depth: usize) {
+/// Reads `source`, checks that its frontmatter nests `depth` deep, `None`
+/// when no entry of it reads, and writes it in YAML and in TOML, each written
+/// text reading back to that depth.
+fn reads_and_writes_at_depth(source: &str, depth: Option<usize>) {
     let document = parse(source).unwrap();
     assert_eq!(frontmatter_depth(&document), depth);
     for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
@@ -690,17 +690,21 @@ fn a_copy_counts_toward_the_value_cap_from_where_its_alias_stands() {
         let deep = format!("{}1{}", "[".repeat(lists), "]".repeat(lists));
         let source = format!("---\na: &d {deep}\nb: [*d]\nc: [[*d]]\ne: 1\n---\n");
         let document = parse(&source).unwrap();
-        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
-        assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b", "e"]);
-        reads_and_writes_at_depth(&source, VALUE_CAP);
+        let read = document.frontmatter.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(
+            read.mapping.pairs.keys().collect::<Vec<_>>(),
+            ["a", "b", "e"]
+        );
+        reads_and_writes_at_depth(&source, Some(VALUE_CAP));
     });
 }
 
 #[test]
 fn frontmatter_nested_one_level_past_the_value_cap_drops_the_innermost_pair_that_holds_it() {
     on_two_megabytes(|| {
-        // A pair whose value holds a key keeps every level but the dropped one.
-        let kept = [0, VALUE_CAP, 0, 0, 0, VALUE_CAP];
+        // A pair whose value holds a key keeps every level but the dropped one;
+        // the frontmatter of any other pair keeps no entry.
+        let kept = [None, Some(VALUE_CAP), None, None, None, Some(VALUE_CAP)];
         for (source, depth) in nested_frontmatter(VALUE_CAP + 1).iter().zip(kept) {
             reads_and_writes_at_depth(source, depth);
         }
@@ -719,7 +723,7 @@ fn a_second_tag_on_a_value_or_a_key_is_refused_where_it_starts() {
             "---\na: {!!str !!str b: 1}\n---\n",
             "---\na: !!str\n  !!str x\n---\n",
         ] {
-            let error = parse(source).unwrap_err();
+            let error = broken(source).error;
             assert_eq!(error.message, "a value has at most one tag");
             let at = source.rfind("!!").unwrap();
             assert_eq!(error.span, at..at + 1);
@@ -757,13 +761,14 @@ fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
         let levels = VALUE_CAP / 2;
         for source in tagged_frontmatter(levels) {
             let document = parse(&source).unwrap();
-            assert_eq!(frontmatter_depth(&document), levels);
+            assert_eq!(frontmatter_depth(&document), Some(levels));
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
                 let options = WriteOptions {
                     frontmatter: format,
                 };
                 let written = write(&document, &options).unwrap();
-                assert_eq!(frontmatter_depth(&parse(&written).unwrap()), levels);
+                let depth = frontmatter_depth(&parse(&written).unwrap());
+                assert_eq!(depth, Some(levels));
             }
             let copy = document.clone();
             assert_eq!(copy, document);
@@ -783,7 +788,7 @@ fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
 fn tags_and_explicit_keys_nested_one_level_past_the_value_cap_drop_the_innermost_pair() {
     on_two_megabytes(|| {
         let levels = VALUE_CAP / 2;
-        let kept = [levels, 0, levels];
+        let kept = [Some(levels), None, Some(levels)];
         for (source, depth) in tagged_frontmatter(levels + 1).iter().zip(kept) {
             reads_and_writes_at_depth(source, depth);
         }

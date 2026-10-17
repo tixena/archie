@@ -8,8 +8,8 @@ use tixschema::model_schema;
 
 use crate::writer::WriteError;
 
-/// Why a document could not be parsed, or a frontmatter entry was dropped,
-/// and where.
+/// Why a document could not be parsed, a frontmatter entry was dropped or a
+/// frontmatter is broken, and where.
 #[model_schema()]
 #[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
 #[error("{message} (at byte {})", span.start)]

@@ -23,8 +23,8 @@ use chrono::{
 };
 
 use crate::parser::ast::{
-    Args, Block, CodeBlock, Continues, Document, Inline, Mapping, MarkdownBlock, ScalarValue,
-    Section, Value,
+    Args, Block, BrokenFrontmatter, CodeBlock, Continues, Document, Inline, Mapping, MarkdownBlock,
+    ScalarValue, Section, Value,
 };
 use crate::parser::extension::Extension;
 use crate::parser::parse;
@@ -139,10 +139,20 @@ impl Rows<'_> {
         E: Extension,
     {
         self.push(0, "Document".to_owned(), &document.span);
-        if let Some(frontmatter) = &document.frontmatter {
-            let label = format!("Frontmatter format={:?}", frontmatter.format);
-            self.push(1, label, &frontmatter.span);
-            self.mapping(2, &frontmatter.mapping);
+        match &document.frontmatter {
+            Some(Ok(frontmatter)) => {
+                let label = format!("Frontmatter format={:?}", frontmatter.format);
+                self.push(1, label, &frontmatter.span);
+                self.mapping(2, &frontmatter.mapping);
+            }
+            Some(Err(broken)) => {
+                let label = format!(
+                    "BrokenFrontmatter format={:?} error={:?}",
+                    broken.format, broken.error.message
+                );
+                self.push(1, label, &broken.span);
+            }
+            None => {}
         }
         self.markdown_block(1, &document.body);
     }
@@ -290,6 +300,11 @@ fn check(source: &str, expected: &str) {
         actual == expected,
         "the tree differs.\n--- expected\n{expected}\n--- actual\n{actual}"
     );
+}
+
+/// The frontmatter of `source`, one of which no entry reads.
+fn broken(source: &str) -> BrokenFrontmatter {
+    parse(source).unwrap().frontmatter.unwrap().unwrap_err()
 }
 
 /// Parses `source` and checks, node by node, the source text each span

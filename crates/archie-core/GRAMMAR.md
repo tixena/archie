@@ -88,11 +88,18 @@ comment. The keys dropped by the value cap, by a tag archie does not read, for b
 list or a mapping, or by an alias that cannot be copied are listed too. A write leaves
 the dropped text out.
 
-A frontmatter of which no entry reads fails the whole file, with the error of the first
-entry that does not read, pointing at the place; it is not kept as text. A strict parse,
-`ParseOptions::strict()`, fails with the error of the first entry the frontmatter
-drops, pointing at the place, as for an extension's error (see
-[Extensions](#extensions)). The markdown never fails: what no rule recognizes is text.
+A frontmatter that keeps no entry, and refuses or drops at least one, is broken, and
+archie reads the body after it. `Document::frontmatter` holds it as
+`Err(BrokenFrontmatter)`: its `format`, its `span`, its `text`, which is its content
+between the delimiters without the line ending of its last line, and the `error` of
+the first entry it refuses or drops, at any depth, pointing at the place.
+`{a: 1, b: [}`, `a: !point 1` then `b: !point 2`, and `a = """never closed` are
+broken. Any other frontmatter is `Ok(Frontmatter)`: an empty one, and one that holds
+one list or one scalar that reads, keep no entry, drop none, and hold an empty
+mapping. A strict parse, `ParseOptions::strict()`, fails with the error of the first
+entry the frontmatter drops, or of a broken frontmatter, pointing at the place, as for
+an extension's error (see [Extensions](#extensions)). The markdown never fails: what
+no rule recognizes is text.
 
 ## Markdown block
 
@@ -488,10 +495,11 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
 - A pair or a header that does not read is refused, up to the next line that starts
   a key followed by `=`, or a `[`, after spaces or tabs. The pairs after a refused
   header go into the table open before it. Strings are passed over whole, so a `"""`
-  or `'''` string left open runs to the end of the frontmatter, dropping the rest. `title = Notes` then `date = 2026-10-17` is
-  `{date: 2026-10-17}`, and so is `tags = ["a", "b"` then `date = 2026-10-17`. A pair
-  is read to the end of its line before it is kept: `a = 1 2` is refused with
-  `expected the end of the line after the value`.
+  or `'''` string left open runs to the end of the frontmatter, dropping the rest, and
+  a frontmatter that keeps no statement before it is broken. `title = Notes` then
+  `date = 2026-10-17` is `{date: 2026-10-17}`, and so is `tags = ["a", "b"` then
+  `date = 2026-10-17`. A pair is read to the end of its line before it is kept:
+  `a = 1 2` is refused with `expected the end of the line after the value`.
 - Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
   dotted keys and of headers count together, and in YAML so do flow and block
   collections, properties on collections and explicit keys. The innermost pair that holds a
@@ -558,9 +566,9 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   after it. A frontmatter that holds one list or one scalar, with nothing but comments
   after it, holds no key, and is an empty mapping: `abc`, `[a, b]`, and `- a` then
   `- b` are all `{}`. One whose list or scalar does not read, an entry inside it
-  included, fails the file with `the frontmatter must be a mapping`, as `[unclosed`,
-  `!!int abc` and `- !!int abc` do, and so does one whose first line starts a flow list
-  with more after it, as `[a, b]` then `c: 1` does. A first line that holds a scalar or
+  included, is broken with `the frontmatter must be a mapping`, as `[unclosed`,
+  `!!int abc` and `- !!int abc` are, and so is one whose first line starts a flow list
+  with more after it, as `[a, b]` then `c: 1` is. A first line that holds a scalar or
   starts a block list, with a key after it, is an entry that does not read:
   `hello` then `c: 1` is `{c: 1}`.
 - An entry that does not read is refused. A pair of a block mapping runs from its
@@ -766,8 +774,8 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   `tags: [a, b, c]`. An explicit key counts as written: `? k` then `: a` then
   `k: b` is `k: [a, b]`.
 - `ANCHOR` is `&` and a name, and `ALIAS` is `*` and a name. A name runs to the first
-  space, tab, line ending or one of `, [ ] { }`; a `&` or a `*` with no name fails
-  the file with ``expected a name after `&` `` or ``expected a name after `*` ``.
+  space, tab, line ending or one of `, [ ] { }`; a `&` or a `*` with no name is
+  refused with ``expected a name after `&` `` or ``expected a name after `*` ``.
   The properties of a node, its anchor and its tag, come in either order; spaces and
   tabs may follow each, and inside a flow collection line breaks and comments too.
 - An anchor on a value or on a key names that node, and an alias reads as a copy of
@@ -890,9 +898,9 @@ A `PLAIN` value's type comes from how it is written:
 | Node | From | To |
 |---|---|---|
 | `Document` | The first byte of the file | The last |
-| `Frontmatter` | The opening delimiter | The end of the closing delimiter |
+| `Frontmatter`, `BrokenFrontmatter` | The opening delimiter | The end of the closing delimiter |
 | `Mapping` written as `{ ... }` | `{` | `}` |
-| `Mapping` whose every pair is dropped | Empty, at the start of its first pair | |
+| `Mapping` inside a value, whose every pair is dropped | Empty, at the start of its first pair | |
 | `Mapping` with no pairs written, at the root | Empty, on the line after the opening delimiter | |
 | `Mapping` of a YAML frontmatter that holds one list or one scalar | The value | The end of the value, or of the frontmatter's last text when the value is dropped |
 | `Mapping` of a TOML table with no pairs | Empty, right after its header | |
@@ -1026,13 +1034,14 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   keeps its start. So an extension reads a header the same way inside a grid cell and
   out, with `read_yaml_lines(context.source, &context.lines_of(range))`.
 - `to_json(document)` writes a document as JSON, and `from_json::<E>(text)` reads it
-  back, at any depth archie reads. No node writes its `kind`.
+  back, at any depth archie reads. No node writes its `kind`. A frontmatter is written
+  `{"Ok": ...}`, or `{"Err": ...}` when it is broken.
   `rebuild_with::<E>(document, &options)` builds the extension nodes again on such a
   document: it writes the plain tree in archie's form, with the frontmatter in the
-  syntax it was read in, or in YAML when TOML cannot hold a null in it, and parses that
-  text with `E`, so the spans count from the text written. It fails with
-  `RebuildError::Write`, naming the key, when the `Toml` args of a code block hold a
-  null, and with `RebuildError::Parse` when the parse fails.
+  syntax it was read in, or in YAML when TOML cannot hold a null in it, a broken one as
+  it was read, and parses that text with `E`, so the spans count from the text
+  written. It fails with `RebuildError::Write`, naming the key, when the `Toml` args of
+  a code block hold a null, and with `RebuildError::Parse` when the parse fails.
 - `Writer`, which `write` hands to an extension, has `push_str`, which adds text as
   it is; `markdown_block`, which writes a markdown block with its levels counted from
   one; `construct`, which writes a plain node in archie's form, each of its children
@@ -1051,7 +1060,7 @@ then read and written again, gives the same text the second time.
 
 | Construct | Written as |
 |---|---|
-| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
+| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; a broken frontmatter as it was read, its text between `---` lines for YAML and `+++` lines for TOML, whatever `WriteOptions::frontmatter` picks, because the text reads only in its own syntax; then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
 | Blank lines | One between two blocks and after a heading. Inside a tight list, none between the blocks of an item. |
 | Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A final run of `#`s in its text that a space or a tab precedes, or that is the whole text, gets a backslash before its first `#`, because the reader would take the run for the closing sequence: `Title ##` is written `# Title \##`. A heading line with no text is its marks alone. Every heading line is written. |
 | A heading that holds a line break | At depth 1 or 2, written underlined: its lines, each but the last ended by the break's `\`, guarded as a paragraph's lines, then `===` at depth 1 or `---` at depth 2 on a line of its own, because a `#` heading is one line. At depth 3 to 6, and right after other text in a tight list item, where a blank line would make the list loose, the one-line form, with the break written `&#10;`. |

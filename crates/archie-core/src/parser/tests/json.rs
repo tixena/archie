@@ -35,10 +35,13 @@ pub(super) fn rebuilds_from_json(source: &str) {
     let parsed = parse_with::<Comments>(source, &options).unwrap();
     let back: Document<With<Comments>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let own = WriteOptions {
-        frontmatter: parsed
-            .frontmatter
-            .as_ref()
-            .map_or_else(FrontmatterFormat::default, |frontmatter| frontmatter.format),
+        frontmatter: parsed.frontmatter.as_ref().map_or_else(
+            FrontmatterFormat::default,
+            |frontmatter| match frontmatter {
+                Ok(read) => read.format,
+                Err(broken) => broken.format,
+            },
+        ),
     };
     let written = parse_with::<Comments>(&write(&parsed, &own).unwrap(), &options).unwrap();
     assert_eq!(rebuild_with::<Comments>(&back, &options).unwrap(), written);
@@ -56,10 +59,10 @@ fn the_sample_document_reads_back_from_json() {
             r#""span":{"start":25,"end":29}}}],"heading":{"children":[{"Text":"#,
             r#"{"span":{"start":23,"end":24},"value":"A"}}],"span":{"start":21,"end":24}},"#,
             r#""span":{"start":21,"end":29},"subsections":[]}],"span":{"start":21,"end":30}},"#,
-            r#""frontmatter":{"format":"Yaml","mapping":{"pairs":{"title":{"repeats":[],"#,
+            r#""frontmatter":{"Ok":{"format":"Yaml","mapping":{"pairs":{"title":{"repeats":[],"#,
             r#""span":{"start":4,"end":16},"value":{"Scalar":{"span":{"start":11,"end":16},"#,
             r#""value":{"String":"Notes"}}}}},"span":{"start":4,"end":16}},"#,
-            r#""span":{"start":0,"end":20}},"span":{"start":0,"end":30}}"#,
+            r#""span":{"start":0,"end":20}}},"span":{"start":0,"end":30}}"#,
         )
     );
     let back: Document = from_json(&json).unwrap();
@@ -83,6 +86,30 @@ fn the_entries_a_frontmatter_drops_are_written_to_json_and_read_back() {
     let definition = Frontmatter::ts_definition();
     assert!(
         definition.contains("dropped?: Array<ParseError>;"),
+        "{definition}"
+    );
+}
+
+#[test]
+fn a_broken_frontmatter_is_written_to_json_as_err_and_read_back() {
+    let source = "---\n{a: 1, b: [}\n---\n# A\n";
+    let document = parse(source).unwrap();
+    let json = to_json(&document).unwrap();
+    assert!(
+        json.contains(concat!(
+            r#""frontmatter":{"Err":{"error":{"message":"expected `,` or `]` in the list","#,
+            r#""span":{"start":15,"end":15}},"format":"Yaml","span":{"start":0,"end":20},"#,
+            r#""text":"{a: 1, b: [}"}}"#,
+        )),
+        "{json}"
+    );
+    let back: Document = from_json(&json).unwrap();
+    assert_eq!(back, document);
+    reads_back_from_json(source);
+    rebuilds_from_json(source);
+    let definition = <Document>::ts_definition();
+    assert!(
+        definition.contains("{ Ok: Frontmatter } | { Err: BrokenFrontmatter }"),
         "{definition}"
     );
 }
@@ -143,7 +170,7 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
     let options = ParseOptions::default();
     let source = "+++\ntitle = \"Notes\"\n+++\n```markdown\n# A\n```\n";
     let mut parsed = parse_with::<Plain>(source, &options).unwrap();
-    let frontmatter = parsed.frontmatter.as_mut().unwrap();
+    let frontmatter = parsed.frontmatter.as_mut().unwrap().as_mut().unwrap();
     frontmatter.mapping.pairs["title"].value = Value::Scalar(Scalar {
         span: 0..0,
         value: ScalarValue::Null,
@@ -155,7 +182,10 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
     };
     let written = parse_with::<Plain>(&write(&parsed, &yaml).unwrap(), &options).unwrap();
     assert_eq!(
-        rebuilt.frontmatter.as_ref().map(|read| read.format),
+        rebuilt
+            .frontmatter
+            .as_ref()
+            .map(|read| read.as_ref().unwrap().format),
         Some(FrontmatterFormat::Yaml)
     );
     assert_eq!(rebuilt, written);
@@ -273,7 +303,13 @@ fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
 
 /// The value under `key` in the frontmatter of `document`, a scalar.
 fn scalar(document: &Document, key: &str) -> ScalarValue {
-    let mapping = &document.frontmatter.as_ref().unwrap().mapping;
+    let mapping = &document
+        .frontmatter
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .mapping;
     let found = match &mapping.pairs[key].value {
         Value::Scalar(scalar) => Some(scalar.value.clone()),
         Value::Mapping(_) | Value::Sequence(_) => None,

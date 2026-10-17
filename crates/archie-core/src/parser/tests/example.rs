@@ -236,7 +236,7 @@ fn the_example_parses_into_the_tree_written_by_hand() {
             sections: vec![section],
             span: span(106, &SOURCE[106..]),
         },
-        frontmatter: Some(frontmatter()),
+        frontmatter: Some(Ok(frontmatter())),
         kind: Kind(None),
         span: span(0, SOURCE),
     };

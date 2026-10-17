@@ -6,7 +6,9 @@ use core::{iter, mem};
 use indexmap::IndexMap;
 use indexmap::map::Entry;
 
-use crate::parser::ast::{Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value};
+use crate::parser::ast::{
+    BrokenFrontmatter, Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value,
+};
 use crate::parser::cursor::{Cursor, Dropped};
 use crate::parser::error::ParseError;
 use crate::parser::line::{Line, line_at};
@@ -40,12 +42,12 @@ impl From<Stop> for ParseError {
 
 /// The frontmatter `source` opens with at byte `start`, if any, and the
 /// offset its body starts at. A `strict` parse fails with the error of the
-/// first entry the frontmatter drops.
+/// first entry the frontmatter drops, or of a frontmatter no entry of reads.
 pub fn parse(
     source: &str,
     start: usize,
     strict: bool,
-) -> Result<(Option<Frontmatter>, usize), ParseError> {
+) -> Result<(Option<Result<Frontmatter, BrokenFrontmatter>>, usize), ParseError> {
     let opening = line_at(source, start);
     let format = match source[start..opening.end].trim_end() {
         "+++" => FrontmatterFormat::Toml,
@@ -56,25 +58,37 @@ pub fn parse(
         return Ok((None, start));
     };
     let content = opening.next..closing.start;
-    let (mapping, drops) = match format {
-        FrontmatterFormat::Toml => toml::read(source, content)?,
-        FrontmatterFormat::Yaml => yaml::read(source, content)?,
+    let read = match format {
+        FrontmatterFormat::Toml => toml::read(source, content.clone()),
+        FrontmatterFormat::Yaml => yaml::read(source, content.clone()),
     };
-    if let Some(first) = drops.first().filter(|_| strict) {
-        return Err(first.error.clone());
-    }
-    let dropped = drops
-        .into_iter()
-        .map(|entry| ParseError {
-            span: entry.span,
-            ..entry.error
-        })
-        .collect();
-    let frontmatter = Frontmatter {
-        dropped,
-        format,
-        mapping,
-        span: start..closing.start + 3,
+    let span = start..closing.start + 3;
+    let frontmatter = match read.and_then(kept) {
+        Ok((mapping, drops)) => {
+            if let Some(first) = drops.first().filter(|_| strict) {
+                return Err(first.error.clone());
+            }
+            let dropped = drops
+                .into_iter()
+                .map(|entry| ParseError {
+                    span: entry.span,
+                    ..entry.error
+                })
+                .collect();
+            Ok(Frontmatter {
+                dropped,
+                format,
+                mapping,
+                span,
+            })
+        }
+        Err(error) if strict => return Err(error),
+        Err(error) => Err(BrokenFrontmatter {
+            error,
+            format,
+            span,
+            text: without_line_ending(&source[content]).to_owned(),
+        }),
     };
     Ok((Some(frontmatter), closing.next))
 }
@@ -86,6 +100,23 @@ pub fn undropped((mapping, dropped): (Mapping, Vec<Dropped>)) -> Result<Mapping,
         .into_iter()
         .next()
         .map_or(Ok(mapping), |first| Err(first.error))
+}
+
+/// The mapping a reader read and what it dropped, or the error of the first
+/// entry it dropped when it kept no pair.
+fn kept(
+    (mapping, dropped): (Mapping, Vec<Dropped>),
+) -> Result<(Mapping, Vec<Dropped>), ParseError> {
+    match dropped.first() {
+        Some(first) if mapping.pairs.is_empty() => Err(first.error.clone()),
+        Some(_) | None => Ok((mapping, dropped)),
+    }
+}
+
+/// `text` without the line ending of its last line.
+fn without_line_ending(text: &str) -> &str {
+    text.strip_suffix('\n')
+        .map_or(text, |line| line.strip_suffix('\r').unwrap_or(line))
 }
 
 /// The depth of a value opened at `span` inside `open` values, or a drop

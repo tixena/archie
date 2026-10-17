@@ -34,8 +34,8 @@ use crate::writer;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum OnExtensionError {
-    /// The extension's error fails the parse, and so does the first entry
-    /// the frontmatter drops.
+    /// The extension's error fails the parse, and so do the first entry the
+    /// frontmatter drops and a frontmatter of which no entry reads.
     Fail,
     /// The construct stays the plain node archie built.
     #[default]
@@ -51,7 +51,7 @@ pub struct ParseOptions {
 
 impl ParseOptions {
     /// A parse that an extension's error fails, and the first entry the
-    /// frontmatter drops.
+    /// frontmatter drops or a frontmatter of which no entry reads.
     #[must_use]
     pub const fn strict() -> Self {
         Self {
@@ -65,9 +65,10 @@ impl ParseOptions {
 ///
 /// # Errors
 ///
-/// Returns an error when no entry of the frontmatter reads; an entry that
-/// does not read is dropped and listed in `Frontmatter::dropped`. The body
-/// never fails: what is not recognized stays as text.
+/// Never returns an error. An entry of the frontmatter that does not read is
+/// dropped and listed in `Frontmatter::dropped`, a frontmatter of which no
+/// entry reads is held as a `BrokenFrontmatter`, and what the body does not
+/// recognize stays as text.
 pub fn parse(source: &str) -> Result<Document, ParseError> {
     parse_with_set::<Markdown>(source, &ParseOptions::default())
 }
@@ -77,9 +78,9 @@ pub fn parse(source: &str) -> Result<Document, ParseError> {
 ///
 /// # Errors
 ///
-/// Returns an error when no entry of the frontmatter reads, or, in a strict
-/// parse, when the frontmatter drops an entry or an extension claims a
-/// construct and cannot read it.
+/// Returns an error only in a strict parse: when the frontmatter drops an
+/// entry, when no entry of it reads, or when an extension claims a construct
+/// and cannot read it.
 pub fn parse_with<E>(source: &str, options: &ParseOptions) -> Result<Document<With<E>>, ParseError>
 where
     E: Extension,
