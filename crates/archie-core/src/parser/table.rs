@@ -107,7 +107,7 @@ fn line_after(source: &str, at: usize, level: usize, base: Base<'_>) -> Option<T
     }
     let line = line_from(source, at, base);
     let text = &source[line.start..line.end];
-    let indent = space(text, line.origin + line.column);
+    let indent = space(text, line.column);
     let column = line.column + indent.columns;
     let trimmed = trim_end_spaces(&text[indent.bytes..]);
     (!trimmed.is_empty() && column >= level).then(|| TableLine {
@@ -480,7 +480,7 @@ fn columns(source: &str, line: &TableLine, base: Base<'_>) -> Vec<(usize, char)>
     let mut reached = read.column;
     for (at, character) in text.char_indices() {
         let next = if character == '\t' {
-            reached + space(&text[at..=at], read.origin + reached).columns
+            reached + space(&text[at..=at], reached).columns
         } else {
             reached + 1
         };

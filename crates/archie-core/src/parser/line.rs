@@ -2,27 +2,23 @@
 //! space that starts a text.
 
 /// One line of the source. `end` excludes the line ending; `next` is where
-/// the following line starts. Its tab stops count from `origin` columns
-/// before its column 0, and `start` is at its column `column`.
+/// the following line starts. Its tab stops count from its column 0, and
+/// `start` is at its column `column`.
 #[derive(Clone, Copy)]
 pub struct Line {
     pub column: usize,
     pub end: usize,
     pub next: usize,
-    pub origin: usize,
     pub start: usize,
 }
 
-/// What each line is read past: each column of `frame` in turn, its tab
-/// stops restarting where each ends, then at most `columns` columns of the
-/// white space left. Its tab stops count from its column 0 when `restart`
-/// is set, or else from where `frame` ends, the start of the source line
-/// when it is empty.
+/// What each line is read past: each column of `frame` in turn, then at
+/// most `columns` columns of the white space left. The line's tab stops
+/// restart where each ends, so they count from its column 0.
 #[derive(Clone, Copy, Default)]
 pub struct Base<'frame> {
     pub columns: usize,
     pub frame: &'frame [usize],
-    pub restart: bool,
 }
 
 /// The white space that starts a text: the bytes it takes and the columns
@@ -48,37 +44,31 @@ pub fn line_at(source: &str, start: usize) -> Line {
         column: 0,
         end,
         next,
-        origin: 0,
         start,
     }
 }
 
 /// The line at `start`, read past `base`. A tab that a column of `base`
 /// falls inside is passed, and its columns past it are the line's first
-/// columns, before `start`.
+/// columns, before `start`. The line's tab stops count from its column 0.
 pub fn line_from(source: &str, start: usize, base: Base<'_>) -> Line {
     let framed = base
         .frame
         .iter()
         .fold(line_at(source, start), |line, &columns| {
-            past(source, line, columns, true)
+            past(source, line, columns)
         });
-    past(source, framed, base.columns, base.restart)
+    past(source, framed, base.columns)
 }
 
 /// `line` read past at most `columns` more columns of the white space at
-/// its start, its tab stops restarting there when `restart` is set.
-fn past(source: &str, line: Line, columns: usize, restart: bool) -> Line {
-    let left_out = space_to(
-        &source[line.start..line.end],
-        line.origin + line.column,
-        line.origin + columns,
-    );
+/// its start, its tab stops restarting there, so they count from its new
+/// column 0.
+fn past(source: &str, line: Line, columns: usize) -> Line {
+    let left_out = space_to(&source[line.start..line.end], line.column, columns);
     let reached = line.column + left_out.columns;
-    let origin = reached.min(columns);
     Line {
-        column: reached - origin,
-        origin: if restart { 0 } else { line.origin + origin },
+        column: reached - reached.min(columns),
         start: line.start + left_out.bytes,
         ..line
     }

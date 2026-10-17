@@ -136,7 +136,6 @@ impl Context<'_> {
         let base = Base {
             columns: self.column,
             frame: self.frame.0,
-            restart: true,
         };
         let (mut read, _, cells) = match self.lines {
             Some(lines) => {

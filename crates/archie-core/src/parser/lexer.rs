@@ -146,12 +146,11 @@ struct Cut<'src> {
 }
 
 /// A place on a line read: its byte, and its column. The line's tab stops
-/// count from `origin` columns before its column 0.
+/// count from its column 0.
 #[derive(Clone, Copy)]
 struct Spot {
     at: usize,
     column: usize,
-    origin: usize,
 }
 
 impl Spot {
@@ -160,7 +159,6 @@ impl Spot {
         Self {
             at: self.at + width,
             column: self.column + width,
-            ..self
         }
     }
 
@@ -168,11 +166,7 @@ impl Spot {
     /// the text after it starts, and what is written from this spot to
     /// `end` past its white space up to that column.
     fn cut(self, source: &str, end: usize, limit: usize) -> (usize, Cut<'_>) {
-        let passed = space_to(
-            &source[self.at..end],
-            self.origin + self.column,
-            self.origin + limit,
-        );
+        let passed = space_to(&source[self.at..end], self.column, limit);
         let spaces = (self.column + passed.columns).saturating_sub(limit);
         let rest = self.at + passed.bytes;
         let cut = Cut {
@@ -186,18 +180,16 @@ impl Spot {
         Self {
             at: line.start,
             column: line.column,
-            origin: line.origin,
         }
     }
 
     /// Where the text starts past the spaces and tabs at this spot, up to
     /// `end`.
     fn text(self, source: &str, end: usize) -> Self {
-        let passed = space(&source[self.at..end], self.origin + self.column);
+        let passed = space(&source[self.at..end], self.column);
         Self {
             at: self.at + passed.bytes,
             column: self.column + passed.columns,
-            ..self
         }
     }
 }
