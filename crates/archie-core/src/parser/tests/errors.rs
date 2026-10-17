@@ -255,6 +255,28 @@ fn a_frontmatter_that_is_not_a_mapping_is_refused() {
 }
 
 #[test]
+fn a_frontmatter_that_holds_one_value_or_one_list_that_does_not_read_is_not_a_mapping() {
+    let not_a_mapping = |at: &str| named("the frontmatter must be a mapping", at);
+    for (source, at) in [
+        ("---\nabc\n---\n", "abc"),
+        ("---\n!!int abc\n---\n", "!!int abc"),
+        (
+            "---\n- 99999999999999999999\n---\n",
+            "- 99999999999999999999",
+        ),
+        (
+            "---\n[99999999999999999999]\n---\n",
+            "[99999999999999999999]",
+        ),
+        ("---\n- !!int abc\n---\n", "- !!int abc"),
+        ("---\n[!!int abc]\n---\n", "[!!int abc]"),
+        ("---\n!!int abc\n\nb: 1\n\n---\n", "!!int abc\n\nb: 1"),
+    ] {
+        assert_eq!(failed(source), not_a_mapping(at));
+    }
+}
+
+#[test]
 fn a_line_inside_a_quoted_string_must_be_indented_more_than_its_key() {
     let refused = (
         "a line inside a quoted string must be indented more than its key or `-`".to_owned(),
@@ -535,7 +557,10 @@ fn a_collection_key_on_the_first_line_of_a_block_or_after_a_dash_is_refused() {
 #[test]
 fn the_key_of_a_pair_inside_a_flow_list_stays_on_one_line() {
     let refused = |at: &'static str| ("expected `,` or `]` in the list".to_owned(), at);
-    assert_eq!(refusal("---\n[x\n  y: 1]\n---\n"), refused("y: 1]"));
+    assert_eq!(
+        failed("---\n[x\n  y: 1]\n---\n"),
+        named("the frontmatter must be a mapping", "[x\n  y: 1]")
+    );
     assert_eq!(refusal("---\na: [x\n  y: 1]\n---\n"), refused("y: 1]"));
 }
 

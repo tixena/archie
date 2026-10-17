@@ -84,8 +84,9 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             Ok(mapping)
         }
         Some(b'[') => {
-            let list = flow_sequence(&mut cursor, None, 0)?;
-            Err(not_a_mapping(list.span()))
+            let span = flow_sequence(&mut cursor, None, 0)
+                .map_or_else(|_| to_last_text(&cursor, root), |list| list.span().clone());
+            Err(not_a_mapping(&span))
         }
         Some(_) | None => {
             cursor.set_pos(line_start);
@@ -102,16 +103,36 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
 }
 
 /// The span of the value at the cursor when it fills its line, as a scalar
-/// or a list does and a key does not.
+/// or a list does and a key does not. A list or a line that holds no key
+/// spans to the frontmatter's last text when it does not read.
 fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Range<usize>> {
-    let value = if is_dash(cursor, 0) {
-        block_sequence(cursor, cursor.pos() - indent, indent, 0).ok()?
+    let start = cursor.pos();
+    let is_list = is_dash(cursor, 0);
+    let is_value = is_list || !holds_key(cursor);
+    let read = if is_list {
+        block_sequence(cursor, start - indent, indent, 0)
     } else {
-        let value = inline_value(cursor, Context::Key(indent), 0, false).ok()?;
-        end_of_line(cursor).ok()?;
-        value
+        inline_value(cursor, Context::Key(indent), 0, false)
+            .and_then(|value| end_of_line(cursor).map(|()| value))
     };
-    Some(value.span().clone())
+    read.map_or_else(
+        |_| is_value.then(|| to_last_text(cursor, start)),
+        |value| Some(value.span().clone()),
+    )
+}
+
+/// Whether the line at the cursor holds a key: it starts a mapping, or a
+/// `key:` follows an anchor, a tag or an indicator on it.
+fn holds_key(cursor: &mut Cursor<'_>) -> bool {
+    starts_mapping(cursor) || holds_pair(uncommented(cursor.rest_of_line()).trim_end())
+}
+
+/// From `start` to the end of the frontmatter's last line of text.
+fn to_last_text(cursor: &Cursor<'_>, start: usize) -> Range<usize> {
+    let text = cursor
+        .slice(start..cursor.end())
+        .trim_end_matches([' ', '\t', '\r', '\n']);
+    start..start + text.len()
 }
 
 fn not_a_mapping(span: &Range<usize>) -> ParseError {
