@@ -1147,13 +1147,14 @@ written once, with its list.
   Text plain, unless written plain it would read as something else: when it starts
   with a space or an indicator, one of `` ! " # % & ' * , - : > ? @ [ ] ` { | } ``,
   ends with a space or `:`, holds `: `, ` #` or a control character, holds `,`, `[`,
-  `]`, `{` or `}` inside a flow collection, has the form of a time of day, or reads as
-  another type; then in double quotes, with `\"`, `\\`, `\n`, `\r`, `\t` and `\xXX`
-  escapes. `null` for a null; `true` and `false`; a float as the shortest text that
-  reads back as it, with `.0` when that text would read as an integer, and `.inf`,
-  `-.inf` and `.nan`; dates and date-times after the tag `!!timestamp`, such as
-  `!!timestamp 2026-10-10T07:32:00Z`, with `Z` for UTC or an offset such as `+02:00`;
-  a time of day as quoted text, such as `at: "07:32:00"`, which reads back as text.
+  `]`, `{` or `}` inside a flow collection, has the form of a time of day or of an
+  integer that does not fit 64 bits, or reads as another type; then in double quotes,
+  with `\"`, `\\`, `\n`, `\r`, `\t` and `\xXX` escapes. `null` for a null; `true` and
+  `false`; a float as the shortest text that reads back as it, with `.0` when that
+  text would read as an integer, and `.inf`, `-.inf` and `.nan`; dates and date-times
+  after the tag `!!timestamp`, such as `!!timestamp 2026-10-10T07:32:00Z`, with `Z`
+  for UTC or an offset such as `+02:00`; a time of day as quoted text, such as
+  `at: "07:32:00"`, which reads back as text.
 - **TOML**, between `+++` lines. The plain keys of a table first, then, in the order
   they were read, a `[path]` header for each mapping it holds and a `[[path]]` header
   for each mapping of a list that holds mappings and nothing else, each after a blank
