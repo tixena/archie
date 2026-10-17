@@ -9,9 +9,9 @@ use indexmap::IndexMap;
 use indexmap::map::Entry;
 
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
-use crate::parser::cursor::Cursor;
+use crate::parser::cursor::{Cursor, Dropped};
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{Stop, append, caught, extent, finish, insert, nest};
+use crate::parser::frontmatter::{Stop, append, caught, extent, finish, insert, nest, undropped};
 use crate::parser::scalar;
 
 /// One part of a key, such as `name` in `owner.name`, and where it is
@@ -25,12 +25,13 @@ type Part = (String, Range<usize>);
 struct Made(HashMap<String, Self>);
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
-    read(source, content).map(|(mapping, _)| mapping)
+    read(source, content).and_then(undropped)
 }
 
-/// The mapping [`parse`] reads, with the error of each pair and table it
-/// dropped.
-pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<ParseError>), ParseError> {
+/// The mapping [`parse`] reads, with each statement, pair and table it
+/// dropped. A frontmatter none of whose statements reads fails with the error
+/// of the first.
+pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<Dropped>), ParseError> {
     let empty_at = content.start;
     let mut cursor = Cursor::new(source, content, ());
     let mut root = IndexMap::new();
@@ -40,57 +41,88 @@ pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<ParseEr
     // add to them.
     let mut implicit: Vec<Vec<String>> = Vec::new();
     let mut made = Made::default();
+    // `None` before the first statement, `Ok` once one reads, or else the
+    // error of the first.
+    let mut outcome = None;
     loop {
         skip_trivia(&mut cursor);
         if cursor.at_end() {
             break;
         }
-        let start = cursor.pos();
-        let kept = if cursor.peek() == Some(b'[') {
-            let read = header(&mut cursor, &mut root, &mut implicit, &made);
-            match caught(&mut cursor, start, read, skip_table)? {
-                Ok(path) => {
-                    current = path;
-                    make(&mut made, &current);
-                    true
-                }
-                Err(dropped) => {
-                    cursor.note_drop(dropped);
-                    false
-                }
-            }
+        let mark = cursor.mark();
+        let is_header = cursor.peek() == Some(b'[');
+        let read = if is_header {
+            header(&mut cursor, &mut root, &mut implicit, &made).map(|(path, end)| {
+                current = path;
+                make(&mut made, &current);
+                end
+            })
         } else {
-            let table = table_at(&mut root, &current);
-            let read = entry(&mut cursor, table, make(&mut made, &current), current.len())?;
-            if let Some(keys) = &read {
-                // The key written with `=` holds a value of its own, so no
-                // table under it is one only a deeper header made.
-                let full = [current.as_slice(), keys.as_slice()].concat();
-                implicit.retain(|path| {
-                    !dotted_through(path, &current, keys) && !path.starts_with(&full)
-                });
-            }
-            read.is_some()
+            statement(&mut cursor, &mut root, &current, &mut implicit, &mut made)
         };
-        if kept {
-            stretch(&mut root, &current, cursor.pos());
-        }
-        end_of_line(&mut cursor)?;
+        let (error, skip): (ParseError, fn(&mut Cursor<'_>)) = match read {
+            Ok(end) => {
+                stretch(&mut root, &current, end);
+                outcome = Some(Ok(()));
+                continue;
+            }
+            Err(Stop::Drop(error)) => {
+                outcome = Some(Ok(()));
+                (error, if is_header { skip_table } else { skip_pair })
+            }
+            Err(Stop::Fail(error)) => {
+                let _: &mut Result<(), ParseError> =
+                    outcome.get_or_insert_with(|| Err(error.clone()));
+                (error, skip_statement)
+            }
+        };
+        cursor.set_pos(mark.pos);
+        skip(&mut cursor);
+        cursor.drop_since(mark, error);
+    }
+    if let Some(Err(error)) = outcome {
+        return Err(error);
     }
     Ok((finish(root, empty_at), cursor.into_dropped()))
 }
 
-/// Reads a `[a.b]` or `[[a.b]]` header, opens the table it names and returns
-/// its path. A table written again follows the repeated-key rule; a table
-/// made only by a deeper header takes the pairs of its own header. Before the
-/// last part, the path goes on into the tables of `made`; any other value is
-/// the key written again.
+/// Reads the `key = value` pair at the cursor and the end of its line into
+/// the open table at `current`, and returns where the pair ends.
+fn statement(
+    cursor: &mut Cursor<'_>,
+    root: &mut IndexMap<String, Pair>,
+    current: &[String],
+    implicit: &mut Vec<Vec<String>>,
+    made: &mut Made,
+) -> Result<usize, Stop> {
+    let (parents, last, value) = pair(cursor, current.len())?;
+    let end = cursor.pos();
+    end_of_line(cursor)?;
+    let keys = put_pair(
+        table_at(root, current),
+        make(made, current),
+        &parents,
+        last,
+        value,
+    );
+    // The key written with `=` holds a value of its own, so no table under it
+    // is one only a deeper header made.
+    let full = [current, keys.as_slice()].concat();
+    implicit.retain(|path| !dotted_through(path, current, &keys) && !path.starts_with(&full));
+    Ok(end)
+}
+
+/// Reads a `[a.b]` or `[[a.b]]` header to its line's end, opens the table it
+/// names and returns its path and where it ends. A table written again follows
+/// the repeated-key rule; a table made only by a deeper header takes the pairs
+/// of its own header. Before the last part, the path goes on into the tables of
+/// `made`; any other value is the key written again.
 fn header(
     cursor: &mut Cursor<'_>,
     root: &mut IndexMap<String, Pair>,
     implicit: &mut Vec<Vec<String>>,
     made: &Made,
-) -> Result<Vec<String>, Stop> {
+) -> Result<(Vec<String>, usize), Stop> {
     let start = cursor.pos();
     cursor.bump();
     let array = cursor.eat(b'[');
@@ -104,6 +136,7 @@ fn header(
         return cursor.error("expected `]` to close the table header");
     }
     let span = start..cursor.pos();
+    end_of_line(cursor)?;
     let path: Vec<String> = parents
         .into_iter()
         .chain(iter::once(last))
@@ -164,7 +197,7 @@ fn header(
         tables = inside;
         table = &mut table_of(&mut pair.value).pairs;
     }
-    Ok(path)
+    Ok((path, span.end))
 }
 
 /// The open table at `path`, into the last item of an array of tables. The
@@ -251,30 +284,41 @@ fn dotted_through(path: &[String], current: &[String], keys: &[String]) -> bool 
 }
 
 /// Reads `key = value` into `pairs`, a table inside `open` values whose
-/// tables a dotted key or a header made are `made`, and returns the parts of
-/// the key, or `None` when the pair is dropped.
+/// tables a dotted key or a header made are `made`. A pair that raises a drop
+/// is noted with its error, in place of the drops noted inside it.
 fn entry(
     cursor: &mut Cursor<'_>,
     pairs: &mut IndexMap<String, Pair>,
     made: &mut Made,
     open: usize,
-) -> Result<Option<Vec<String>>, Stop> {
-    let start = cursor.pos();
+) -> Result<(), Stop> {
+    let mark = cursor.mark();
     let read = pair(cursor, open);
-    let (parents, last, value) = match caught(cursor, start, read, skip_pair)? {
-        Ok(parts) => parts,
-        Err(dropped) => {
-            cursor.note_drop(dropped);
-            return Ok(None);
+    match caught(cursor, mark.pos, read, skip_pair)? {
+        Ok((parents, last, value)) => {
+            let _: Vec<String> = put_pair(pairs, made, &parents, last, value);
         }
-    };
+        Err(dropped) => cursor.drop_since(mark, dropped),
+    }
+    Ok(())
+}
+
+/// Adds `value` under the key whose parts are `parents` and `last`, as
+/// [`put`] does, and returns the name of each part.
+fn put_pair(
+    pairs: &mut IndexMap<String, Pair>,
+    made: &mut Made,
+    parents: &[Part],
+    last: Part,
+    value: Value,
+) -> Vec<String> {
     let keys = parents
         .iter()
         .chain(iter::once(&last))
         .map(|(name, _)| name.clone())
         .collect();
-    put(pairs, made, &parents, last, value);
-    Ok(Some(keys))
+    put(pairs, made, parents, last, value);
+    keys
 }
 
 /// The parts before the last of a `key = value` pair inside `open` values,
@@ -315,6 +359,39 @@ fn skip_pair(cursor: &mut Cursor<'_>) {
         }
         cursor.bump();
     }
+}
+
+/// Moves the cursor from the start of a statement that does not read past
+/// it: to the next line that starts a key followed by `=`, or a `[`. Strings
+/// are passed over whole, so one left open runs to the end.
+fn skip_statement(cursor: &mut Cursor<'_>) {
+    loop {
+        match cursor.peek() {
+            None => return,
+            Some(b'\n') => {
+                cursor.bump();
+                if starts_statement(cursor) {
+                    return;
+                }
+            }
+            Some(b'"' | b'\'') => {
+                let _: Result<Value, ParseError> = quoted(cursor);
+            }
+            Some(b'#') => skip_comment(cursor),
+            Some(_) => cursor.bump(),
+        }
+    }
+}
+
+/// Whether the line at the cursor starts a statement: after spaces and tabs,
+/// a `[`, or a key followed by `=`.
+fn starts_statement(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+    cursor.skip_spaces();
+    let starts =
+        cursor.peek() == Some(b'[') || key_path(cursor).is_ok_and(|_| cursor.peek() == Some(b'='));
+    cursor.set_pos(start);
+    starts
 }
 
 /// Moves the cursor from a header that is dropped past its table and the

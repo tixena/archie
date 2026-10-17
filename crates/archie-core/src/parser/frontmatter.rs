@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use indexmap::map::Entry;
 
 use crate::parser::ast::{Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value};
-use crate::parser::cursor::Cursor;
+use crate::parser::cursor::{Cursor, Dropped};
 use crate::parser::error::ParseError;
 use crate::parser::line::{Line, line_at};
 use crate::parser::{toml, yaml};
@@ -39,8 +39,13 @@ impl From<Stop> for ParseError {
 }
 
 /// The frontmatter `source` opens with at byte `start`, if any, and the
-/// offset its body starts at.
-pub fn parse(source: &str, start: usize) -> Result<(Option<Frontmatter>, usize), ParseError> {
+/// offset its body starts at. A `strict` parse fails with the error of the
+/// first entry the frontmatter drops.
+pub fn parse(
+    source: &str,
+    start: usize,
+    strict: bool,
+) -> Result<(Option<Frontmatter>, usize), ParseError> {
     let opening = line_at(source, start);
     let format = match source[start..opening.end].trim_end() {
         "+++" => FrontmatterFormat::Toml,
@@ -51,16 +56,36 @@ pub fn parse(source: &str, start: usize) -> Result<(Option<Frontmatter>, usize),
         return Ok((None, start));
     };
     let content = opening.next..closing.start;
-    let mapping = match format {
-        FrontmatterFormat::Toml => toml::parse(source, content)?,
-        FrontmatterFormat::Yaml => yaml::parse(source, content)?,
+    let (mapping, drops) = match format {
+        FrontmatterFormat::Toml => toml::read(source, content)?,
+        FrontmatterFormat::Yaml => yaml::read(source, content)?,
     };
+    if let Some(first) = drops.first().filter(|_| strict) {
+        return Err(first.error.clone());
+    }
+    let dropped = drops
+        .into_iter()
+        .map(|entry| ParseError {
+            span: entry.span,
+            ..entry.error
+        })
+        .collect();
     let frontmatter = Frontmatter {
+        dropped,
         format,
         mapping,
         span: start..closing.start + 3,
     };
     Ok((Some(frontmatter), closing.next))
+}
+
+/// The mapping a reader read, `dropped` empty, or else the error of the
+/// first entry or key it dropped.
+pub fn undropped((mapping, dropped): (Mapping, Vec<Dropped>)) -> Result<Mapping, ParseError> {
+    dropped
+        .into_iter()
+        .next()
+        .map_or(Ok(mapping), |first| Err(first.error))
 }
 
 /// The depth of a value opened at `span` inside `open` values, or a drop

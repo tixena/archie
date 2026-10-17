@@ -67,6 +67,27 @@ fn the_sample_document_reads_back_from_json() {
 }
 
 #[test]
+fn the_entries_a_frontmatter_drops_are_written_to_json_and_read_back() {
+    let document =
+        parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n").unwrap();
+    let json = to_json(&document).unwrap();
+    assert!(
+        json.contains(concat!(
+            r#""dropped":[{"message":"a line of a flow collection must be indented "#,
+            r#"more than its key","span":{"start":17,"end":28}}]"#,
+        )),
+        "{json}"
+    );
+    let back: Document = from_json(&json).unwrap();
+    assert_eq!(back, document);
+    let definition = Frontmatter::ts_definition();
+    assert!(
+        definition.contains("dropped?: Array<ParseError>;"),
+        "{definition}"
+    );
+}
+
+#[test]
 fn a_tree_at_the_caps_reads_back_from_json() {
     on_two_megabytes(|| {
         let stars = "*".repeat(2 * INLINE_CAP);

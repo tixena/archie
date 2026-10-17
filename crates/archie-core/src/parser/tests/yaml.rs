@@ -1,7 +1,12 @@
 use core::ops::Range;
 
 use super::{check, check_spans};
-use crate::parser::{parse, read_toml, read_yaml};
+use crate::parser::ast::Mapping;
+use crate::parser::error::ParseError;
+use crate::parser::{parse, read_toml, read_toml_lines, read_yaml, read_yaml_lines};
+
+/// `read_toml` or `read_yaml`.
+type Reader = fn(&str, Range<usize>) -> Result<Mapping, ParseError>;
 
 #[test]
 fn a_note_frontmatter_with_every_scalar_type_and_both_list_styles() {
@@ -288,6 +293,38 @@ fn the_readers_take_a_range_of_a_larger_text_and_keep_its_offsets() {
     let toml = "x\nname = \"Ada\"\ny";
     let table = read_toml(toml, 2..15).unwrap();
     assert_eq!(&toml[table.pairs["name"].span.clone()], "name = \"Ada\"");
+}
+
+#[test]
+fn the_readers_fail_with_their_first_error_and_drop_nothing() {
+    let refused = |source: &str, read: Reader| {
+        let error = read(source, 0..source.len()).unwrap_err();
+        (error.message, source[error.span].to_owned())
+    };
+    let flow = "a line of a flow collection must be indented more than its key";
+    let yaml = "title: Notes\ntags: [a, b\ndate: 2026-10-17";
+    let error = read_yaml(yaml, 0..yaml.len()).unwrap_err();
+    assert_eq!(error.message, flow);
+    let date = yaml.find("date").unwrap();
+    assert_eq!(error.span, date..date);
+    let tag = "the tag `!point` is not one archie reads";
+    assert_eq!(
+        refused("a: !point 1\nb: 2", read_yaml),
+        (tag.to_owned(), "!point".to_owned())
+    );
+    assert_eq!(
+        refused("title = Notes\ndate = 2026-10-17", read_toml),
+        ("`Notes` is not a value".to_owned(), "Notes".to_owned())
+    );
+    let source = "> title = Notes\n> date = 2026-10-17\n> a: !point 1\n> b: 2\n";
+    let line = |text: &str| {
+        let start = source.find(text).unwrap();
+        start..start + text.len()
+    };
+    let toml = read_toml_lines(source, &[line("title = Notes"), line("date = 2026-10-17")]);
+    assert_eq!(toml.unwrap_err().span, line("Notes"));
+    let yaml_lines = read_yaml_lines(source, &[line("a: !point 1"), line("b: 2")]);
+    assert_eq!(yaml_lines.unwrap_err().span, line("!point"));
 }
 
 #[test]

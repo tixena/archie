@@ -34,7 +34,8 @@ use crate::writer;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum OnExtensionError {
-    /// The extension's error fails the parse.
+    /// The extension's error fails the parse, and so does the first entry
+    /// the frontmatter drops.
     Fail,
     /// The construct stays the plain node archie built.
     #[default]
@@ -49,7 +50,8 @@ pub struct ParseOptions {
 }
 
 impl ParseOptions {
-    /// A parse that an extension's error fails.
+    /// A parse that an extension's error fails, and the first entry the
+    /// frontmatter drops.
     #[must_use]
     pub const fn strict() -> Self {
         Self {
@@ -63,8 +65,9 @@ impl ParseOptions {
 ///
 /// # Errors
 ///
-/// Returns an error when the frontmatter cannot be read. The body never
-/// fails: what is not recognized stays as text.
+/// Returns an error when no entry of the frontmatter reads; an entry that
+/// does not read is dropped and listed in `Frontmatter::dropped`. The body
+/// never fails: what is not recognized stays as text.
 pub fn parse(source: &str) -> Result<Document, ParseError> {
     parse_with_set::<Markdown>(source, &ParseOptions::default())
 }
@@ -74,8 +77,9 @@ pub fn parse(source: &str) -> Result<Document, ParseError> {
 ///
 /// # Errors
 ///
-/// Returns an error when the frontmatter cannot be read, or, in a strict
-/// parse, when an extension claims a construct and cannot read it.
+/// Returns an error when no entry of the frontmatter reads, or, in a strict
+/// parse, when the frontmatter drops an entry or an extension claims a
+/// construct and cannot read it.
 pub fn parse_with<E>(source: &str, options: &ParseOptions) -> Result<Document<With<E>>, ParseError>
 where
     E: Extension,
@@ -149,7 +153,8 @@ where
     } else {
         0
     };
-    let (frontmatter, body_start) = frontmatter::parse(source, start)?;
+    let strict = options.on_extension_error == OnExtensionError::Fail;
+    let (frontmatter, body_start) = frontmatter::parse(source, start, strict)?;
     let (body, _, cells) = block::parse(source, body_start);
     let mut document = Document {
         body,
@@ -163,7 +168,7 @@ where
         frame: Frame::NONE,
         lines: None,
         source,
-        strict: options.on_extension_error == OnExtensionError::Fail,
+        strict,
     };
     claim::document(&mut document, &context, &cells)?;
     Ok(document)
@@ -174,7 +179,8 @@ where
 ///
 /// # Errors
 ///
-/// Returns an error when the text is not TOML that archie reads.
+/// Returns the error of the first entry the text drops, as a strict parse
+/// does, or of the text when no entry of it reads.
 pub fn read_toml(source: &str, range: Range<usize>) -> Result<Mapping, ParseError> {
     toml::parse(source, range)
 }
@@ -185,7 +191,8 @@ pub fn read_toml(source: &str, range: Range<usize>) -> Result<Mapping, ParseErro
 ///
 /// # Errors
 ///
-/// Returns an error when the text is not TOML that archie reads.
+/// Returns the error of the first entry the text drops, as a strict parse
+/// does, or of the text when no entry of it reads.
 pub fn read_toml_lines(source: &str, lines: &[Range<usize>]) -> Result<Mapping, ParseError> {
     read_lines(source, lines, toml::parse)
 }
@@ -195,7 +202,8 @@ pub fn read_toml_lines(source: &str, lines: &[Range<usize>]) -> Result<Mapping, 
 ///
 /// # Errors
 ///
-/// Returns an error when the text is not YAML that archie reads.
+/// Returns the error of the first entry the text drops, as a strict parse
+/// does, or of the text when no entry of it reads.
 pub fn read_yaml(source: &str, range: Range<usize>) -> Result<Mapping, ParseError> {
     yaml::parse(source, range)
 }
@@ -206,7 +214,8 @@ pub fn read_yaml(source: &str, range: Range<usize>) -> Result<Mapping, ParseErro
 ///
 /// # Errors
 ///
-/// Returns an error when the text is not YAML that archie reads.
+/// Returns the error of the first entry the text drops, as a strict parse
+/// does, or of the text when no entry of it reads.
 pub fn read_yaml_lines(source: &str, lines: &[Range<usize>]) -> Result<Mapping, ParseError> {
     read_lines(source, lines, yaml::parse)
 }

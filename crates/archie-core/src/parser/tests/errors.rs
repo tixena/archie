@@ -1,19 +1,38 @@
 use super::on_two_megabytes;
 use crate::parser::ast::{Document, FrontmatterFormat, Mapping, Value};
+use crate::parser::error::ParseError;
+use crate::parser::extension::Plain;
 use crate::parser::frontmatter::VALUE_CAP;
-use crate::parser::{from_json, parse, to_json};
+use crate::parser::{ParseOptions, from_json, parse, parse_with, to_json};
 use crate::writer::{WriteOptions, write};
 
-/// The message `source` fails with and the source text the error points at.
+/// The error a strict parse of `source` fails with. A parse that is not
+/// strict fails with it too when no entry of the frontmatter reads, and else
+/// drops an entry first with its message.
+fn strict_error(source: &str) -> ParseError {
+    let error = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
+    match parse(source) {
+        Ok(document) => {
+            let dropped = document.frontmatter.unwrap().dropped;
+            let first = dropped.first().map(|drop| &drop.message);
+            assert_eq!(first, Some(&error.message), "{source:?}");
+        }
+        Err(failure) => assert_eq!(failure, error, "{source:?}"),
+    }
+    error
+}
+
+/// The message a strict parse of `source` fails with and the source text the
+/// error points at.
 fn failure(source: &str) -> (String, &str) {
-    let error = parse(source).unwrap_err();
+    let error = strict_error(source);
     (error.message, &source[error.span])
 }
 
-/// The message `source` fails with and the rest of the line the error starts
-/// on.
+/// The message a strict parse of `source` fails with and the rest of the
+/// line the error starts on.
 fn refusal(source: &str) -> (String, &str) {
-    let error = parse(source).unwrap_err();
+    let error = strict_error(source);
     let rest = &source[error.span.start..];
     (error.message, rest.lines().next().unwrap_or(rest))
 }
@@ -261,15 +280,9 @@ fn a_frontmatter_with_more_after_its_one_value_is_refused() {
     let not_a_mapping = |at: &str| named("the frontmatter must be a mapping", at);
     assert_eq!(failed("---\n[a, b]\nc: 1\n---\n"), not_a_mapping("[a, b]"));
     assert_eq!(failed("---\n[a, b] c\n---\n"), not_a_mapping("[a, b]"));
-    assert_eq!(failed("---\nhello\nc: 1\n---\n"), not_a_mapping("hello"));
-    assert_eq!(failed("---\n- a\nc: 1\n---\n"), not_a_mapping("- a"));
     assert_eq!(
         failed("---\n[!point a]\nc: 1\n---\n"),
         not_a_mapping("[!point a]\nc: 1")
-    );
-    assert_eq!(
-        failed("---\n- !point a\nc: 1\n---\n"),
-        not_a_mapping("- !point a\nc: 1")
     );
     assert_eq!(
         refusal("---\n{a: 1}\nb: 2\n---\n"),
@@ -288,7 +301,7 @@ fn a_frontmatter_that_holds_one_value_or_one_list_that_does_not_read_is_not_a_ma
         ("---\n!!int abc\n---\n", "!!int abc"),
         ("---\n- !!int abc\n---\n", "- !!int abc"),
         ("---\n[!!int abc]\n---\n", "[!!int abc]"),
-        ("---\n!!int abc\n\nb: 1\n\n---\n", "!!int abc\n\nb: 1"),
+        ("---\n!!int abc\n\n# b: 1\n\n---\n", "!!int abc\n\n# b: 1"),
     ] {
         assert_eq!(failed(source), not_a_mapping(at));
     }
@@ -316,13 +329,13 @@ fn a_yaml_flow_collection_left_open_is_refused() {
 }
 
 #[test]
-fn a_dropped_pair_fails_the_file_as_its_value_fails_in_a_pair_that_is_kept() {
+fn a_pair_whose_key_is_a_list_or_a_mapping_is_refused_as_its_value_is_in_a_pair_that_is_kept() {
     let at_end = |source: &str| {
         let end = source.find("[unclosed\n").unwrap() + "[unclosed\n".len();
         ("expected `,` or `]` in the list".to_owned(), end..end)
     };
     let refused = |source: &str| {
-        let error = parse(source).unwrap_err();
+        let error = strict_error(source);
         (error.message, error.span)
     };
     for source in [
@@ -534,7 +547,7 @@ fn a_block_key_cannot_start_with_a_block_scalar_indicator() {
 #[test]
 fn a_tab_before_a_key_or_a_list_entry_is_refused_at_the_tab() {
     let refused = |source: &str| {
-        let error = parse(source).unwrap_err();
+        let error = strict_error(source);
         (error.message, error.span)
     };
     let at_tab = |at: usize| {

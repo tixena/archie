@@ -1224,6 +1224,7 @@ fn text(value: &str) -> Value {
 fn with_frontmatter(pairs: IndexMap<String, Pair>) -> Document {
     Document {
         frontmatter: Some(Frontmatter {
+            dropped: Vec::new(),
             format: FrontmatterFormat::Yaml,
             mapping: Mapping { pairs, span: 0..0 },
             span: 0..0,
@@ -1621,6 +1622,21 @@ fn an_alias_is_written_as_a_copy_of_its_anchors_value_and_no_anchor_is_written()
     assert_eq!(
         written("---\ndefaults: &d\n  draft: false\n  lang: en\npost: *d\n---\n# Notes\n"),
         "---\ndefaults:\n  draft: false\n  lang: en\npost:\n  draft: false\n  lang: en\n---\n# Notes\n"
+    );
+}
+
+#[test]
+fn a_write_leaves_every_dropped_entry_out() {
+    let document =
+        parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n").unwrap();
+    assert_eq!(
+        write(&document, &WriteOptions::default()).unwrap(),
+        "---\ntitle: Notes\ndate: !!timestamp 2026-10-17\n---\n# Body\n"
+    );
+    let toml = parse("+++\ntitle = Notes\ndate = 2026-10-17\n+++\n# Body\n").unwrap();
+    assert_eq!(
+        write(&toml, &TOML).unwrap(),
+        "+++\ndate = 2026-10-17\n+++\n# Body\n"
     );
 }
 

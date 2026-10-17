@@ -134,6 +134,7 @@ fn frontmatter() -> Frontmatter {
         ),
     ]);
     Frontmatter {
+        dropped: Vec::new(),
         format: FrontmatterFormat::Toml,
         mapping: Mapping {
             pairs,

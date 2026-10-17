@@ -2,12 +2,16 @@
 
 use core::ops::Range;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tixschema::model_schema;
 
 use crate::writer::WriteError;
 
-/// Why a document could not be parsed, and where.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+/// Why a document could not be parsed, or a frontmatter entry was dropped,
+/// and where.
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Eq, Error, Serialize, Deserialize)]
 #[error("{message} (at byte {})", span.start)]
 #[non_exhaustive]
 pub struct ParseError {

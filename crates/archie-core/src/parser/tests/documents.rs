@@ -1,10 +1,12 @@
 //! Whole documents. Each is a file under `fixtures/`, with the outline of
 //! the tree it parses into beside it in a `.tree` file, or a source written
 //! here. Each reads back from JSON as that tree, every `kind` empty, and its
-//! extension nodes build again from it.
+//! extension nodes build again from it. No fixture's frontmatter drops an
+//! entry.
 
 use super::json::{reads_back_from_json, rebuilds_from_json};
 use super::{check, check_spans};
+use crate::parser::parse;
 
 macro_rules! document {
     ($name:ident) => {
@@ -15,6 +17,8 @@ macro_rules! document {
                 source,
                 include_str!(concat!("fixtures/", stringify!($name), ".tree")),
             );
+            let frontmatter = parse(source).unwrap().frontmatter;
+            assert!(frontmatter.is_none_or(|read| read.dropped.is_empty()));
             reads_back_from_json(source);
             rebuilds_from_json(source);
         }

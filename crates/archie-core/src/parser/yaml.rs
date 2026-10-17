@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
-use crate::parser::cursor;
+use crate::parser::cursor::{self, Dropped, Mark};
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{Stop, caught, finish, insert, nest};
+use crate::parser::frontmatter::{Stop, caught, finish, insert, nest, undropped};
 use crate::parser::scalar;
 
 /// How many values the anchors and aliases of one frontmatter may copy:
@@ -33,8 +33,12 @@ const TAGS: [&str; 8] = [
     "timestamp",
 ];
 
-/// The cursor of the YAML reader, which keeps the anchors it has read.
-type Cursor<'src> = cursor::Cursor<'src, Anchors>;
+/// The cursor of the YAML reader.
+type Cursor<'src> = cursor::Cursor<'src, State>;
+
+/// A key's text, or where a key that is a list or a mapping is written: TOML
+/// cannot hold such a key, so its pair is dropped.
+type Key = Result<String, Range<usize>>;
 
 /// What a block scalar keeps of the line break after its text and of the
 /// empty lines after that.
@@ -69,26 +73,30 @@ impl Context {
     }
 }
 
-/// One pair as read: kept under its key, or dropped because its key is a
-/// list or a mapping, which TOML cannot hold.
+/// One pair as read: kept under its key, or dropped with the error of a key
+/// that is a list or a mapping.
 enum Read {
-    Dropped,
+    Dropped(ParseError),
     Kept(String, Pair),
 }
 
 impl Read {
-    /// The pair from `start` to the end of `value`, kept under `name`, or
-    /// dropped when it has none.
-    fn new(name: Option<String>, start: usize, value: Value) -> Self {
-        let Some(key) = name else {
-            return Self::Dropped;
-        };
-        let pair = Pair {
-            repeats: Vec::new(),
-            span: start..value.span().end,
-            value,
-        };
-        Self::Kept(key, pair)
+    /// The pair from `start` to the end of `value`, kept under `key`.
+    fn new(key: Key, start: usize, value: Value) -> Self {
+        match key {
+            Ok(name) => {
+                let pair = Pair {
+                    repeats: Vec::new(),
+                    span: start..value.span().end,
+                    value,
+                };
+                Self::Kept(name, pair)
+            }
+            Err(span) => {
+                let message = "a key cannot be a list or a mapping";
+                Self::Dropped(ParseError::new(message, span))
+            }
+        }
     }
 }
 
@@ -210,6 +218,17 @@ impl Properties {
     }
 }
 
+/// What the YAML reader keeps while it reads.
+#[derive(Default)]
+struct State {
+    anchors: Anchors,
+    /// The error of the first entry that does not read, at any depth: the
+    /// error a frontmatter none of whose own entries reads fails with.
+    failure: Option<ParseError>,
+    /// Whether an entry of the frontmatter's own mapping reads.
+    read: bool,
+}
+
 /// How much a copy holds: its values, each list, mapping and scalar counting
 /// as one, and the bytes of the text of its keys and scalars.
 #[derive(Clone, Copy, Default)]
@@ -226,53 +245,125 @@ struct Tag {
 }
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
-    let empty_at = content.start;
-    let mut cursor = Cursor::new(source, content, Anchors::default());
-    let Some(indent) = next_line(&mut cursor) else {
-        return Ok(finish(IndexMap::new(), empty_at));
+    read(source, content).and_then(undropped)
+}
+
+/// The mapping [`parse`] reads, with each entry and key it dropped, in file
+/// order. A frontmatter none of whose own entries reads fails with the error
+/// of the first entry, at any depth, that does not read.
+pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<Dropped>), ParseError> {
+    let mut cursor = Cursor::new(source, content, State::default());
+    let mapping = root(&mut cursor)?;
+    let mut dropped = cursor.into_dropped();
+    dropped.sort_by_key(|entry| entry.span.start);
+    Ok((mapping, dropped))
+}
+
+/// The frontmatter's own mapping, from the start of its content: a block
+/// mapping, a flow mapping, or one value, which holds no key.
+fn root(cursor: &mut Cursor<'_>) -> Result<Mapping, ParseError> {
+    let start = cursor.mark();
+    let Some(indent) = next_line(cursor) else {
+        return Ok(finish(IndexMap::new(), start.pos));
     };
     let line_start = cursor.pos();
     cursor.set_pos(line_start + indent);
-    no_tab_before_block(&mut cursor, 0)?;
+    let tabbed = no_tab_before_block(cursor, 0);
     // A tab after the indentation separates a flow node from it.
     cursor.skip_spaces();
     let root = cursor.pos();
     match cursor.peek() {
-        Some(b'{') if !starts_mapping(&mut cursor, 0) => {
-            let mapping = flow_mapping(&mut cursor, None, 0)?;
-            end_of_line(&mut cursor)?;
-            if next_line(&mut cursor).is_some() {
-                return cursor.error("expected the end of the frontmatter after the mapping");
-            }
-            Ok(mapping)
+        Some(b'{') if !starts_mapping(cursor, 0) => {
+            let mapping = match flow_mapping(cursor, None, 0) {
+                Ok(mapping) => mapping,
+                Err(stop) => {
+                    return Err(cursor
+                        .state_mut()
+                        .failure
+                        .take()
+                        .unwrap_or_else(|| stop.into()));
+                }
+            };
+            let rest = end_of_line(cursor).and_then(|()| match next_line(cursor) {
+                Some(_) => cursor.error("expected the end of the frontmatter after the mapping"),
+                None => Ok(()),
+            });
+            settled(cursor, mapping, rest)
         }
-        Some(b'[') if !starts_mapping(&mut cursor, 0) => {
-            let read = flow_sequence(&mut cursor, None, 0);
-            match caught(&mut cursor, root, read, skip_collection) {
-                Ok(list) => only_value(&mut cursor, root, list.ok()),
-                Err(_) => Err(not_a_mapping(&to_last_text(&cursor, root))),
+        Some(b'[') if !starts_mapping(cursor, 0) => {
+            let read = flow_sequence(cursor, None, 0);
+            let list = caught(cursor, root, read, skip_collection);
+            cursor.forget_since(start);
+            match list {
+                Ok(value) if cursor.state().failure.is_none() => {
+                    only_value(cursor, root, value.ok())
+                }
+                Ok(_) | Err(_) => Err(not_a_mapping(&to_last_text(cursor, root))),
             }
         }
         Some(_) | None => {
             cursor.set_pos(line_start);
-            let mapping = match block_mapping(&mut cursor, indent, 0) {
-                Ok(mapping) => mapping,
-                Err(error) => {
-                    cursor.set_pos(root);
-                    return lone_value(&mut cursor, indent).unwrap_or_else(|| Err(error.into()));
-                }
-            };
-            if next_line(&mut cursor).is_some() {
-                return cursor.error("this line is indented less than the first key");
+            let mapping = block_mapping(cursor, indent, 0);
+            let state = cursor.state_mut();
+            if !state.read
+                && let Some(error) = state.failure.take()
+            {
+                cursor.forget_since(start);
+                tabbed?;
+                cursor.set_pos(root);
+                let lone = lone_value(cursor, indent);
+                cursor.forget_since(start);
+                return lone.unwrap_or(Err(error));
             }
-            Ok(mapping)
+            let rest = match next_line(cursor) {
+                Some(_) => cursor.error("this line is indented less than the first key"),
+                None => Ok(()),
+            };
+            settled(cursor, mapping, rest)
         }
+    }
+}
+
+/// The frontmatter's own mapping once its entries are read, `rest` telling
+/// whether the text after them reads. With no entry that reads, it fails as
+/// the first entry that does not; else text after them that does not is dropped.
+fn settled(
+    cursor: &mut Cursor<'_>,
+    mapping: Mapping,
+    rest: Result<(), ParseError>,
+) -> Result<Mapping, ParseError> {
+    let state = cursor.state_mut();
+    if !state.read {
+        return state
+            .failure
+            .take()
+            .map_or_else(|| rest.map(|()| mapping), Err);
+    }
+    if let Err(error) = rest {
+        cursor.set_pos(error.span.start);
+        let mark = cursor.mark();
+        cursor.set_pos(cursor.end());
+        cursor.drop_since(mark, error);
+    }
+    Ok(mapping)
+}
+
+/// Records how an entry inside `open` values read, `failure` holding the
+/// error of one that does not: the first such error, and whether an entry of
+/// the frontmatter's own mapping, inside no value, reads.
+fn settle(cursor: &mut Cursor<'_>, open: usize, failure: Option<&ParseError>) {
+    let state = cursor.state_mut();
+    match failure {
+        Some(error) => {
+            let _: &mut ParseError = state.failure.get_or_insert_with(|| error.clone());
+        }
+        None => state.read |= open == 0,
     }
 }
 
 /// The frontmatter whose content is the value at the cursor, which fills its
 /// line as a scalar or a list does: see [`only_value`]. `None` when the line
-/// holds a key and does not read or raises a drop.
+/// holds a key and does not read, an entry inside it included, or raises a drop.
 fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Result<Mapping, ParseError>> {
     let start = cursor.pos();
     let is_list = is_dash(cursor, 0);
@@ -285,10 +376,12 @@ fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Result<Mapping, 
             Ok(value)
         })
     };
-    match caught(cursor, start, read, |inner| skip_block(inner, indent)) {
-        Ok(Ok(value)) => Some(only_value(cursor, start, Some(value))),
-        Ok(Err(_)) => is_value.then(|| only_value(cursor, start, None)),
-        Err(_) => is_value.then(|| Err(not_a_mapping(&to_last_text(cursor, start)))),
+    let value = caught(cursor, start, read, |inner| skip_block(inner, indent));
+    let failed = cursor.state().failure.is_some();
+    match value {
+        Ok(Ok(lone)) if !failed => Some(only_value(cursor, start, Some(lone))),
+        Ok(Err(_)) if !failed => is_value.then(|| only_value(cursor, start, None)),
+        Ok(_) | Err(_) => is_value.then(|| Err(not_a_mapping(&to_last_text(cursor, start)))),
     }
 }
 
@@ -348,101 +441,114 @@ fn next_line(cursor: &mut Cursor<'_>) -> Option<usize> {
 
 /// The pairs written at exactly `indent`, starting at the cursor's line: a
 /// mapping `depth` values deep.
-fn block_mapping(cursor: &mut Cursor<'_>, indent: usize, depth: usize) -> Result<Mapping, Stop> {
+fn block_mapping(cursor: &mut Cursor<'_>, indent: usize, depth: usize) -> Mapping {
     let empty_at = cursor.pos() + indent;
     let mut pairs = IndexMap::new();
-    mapping_lines(cursor, indent, depth, &mut pairs)?;
-    Ok(finish(pairs, empty_at))
+    mapping_lines(cursor, indent, depth, &mut pairs);
+    finish(pairs, empty_at)
 }
 
 /// The pairs on the lines from the cursor on that are written at exactly
-/// `indent`, of a mapping `depth` values deep.
+/// `indent`, of a mapping `depth` values deep. A pair that does not read is
+/// dropped, and so is a line there that starts a list entry or a tab.
 fn mapping_lines(
     cursor: &mut Cursor<'_>,
     indent: usize,
     depth: usize,
     pairs: &mut IndexMap<String, Pair>,
-) -> Result<(), Stop> {
+) {
     while let Some(found) = next_line(cursor) {
         if found < indent {
             break;
         }
-        if found > indent {
-            return cursor.error("this line is indented more than the keys above it");
-        }
         cursor.set_pos(cursor.pos() + indent);
-        if cursor.peek() == Some(b'\t') {
-            return Err(tab_indent(cursor.pos()).into());
-        }
-        if is_dash(cursor, 0) {
-            return cursor.error("expected a key, found a list entry");
-        }
-        let start = cursor.pos();
-        let read = entry(cursor, indent, depth, pairs);
-        skip_dropped(cursor, start, indent, read)?;
+        let mark = cursor.mark();
+        let read = if cursor.peek() == Some(b'\t') {
+            Err(tab_indent(mark.pos).into())
+        } else if is_dash(cursor, 0) {
+            cursor.error("expected a key, found a list entry")
+        } else {
+            entry(cursor, indent, depth, pairs)
+        };
+        settle_pair(cursor, mark, indent, depth, read);
     }
-    Ok(())
 }
 
-/// `read`, the pair of a block mapping that starts at `start` with its key
-/// at column `indent`; when it raised a drop, the cursor moves past the pair,
-/// which adds nothing.
-fn skip_dropped(
+/// Settles what `read` gave for the pair of a block mapping that starts at
+/// `mark`, its key at column `indent`, inside `open` values: one that does not
+/// read or raises a drop is noted with its error, and the cursor passes it.
+fn settle_pair(
     cursor: &mut Cursor<'_>,
-    start: usize,
+    mark: Mark,
     indent: usize,
+    open: usize,
     read: Result<(), Stop>,
-) -> Result<(), Stop> {
-    let _: Result<(), ParseError> = caught(cursor, start, read, |inner| skip_block(inner, indent))?;
-    Ok(())
+) {
+    let failure = match &read {
+        Err(Stop::Fail(error)) => Some(error),
+        Ok(()) | Err(Stop::Drop(_)) => None,
+    };
+    settle(cursor, open, failure);
+    if let Err(stop) = read {
+        cursor.set_pos(mark.pos);
+        skip_block(cursor, indent);
+        cursor.drop_since(mark, stop.into());
+    }
 }
 
-/// Adds the pair `read` gives to `pairs`; a dropped pair adds nothing.
-fn add(pairs: &mut IndexMap<String, Pair>, read: Read) {
-    if let Read::Kept(name, pair) = read {
-        insert(pairs, name, pair);
+/// Adds the pair `read` gives to `pairs`. A dropped pair, which starts at
+/// `mark`, adds nothing: its error is noted in place of the drops noted
+/// inside it.
+fn add(cursor: &mut Cursor<'_>, pairs: &mut IndexMap<String, Pair>, mark: Mark, read: Read) {
+    match read {
+        Read::Dropped(error) => cursor.drop_since(mark, error),
+        Read::Kept(name, pair) => insert(pairs, name, pair),
     }
 }
 
 /// A mapping `depth` values deep whose first key is written on a list
 /// entry's line, at `column`; its other keys follow on lines indented to that
 /// column.
-fn entry_mapping(cursor: &mut Cursor<'_>, column: usize, depth: usize) -> Result<Mapping, Stop> {
-    let empty_at = cursor.pos();
+fn entry_mapping(cursor: &mut Cursor<'_>, column: usize, depth: usize) -> Mapping {
+    let mark = cursor.mark();
     let mut pairs = IndexMap::new();
     let read = entry(cursor, column, depth, &mut pairs);
-    skip_dropped(cursor, empty_at, column, read)?;
-    mapping_lines(cursor, column, depth, &mut pairs)?;
-    Ok(finish(pairs, empty_at))
+    settle_pair(cursor, mark, column, depth, read);
+    mapping_lines(cursor, column, depth, &mut pairs);
+    finish(pairs, mark.pos)
 }
 
 /// One pair of a block mapping whose keys are at column `indent`, inside
-/// `open` values: a `key:` and its value, a `:` and its value with the empty
-/// key, or an explicit key after `?`. A drop leaves `pairs` as it was.
+/// `open` values, added to `pairs`: a `key:`, a `:` with the empty key, or a
+/// `?`, then its value, up to the next line at that column or less.
 fn entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
     open: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), Stop> {
-    if is_explicit_key(cursor) {
-        return explicit_entry(cursor, indent, open, pairs);
-    }
-    let start = cursor.pos();
-    let name = if is_empty_key(cursor, false) {
-        Some(String::new())
+    let mark = cursor.mark();
+    let read = if is_explicit_key(cursor) {
+        explicit_entry(cursor, indent, open)?
     } else {
-        key_or_collection(cursor, Context::Key(indent), open, key)?
+        let name = if is_empty_key(cursor, false) {
+            Ok(String::new())
+        } else {
+            key_or_collection(cursor, Context::Key(indent), open, key)?
+        };
+        cursor.skip_spaces();
+        if !cursor.eat(b':') {
+            return cursor.error("expected `:` after the key");
+        }
+        if !separated_at(cursor, 0) {
+            return cursor.error("expected a space after the `:`");
+        }
+        Read::new(name, mark.pos, indicated_value(cursor, indent, open)?)
     };
-    cursor.skip_spaces();
-    if !cursor.eat(b':') {
-        return cursor.error("expected `:` after the key");
+    if next_line(cursor).is_some_and(|found| found > indent) {
+        return cursor.error("this line is indented more than the keys above it");
     }
-    if !separated_at(cursor, 0) {
-        return cursor.error("expected a space after the `:`");
-    }
-    let value = indicated_value(cursor, indent, open)?;
-    add(pairs, Read::new(name, start, value));
+    add(cursor, pairs, mark, read);
     Ok(())
 }
 
@@ -450,12 +556,7 @@ fn entry(
 /// the `?` counts as a level of its own. Its value follows a `:` at that
 /// column on the next line with content; with none, it is null at the end of
 /// the key. Both lines are read as a list entry's `-` line is.
-fn explicit_entry(
-    cursor: &mut Cursor<'_>,
-    indent: usize,
-    open: usize,
-    pairs: &mut IndexMap<String, Pair>,
-) -> Result<(), Stop> {
+fn explicit_entry(cursor: &mut Cursor<'_>, indent: usize, open: usize) -> Result<Read, Stop> {
     let start = cursor.pos();
     let depth = nest(open, start..start + 1)?;
     let key = compact_value(cursor, start - indent, indent, Context::Key(indent), depth)?;
@@ -470,8 +571,7 @@ fn explicit_entry(
     } else {
         null(key_end)
     };
-    add(pairs, Read::new(name, start, value));
-    Ok(())
+    Ok(Read::new(name, start, value))
 }
 
 /// Moves the cursor from the start of a pair whose key is at column `indent`
@@ -497,39 +597,41 @@ fn skip_block(cursor: &mut Cursor<'_>, indent: usize) {
     }
 }
 
-/// The text of an explicit key, or `None` for a list or a mapping. A copy an
-/// alias made has the text of the scalar its anchor names.
-fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Option<String> {
-    let Value::Scalar(scalar) = key else {
-        return None;
+/// The text of an explicit key, or where a list or a mapping is written. A
+/// copy an alias made has the text of the scalar its anchor names.
+fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Key {
+    let scalar = match key {
+        Value::Scalar(scalar) => scalar,
+        Value::Mapping(_) | Value::Sequence(_) => return Err(key.span().clone()),
     };
     let copied = cursor
         .slice(scalar.span.clone())
         .strip_prefix('*')
-        .and_then(|name| cursor.state().named.get(name));
+        .and_then(|name| cursor.state().anchors.named.get(name));
     if let Some(Value::Scalar(original)) = copied {
-        return Some(scalar_text(cursor, original.value.clone(), &original.span));
+        return Ok(scalar_text(cursor, original.value.clone(), &original.span));
     }
-    Some(scalar_text(cursor, scalar.value, &scalar.span))
+    Ok(scalar_text(cursor, scalar.value, &scalar.span))
 }
 
-/// The key at the cursor, read by `text`, or `None` for a key that is a list
-/// or a mapping, with properties or not, which is read as a value written in
-/// `context` inside `open` values, or an alias that names one.
+/// The key at the cursor, read by `text`, or where a key that is a list or a
+/// mapping is written, with properties or not, read as a value written in
+/// `context` inside `open` values.
 fn key_or_collection<F>(
     cursor: &mut Cursor<'_>,
     context: Context,
     open: usize,
     text: F,
-) -> Result<Option<String>, Stop>
+) -> Result<Key, Stop>
 where
-    F: FnOnce(&mut Cursor<'_>) -> Result<Option<String>, Stop>,
+    F: FnOnce(&mut Cursor<'_>) -> Result<Key, Stop>,
 {
     if !is_collection_key(cursor) {
         return text(cursor);
     }
+    let start = cursor.pos();
     let _: Value = inline_value(cursor, context, open)?;
-    Ok(None)
+    Ok(Err(start..cursor.pos()))
 }
 
 /// Whether a `[` or a `{` starts the node at the cursor, after properties or
@@ -572,13 +674,13 @@ fn indicated_value(cursor: &mut Cursor<'_>, indent: usize, open: usize) -> Resul
     Ok(value)
 }
 
-/// The key at the cursor, or `None` for an alias that names a list or a
-/// mapping.
-fn key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
+/// The key at the cursor, or where an alias that names a list or a mapping
+/// is written.
+fn key(cursor: &mut Cursor<'_>) -> Result<Key, Stop> {
     match cursor.peek() {
-        Some(b'!' | b'&') => propertied_key(cursor, false, scalar_key).map(Some),
+        Some(b'!' | b'&') => propertied_key(cursor, false, scalar_key).map(Ok),
         Some(b'*') => alias_key(cursor),
-        Some(_) | None => scalar_key(cursor).map(Some),
+        Some(_) | None => scalar_key(cursor).map(Ok),
     }
 }
 
@@ -645,15 +747,17 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
     is_mapping
 }
 
-/// What `look` gives, read with no anchor named, so that a lookahead copies
-/// and names nothing.
+/// What `look` gives, read with no anchor named and every drop it notes
+/// forgotten, so that a lookahead copies, names and notes nothing.
 fn unanchored<T, F>(cursor: &mut Cursor<'_>, look: F) -> T
 where
     F: FnOnce(&mut Cursor<'_>) -> T,
 {
-    let anchors = mem::take(cursor.state_mut());
+    let state = mem::take(cursor.state_mut());
+    let mark = cursor.mark();
     let seen = look(cursor);
-    *cursor.state_mut() = anchors;
+    cursor.forget_since(mark);
+    *cursor.state_mut() = state;
     seen
 }
 
@@ -705,7 +809,7 @@ fn nested(
     if starts_mapping(cursor, open) {
         let depth = nest(open, at..at + 1)?;
         cursor.set_pos(line_start);
-        return Ok(Value::Mapping(block_mapping(cursor, found, depth)?));
+        return Ok(Value::Mapping(block_mapping(cursor, found, depth)));
     }
     // A tab after the indentation separates a flow node from it.
     cursor.skip_spaces();
@@ -750,7 +854,7 @@ fn tab_indent(at: usize) -> ParseError {
 
 /// A block list `depth` values deep whose first `-` is at column `indent` of
 /// the line starting at `line_start`, and whose other entries are the lines
-/// below with a `-` at that column.
+/// below at that column. An entry that does not read is dropped.
 fn block_sequence(
     cursor: &mut Cursor<'_>,
     line_start: usize,
@@ -761,23 +865,19 @@ fn block_sequence(
     let mut entry_line = line_start;
     let mut items = Vec::new();
     loop {
-        items.push(compact_value(
-            cursor,
-            entry_line,
-            indent,
-            Context::Entry(indent),
-            depth,
-        )?);
+        cursor.set_pos(entry_line + indent);
+        let mark = cursor.mark();
+        let read = if cursor.peek() == Some(b'\t') {
+            Err(tab_indent(mark.pos).into())
+        } else {
+            compact_value(cursor, entry_line, indent, Context::Entry(indent), depth)
+        };
+        settle_entry(cursor, mark, entry_line, indent, depth, read, &mut items)?;
         let Some(found) = next_line(cursor) else {
             break;
         };
-        if found > indent {
-            return cursor.error("this line is indented more than the list above it");
-        }
-        if found == indent && cursor.peek_at(found) == Some(b'\t') {
-            return Err(tab_indent(cursor.pos() + found).into());
-        }
-        if found < indent || !is_dash(cursor, found) {
+        let at_dash = is_dash(cursor, found) || cursor.peek_at(found) == Some(b'\t');
+        if found < indent || !at_dash {
             break;
         }
         entry_line = cursor.pos();
@@ -787,6 +887,49 @@ fn block_sequence(
         items,
         span: start..end,
     }))
+}
+
+/// Settles what `read` gave for the list entry at column `indent` of the
+/// line at `line_start`, inside `open` values, into `items`: one that does not
+/// read, or that a line indented more follows, is noted from `mark` and passed.
+fn settle_entry(
+    cursor: &mut Cursor<'_>,
+    mark: Mark,
+    line_start: usize,
+    indent: usize,
+    open: usize,
+    read: Result<Value, Stop>,
+    items: &mut Vec<Value>,
+) -> Result<(), Stop> {
+    let entry = read.and_then(|item| {
+        if next_line(cursor).is_some_and(|found| found > indent) {
+            return cursor.error("this line is indented more than the list above it");
+        }
+        Ok(item)
+    });
+    match entry {
+        Ok(item) => items.push(item),
+        Err(Stop::Fail(error)) => {
+            settle(cursor, open, Some(&error));
+            cursor.set_pos(line_start);
+            skip_entry(cursor, indent);
+            cursor.drop_since(mark, error);
+        }
+        Err(drop @ Stop::Drop(_)) => return Err(drop),
+    }
+    Ok(())
+}
+
+/// Moves the cursor from the start of the line of a list entry whose `-` is
+/// at column `indent` past it: that line, then the lines indented more.
+fn skip_entry(cursor: &mut Cursor<'_>, indent: usize) {
+    loop {
+        let _: &str = cursor.take_until(b"\n");
+        cursor.bump();
+        if next_line(cursor).is_none_or(|found| found <= indent) {
+            return;
+        }
+    }
 }
 
 /// The value after the `-`, `?` or `:` at column `indent` of the line
@@ -816,7 +959,7 @@ fn compact_value(
     }
     if indented && starts_mapping(cursor, open) {
         let depth = nest(open, at..at + 1)?;
-        return Ok(Value::Mapping(entry_mapping(cursor, column, depth)?));
+        return Ok(Value::Mapping(entry_mapping(cursor, column, depth)));
     }
     line_value(cursor, context, open)
 }
@@ -894,51 +1037,74 @@ fn flow_sequence(
 /// makes a mapping of one pair. A list or a mapping is read once, and is the
 /// key of a pair when a `:` follows it on its line.
 fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>, open: usize) -> Result<Value, Stop> {
-    let start = cursor.pos();
+    let mark = cursor.mark();
     if is_collection_key(cursor) {
-        let item = match inline_value(cursor, Context::Flow(column), open) {
-            Err(Stop::Drop(error)) => {
-                // Passed over, to see whether a `:` makes it a key.
-                cursor.set_pos(start);
-                skip_properties(cursor);
-                skip_collection(cursor);
-                Err(Stop::Drop(error))
-            }
-            read @ (Ok(_) | Err(Stop::Fail(_))) => read,
-        };
-        if matches!(item, Err(Stop::Fail(_))) || !colon_follows(cursor) {
-            return item;
-        }
-        return one_pair(cursor, column, open, start, false);
+        let item = inline_value(cursor, Context::Flow(column), open);
+        return collection_item(cursor, column, open, mark, item);
     }
     if is_flow_pair(cursor) {
-        return one_pair(cursor, column, open, start, true);
+        return one_pair(cursor, column, open, mark, true);
     }
     inline_value(cursor, Context::Flow(column), open)
 }
 
-/// The mapping of the one pair of a flow list that starts at `start`, inside
+/// The entry of a flow list that `read` gave for the list or the mapping at
+/// `mark`, inside `open` values, or the mapping of one pair it is the key of
+/// when a `:` follows it on its line.
+fn collection_item(
+    cursor: &mut Cursor<'_>,
+    column: Option<usize>,
+    open: usize,
+    mark: Mark,
+    read: Result<Value, Stop>,
+) -> Result<Value, Stop> {
+    let item = match read {
+        Err(Stop::Drop(error)) => {
+            // Passed over, to see whether a `:` makes it a key.
+            cursor.set_pos(mark.pos);
+            skip_properties(cursor);
+            skip_collection(cursor);
+            Err(Stop::Drop(error))
+        }
+        value @ (Ok(_) | Err(Stop::Fail(_))) => value,
+    };
+    if matches!(item, Err(Stop::Fail(_))) || !colon_follows(cursor) {
+        return item;
+    }
+    one_pair(cursor, column, open, mark, false)
+}
+
+/// The mapping of the one pair of a flow list that starts at `mark`, inside
 /// `open` values. With `read_key`, its key is read here; otherwise the cursor
 /// is after a key that is a list or a mapping.
 fn one_pair(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     open: usize,
-    start: usize,
+    mark: Mark,
     read_key: bool,
 ) -> Result<Value, Stop> {
+    let start = mark.pos;
     let depth = nest(open, start..start + 1)?;
-    let name = if read_key {
+    let key = if read_key {
         flow_pair_key(cursor, column, true, depth)
     } else {
-        Ok(None)
+        Ok(Err(start..cursor.pos()))
     };
     let mut pairs = IndexMap::new();
-    let read = match name {
-        Ok(key) => flow_pair(cursor, column, depth, start, key, &mut pairs),
+    let read = match key {
+        Ok(name) => flow_pair(cursor, column, depth, mark, name, &mut pairs),
         Err(stop) => Err(stop),
     };
-    let _: Result<(), ParseError> = caught(cursor, start, read, skip_flow_entry)?;
+    match read {
+        Ok(()) => {}
+        Err(Stop::Drop(error)) => {
+            cursor.set_pos(start);
+            skip_flow_entry(cursor);
+            cursor.drop_since(mark, error);
+        }
+        Err(failure @ Stop::Fail(_)) => return Err(failure),
+    }
     Ok(Value::Mapping(finish(pairs, start)))
 }
 
@@ -978,8 +1144,8 @@ fn no_empty_entry(cursor: &Cursor<'_>) -> Result<(), ParseError> {
 }
 
 /// A flow mapping `depth` values deep whose lines are indented more than
-/// `column`, the column of its key or `-`; none at the root. A drop inside a
-/// pair drops that pair.
+/// `column`, the column of its key or `-`; none at the root. A pair that
+/// raises a drop or does not read is dropped by [`settle_flow_pair`].
 fn flow_mapping(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
@@ -994,12 +1160,14 @@ fn flow_mapping(
             break;
         }
         no_empty_entry(cursor)?;
-        let entry = cursor.pos();
+        let mark = cursor.mark();
         let read = match flow_pair_key(cursor, column, false, depth) {
-            Ok(name) => flow_pair(cursor, column, depth, entry, name, &mut pairs),
+            Ok(name) => flow_pair(cursor, column, depth, mark, name, &mut pairs),
             Err(stop) => Err(stop),
         };
-        let _: Result<(), ParseError> = caught(cursor, entry, read, skip_flow_entry)?;
+        if !settle_flow_pair(cursor, mark, column, depth, read)? {
+            continue;
+        }
         skip_flow_space(cursor, column)?;
         if cursor.eat(b'}') {
             break;
@@ -1014,15 +1182,68 @@ fn flow_mapping(
     })
 }
 
-/// The rest of a flow pair that starts at `start`, inside `open` values, after
-/// its key `name`. Line breaks and comments may come before its `:`; with no
-/// `:`, or with nothing after it, the value is null.
+/// Settles the flow pair `read` gave from `mark`, as [`settle_pair`] does, and
+/// tells whether a `,` or a `}` follows: one that does not read runs to the
+/// mapping's next line that starts no further right, and with none fails it.
+fn settle_flow_pair(
+    cursor: &mut Cursor<'_>,
+    mark: Mark,
+    column: Option<usize>,
+    open: usize,
+    read: Result<(), Stop>,
+) -> Result<bool, Stop> {
+    let error = match read {
+        Ok(()) => {
+            settle(cursor, open, None);
+            return Ok(true);
+        }
+        Err(Stop::Drop(error)) => {
+            settle(cursor, open, None);
+            cursor.set_pos(mark.pos);
+            skip_flow_entry(cursor);
+            cursor.drop_since(mark, error);
+            return Ok(true);
+        }
+        Err(Stop::Fail(error)) => error,
+    };
+    let Some(next) = next_pair_line(cursor, mark.pos, column) else {
+        return Err(Stop::Fail(error));
+    };
+    settle(cursor, open, Some(&error));
+    cursor.set_pos(next);
+    cursor.drop_since(mark, error);
+    Ok(false)
+}
+
+/// The start of the first line with text after the one at `at` that starts
+/// no further right than `at` and, inside a flow collection whose lines are
+/// indented more than `column`, further right than that.
+fn next_pair_line(cursor: &mut Cursor<'_>, at: usize, column: Option<usize>) -> Option<usize> {
+    let line_start = cursor.slice(0..at).rfind('\n').map_or(0, |end| end + 1);
+    let own = at - line_start;
+    cursor.set_pos(at);
+    loop {
+        let _: &str = cursor.take_until(b"\n");
+        cursor.bump();
+        let found = next_line(cursor)?;
+        if column.is_some_and(|parent| found <= parent) {
+            return None;
+        }
+        if found <= own {
+            return Some(cursor.pos());
+        }
+    }
+}
+
+/// The rest of a flow pair that starts at `mark`, inside `open` values, after
+/// its key. Line breaks and comments may come before its `:`; with no `:`,
+/// or with nothing after it, the value is null.
 fn flow_pair(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     open: usize,
-    start: usize,
-    name: Option<String>,
+    mark: Mark,
+    key: Key,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), Stop> {
     let key_end = cursor.pos();
@@ -1038,7 +1259,7 @@ fn flow_pair(
     } else {
         null(key_end)
     };
-    add(pairs, Read::new(name, start, value));
+    add(cursor, pairs, mark, Read::new(key, mark.pos, value));
     Ok(())
 }
 
@@ -1118,8 +1339,8 @@ fn skip_collection(cursor: &mut Cursor<'_>) {
     }
 }
 
-/// The key of a flow pair inside `open` values, or `None` for a list or a
-/// mapping or an alias that names one; empty after a `?` with none or before
+/// The key of a flow pair inside `open` values, or where a list or a mapping
+/// or an alias that names one is written; empty after a `?` with none or before
 /// a `:` that starts the pair.
 /// It goes on over lines in a flow mapping or after a `?`, else stays on one.
 fn flow_pair_key(
@@ -1127,7 +1348,7 @@ fn flow_pair_key(
     column: Option<usize>,
     in_list: bool,
     open: usize,
-) -> Result<Option<String>, Stop> {
+) -> Result<Key, Stop> {
     let explicit = is_flow_explicit_key(cursor);
     if explicit {
         cursor.bump();
@@ -1136,7 +1357,7 @@ fn flow_pair_key(
     if is_empty_key(cursor, true)
         || (explicit && matches!(cursor.peek(), None | Some(b',' | b']' | b'}')))
     {
-        return Ok(Some(String::new()));
+        return Ok(Ok(String::new()));
     }
     let context = Context::Flow(column);
     key_or_collection(cursor, context, open, |inner| {
@@ -1158,19 +1379,19 @@ fn is_empty_key(cursor: &Cursor<'_>, in_flow: bool) -> bool {
     cursor.peek() == Some(b':') && is_indicator(cursor, in_flow)
 }
 
-/// A key inside a flow collection, or `None` for an alias that names a list
-/// or a mapping. A plain key ends at a `:` followed by a space or a flow
+/// A key inside a flow collection, or where an alias that names a list or a
+/// mapping is written. A plain key ends at a `:` followed by a space or a flow
 /// indicator, at a flow indicator, or at a comment. With a `context`, as
 /// inside a flow mapping, a quoted key may go on over several lines as a
 /// quoted value does, and a plain key that runs to the end of its line goes on
 /// over the lines below as a `PLAIN` does, up to that end.
-fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<Option<String>, Stop> {
+fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<Key, Stop> {
     match cursor.peek() {
         Some(b'!' | b'&') => {
-            propertied_key(cursor, true, |inner| flow_scalar_key(inner, context)).map(Some)
+            propertied_key(cursor, true, |inner| flow_scalar_key(inner, context)).map(Ok)
         }
         Some(b'*') => alias_key(cursor),
-        Some(_) | None => flow_scalar_key(cursor, context).map(Some),
+        Some(_) | None => flow_scalar_key(cursor, context).map(Ok),
     }
 }
 
@@ -1577,7 +1798,7 @@ fn propertied(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<
         None => None,
     };
     if let Some(anchor) = &properties.anchor {
-        let anchors = cursor.state_mut();
+        let anchors = &mut cursor.state_mut().anchors;
         let _: Option<Value> = anchors.named.remove(anchor);
         anchors.open.push(anchor.clone());
     }
@@ -1632,7 +1853,7 @@ fn finish_node(
     read: Result<Value, Stop>,
 ) -> Result<Value, Stop> {
     if properties.anchor.is_some() {
-        let _: Option<String> = cursor.state_mut().open.pop();
+        let _: Option<String> = cursor.state_mut().anchors.open.pop();
     }
     let mut value = read?;
     if let (Some(tag), Some(type_name)) = (&properties.tag, name) {
@@ -1640,7 +1861,7 @@ fn finish_node(
     }
     let span = properties.span();
     if let Some(anchor) = properties.anchor {
-        cursor.state_mut().keep(anchor, &value, &span)?;
+        cursor.state_mut().anchors.keep(anchor, &value, &span)?;
     }
     Ok(value)
 }
@@ -1740,7 +1961,7 @@ where
     };
     let at = properties.span();
     if let Some(anchor) = properties.anchor {
-        cursor.state_mut().keep(anchor, &node, &at)?;
+        cursor.state_mut().anchors.keep(anchor, &node, &at)?;
     }
     Ok(text)
 }
@@ -1861,7 +2082,7 @@ fn misfit(written: &str, name: &str, span: Range<usize>) -> ParseError {
 /// `TEXT_CAP`, and toward `VALUE_CAP` from where the alias stands.
 fn alias(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
     let (name, span) = alias_name(cursor)?;
-    let anchors = cursor.state_mut();
+    let anchors = &mut cursor.state_mut().anchors;
     let limit = anchors.left();
     let (size, levels) = measure(anchors.get(&name, &span)?, limit);
     anchors.charge(size, &span)?;
@@ -1872,14 +2093,14 @@ fn alias(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
     Ok(copy(anchors.get(&name, &span)?, &span))
 }
 
-/// The text of the scalar the alias at the cursor names, as a key, or `None`
-/// when it names a list or a mapping. The text counts as one copied value
-/// and its bytes.
-fn alias_key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
+/// The text of the scalar the alias at the cursor names, as a key, or where
+/// the alias is written when it names a list or a mapping. The text counts
+/// as one copied value and its bytes.
+fn alias_key(cursor: &mut Cursor<'_>) -> Result<Key, Stop> {
     let (name, span) = alias_name(cursor)?;
-    let anchors = cursor.state_mut();
+    let anchors = &mut cursor.state_mut().anchors;
     let Value::Scalar(scalar) = anchors.get(&name, &span)? else {
-        return Ok(None);
+        return Ok(Err(span));
     };
     let original = scalar.clone();
     let size = Size {
@@ -1887,7 +2108,7 @@ fn alias_key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
         values: 1,
     };
     anchors.charge(size, &span)?;
-    Ok(Some(scalar_text(cursor, original.value, &original.span)))
+    Ok(Ok(scalar_text(cursor, original.value, &original.span)))
 }
 
 /// Reads the alias at the cursor: its name and where it is written.

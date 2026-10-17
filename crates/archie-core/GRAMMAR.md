@@ -78,10 +78,21 @@ frontmatter := TOML_OPEN toml TOML_CLOSE
 - The markdown block starts on the line after the closing delimiter. Both `\n` and
   `\r\n` end a line.
 
-Only the frontmatter can fail, and an extension's error in a strict parse (see
-[Extensions](#extensions)). A frontmatter that archie cannot read fails the whole file,
-with an error that points at the place; it is not kept as text. The markdown never
-fails: what no rule recognizes is text.
+A frontmatter entry that archie cannot read is refused: it is dropped, and archie reads
+the rest of the file. The innermost entry that holds the error is dropped, at any depth;
+where a refused entry ends is stated under [TOML frontmatter](#toml-frontmatter) and
+[YAML frontmatter](#yaml-frontmatter). `Frontmatter::dropped` lists every dropped entry
+and key in file order, each a `ParseError` whose `message` is the error and whose `span`
+covers the dropped text, up to its last line that holds more than white space or a
+comment. The keys dropped by the value cap, by a tag archie does not read, for being a
+list or a mapping, or by an alias that cannot be copied are listed too. A write leaves
+the dropped text out.
+
+A frontmatter of which no entry reads fails the whole file, with the error of the first
+entry that does not read, pointing at the place; it is not kept as text. A strict parse,
+`ParseOptions::strict()`, fails with the error of the first entry the frontmatter
+drops, pointing at the place, as for an extension's error (see
+[Extensions](#extensions)). The markdown never fails: what no rule recognizes is text.
 
 ## Markdown block
 
@@ -474,6 +485,13 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   because TOML closes an inline table at its brace and an array at its bracket:
   `a = {b = 1}` then `a.c = 2` is `a = [{b = 1}, {c = 2}]`. A later dotted key or
   header through such a key goes on into the last mapping of its list.
+- A pair or a header that does not read is refused, up to the next line that starts
+  a key followed by `=`, or a `[`, after spaces or tabs. The pairs after a refused
+  header go into the table open before it. Strings are passed over whole, so a `"""`
+  or `'''` string left open runs to the end of the frontmatter, dropping the rest. `title = Notes` then `date = 2026-10-17` is
+  `{date: 2026-10-17}`, and so is `tags = ["a", "b"` then `date = 2026-10-17`. A pair
+  is read to the end of its line before it is kept: `a = 1 2` is refused with
+  `expected the end of the line after the value`.
 - Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
   dotted keys and of headers count together, and in YAML so do flow and block
   collections, properties on collections and explicit keys. The innermost pair that holds a
@@ -539,9 +557,26 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
 - The frontmatter is a block mapping, or one flow mapping with nothing but comments
   after it. A frontmatter that holds one list or one scalar, with nothing but comments
   after it, holds no key, and is an empty mapping: `abc`, `[a, b]`, and `- a` then
-  `- b` are all `{}`. One whose list or scalar does not read fails the file with
-  `the frontmatter must be a mapping`, as `[unclosed` and `!!int abc` do, and so does
-  one with more after its list or its scalar.
+  `- b` are all `{}`. One whose list or scalar does not read, an entry inside it
+  included, fails the file with `the frontmatter must be a mapping`, as `[unclosed`,
+  `!!int abc` and `- !!int abc` do, and so does one whose first line starts a flow list
+  with more after it, as `[a, b]` then `c: 1` does. A first line that holds a scalar or
+  starts a block list, with a key after it, is an entry that does not read:
+  `hello` then `c: 1` is `{c: 1}`.
+- An entry that does not read is refused. A pair of a block mapping runs from its
+  key's line up to the next line at that key's column or less, a list entry up to the
+  next line at its `-`'s column or less, and a pair of a flow mapping up to the next
+  line of the mapping that starts no further right than the pair; with no such line,
+  the flow mapping itself does not read. `title: Notes` then `tags: [a, b` then
+  `date: 2026-10-17` is `{title: Notes, date: 2026-10-17}`, `owner:` then
+  `  name: Ada` then `  @handle: ada` then `  role: dev` is
+  `{owner: {name: Ada, role: dev}}`, `items:` then `- [a` then `- b` is
+  `{items: [b]}`, and `{`, `  title: Notes,`, `  tags: [a, b,`, `  date: 2026-10-17`,
+  `}` is `{title: Notes, date: 2026-10-17}`. The lines a pair's value does not take
+  belong to the pair: `a: 1` then `  b: 2` then `c: 3` is `{c: 3}`, refused with
+  `this line is indented more than the keys above it`. A line indented less than the
+  frontmatter's first key, and text after a flow mapping that is the whole
+  frontmatter, drop the rest of the frontmatter: `  a: 1` then `b: 2` is `{a: 1}`.
 - `INDENT` is a line indented more than the key above it; `DEDENT` is the return to
   an earlier indentation. Every key of one mapping starts at the same column.
 - A `block` may be a sequence written at the same column as its key (the second form
@@ -554,7 +589,7 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   mapping with no `:` or nothing after it.
 - In a list entry, a tag that ends its line takes only the block indented more than
   the `-`. With nothing there, its empty value is checked against the tag:
-  `- !!seq` then `- x` fails the file with
+  `- !!seq` then `- x` is refused with
   ``an empty value is not a value of the tag `!!seq` ``.
 - A list entry whose line goes on with a plain, quoted or tagged `key:`, with an
   explicit key, or with a `:` and the empty key, tagged or not, holds a mapping. Its
@@ -569,14 +604,14 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   tab after the `-` separates it from the value as a space does: `-`, a tab and `x`
   is `[x]`, and `- -`, a tab and `a` is `[[a]]`. A tab is never indentation: after
   a tab, the rest of a `-`, `?` or `:` line is one value, never a list or a mapping
-  that starts at a column. `-`, a tab and `- a` fails the file with
+  that starts at a column. `-`, a tab and `- a` is refused with
   ``a plain value cannot start with `-` and a space; quote it``.
-- A line that starts a key, an explicit key, an empty key or a list entry fails the
-  file with `a tab cannot indent a line; use spaces`, pointing at the tab, when a tab
+- A line that starts a key, an explicit key, an empty key or a list entry is refused
+  with `a tab cannot indent a line; use spaces`, pointing at the tab, when a tab
   comes before its first character. Every line at the column of a mapping's keys or
   of a list's `-` counts as one, and so does the frontmatter's first line. `a:` then
-  a tab and `b: 1` fails, and so do a tab and `a: 1`, a tab and `- a`, `a:` then a
-  tab and `- b`, `a:` then two spaces, a tab and `- x`, and `a:` then two spaces, a
+  a tab and `b: 1` is refused, and so are a tab and `a: 1`, a tab and `- a`, `a:` then
+  a tab and `- b`, `a:` then two spaces, a tab and `- x`, and `a:` then two spaces, a
   tab and `b: 1`.
 - The first line of a value under a key or a bare `-`, and the frontmatter's first
   line, may have tabs and spaces after their indentation when no key, explicit key,
@@ -608,9 +643,9 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   a mapping is dropped, as stated below: `? - a` then `: v`, and `? a: 1` then
   `: v`, are both `{}`.
 - A `:` line indented more than its `?` does not give the pair's value: `? k` then
-  `  : v` fails the file with `this line is indented more than the keys above it`.
+  `  : v` is refused with `this line is indented more than the keys above it`.
 - `PLAIN_KEY` runs to the first `:` followed by a space, a tab or the end of the
-  line, before the line's comment. `a: 1` then `abc # c: d` fails the file with
+  line, before the line's comment. `a: 1` then `abc # c: d` refuses `abc # c: d` with
   ``expected `key: value` ``, and `a#b: 1` is `{"a#b": 1}`. `FLOW_KEY` runs to the
   first `:` followed by a space, a tab, the end of the line or one of `, [ ] { }`, to
   the first of `, [ ] { }`, or to a comment.
@@ -622,25 +657,25 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   `{"x y": 1}`, `a: {x` then `  y: 1}` is `{a: {"x y": 1}}`, `{x` then `  y` then
   `  z: 1}` is `{"x y z": 1}`, and `a: [? x` then `  y : 1]` is
   `{a: [{"x y": 1}]}`. Inside a flow list, a key with no `?` before it stays on its
-  line: `[x` then `  y: 1]`, and `a: [x` then `  y: 1]`, fail the file with
+  line: `[x` then `  y: 1]`, and `a: [x` then `  y: 1]`, are refused with
   ``expected `,` or `]` in the list``.
 - Spaces and tabs may sit between a key and its `:`: `"a" : 1` is `{a: 1}`.
 - Outside a flow collection, a space, a tab or the end of the line must follow the
-  `:` of a key. `"a":1` fails the file with ``expected a space after the `:` ``,
+  `:` of a key. `"a":1` is refused with ``expected a space after the `:` ``,
   and `{"a":1}` is `{a: 1}`.
 - A comment starts at a `#` that follows a space or a tab.
 - `PLAIN` runs to the end of the line, or to a comment; inside a flow collection it
   stops at `,`, `[`, `]`, `{` or `}`. It cannot hold a `:` followed by a space or a
-  tab, or end with `:`; such a value fails the file with
+  tab, or end with `:`; such a value is refused with
   ``a plain value cannot hold `: `; quote it``.
 - A `PLAIN` cannot start with `@`, `` ` ``, `%`, `,`, `]` or `}`, nor with `?`, `:`
-  or `-` followed by a space, a tab or the end of the line. Such a value fails the
-  file with ``a plain value cannot start with `@`; quote it``, naming the
+  or `-` followed by a space, a tab or the end of the line. Such a value is refused
+  with ``a plain value cannot start with `@`; quote it``, naming the
   character, or with ``a plain value cannot start with `-` and a space; quote it``
   when a space or a tab follows. `?x`, `:x` and `-x` are text. Inside a flow
   collection, `,`, `]` and `}` end the entry instead.
 - Inside a flow collection, a `PLAIN` cannot start with `|` or `>` either, nor with
-  `?`, `:` or `-` followed by `,`, `[`, `]`, `{` or `}`. `[|x]` fails the file with
+  `?`, `:` or `-` followed by `,`, `[`, `]`, `{` or `}`. `[|x]` is refused with
   ``a plain value cannot start with `|`; quote it``, and `[-]` with
   ``a plain value cannot start with `-`; quote it``. `[-x, ?y, :z]` holds three
   strings.
@@ -648,9 +683,9 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   `` ` ``, `%`, `|`, `>`, `,`, `]` or `}`, nor with `?`, `:` or `-` followed by a
   space, a tab or the end of the line. A `FLOW_KEY` cannot start with `@`, `` ` ``,
   `%`, `|` or `>`, nor with `?`, `:` or `-` followed by a space, a tab, the end of
-  the line or one of `, [ ] { }`. Such a key fails the file with
+  the line or one of `, [ ] { }`. Such a key is refused with
   ``a plain key cannot start with `@`; quote it``, naming the character as for a
-  `PLAIN`: `@a: 1`, `` `a: 1 ``, `|x: 1`, `>x: 1` and `a: {@y: 1}` all fail.
+  `PLAIN`: `@a: 1`, `` `a: 1 ``, `|x: 1`, `>x: 1` and `a: {@y: 1}` are all refused.
 - A key may be a list or a mapping, in block or flow form, tagged or not. A flow
   collection followed by `:` and a space, a tab or the end of the line is such a
   key on a line at the column of a mapping's keys, on the first line of a value
@@ -666,9 +701,10 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   then `- {x: 1}: 12` is `{items: [{}]}`, `a: {[x]: 1, b: 2}` is `{a: {b: 2}}`,
   `a: [[x]: 1, c]` is `{a: [{}, c]}`, and `a: [? [x] : 1]` is `{a: [{}]}`.
 - A dropped pair's key and value are read as any other's, and an error in them
-  fails the file: `[x]: [unclosed` fails with ``expected `,` or `]` in the list``,
-  as `a: [unclosed` does, and `!!str [x]: y` with
-  ``a list is not a value of the tag `!!str` ``.
+  refuses the pair with that error: `[x]: [unclosed` is refused with
+  ``expected `,` or `]` in the list``, as `a: [unclosed` is, and `!!str [x]: y` with
+  ``a list is not a value of the tag `!!str` ``. A pair whose key and value read is
+  dropped with `a key cannot be a list or a mapping`.
 - A frontmatter whose first line starts with `{` is one flow mapping, and one whose
   first line starts with `[` is one list, unless the flow collection is a key as
   above.
@@ -682,14 +718,14 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   then `  title` is `"a long title"`.
 - A flow collection may run over several lines: line breaks and comments may sit
   between its entries, and a `,` may follow the last one. A `,` where an entry
-  should start fails the file with ``expected a value before `,` ``.
+  should start is refused with ``expected a value before `,` ``.
 - Inside a flow mapping, and after an explicit key inside a flow list, line breaks
   and comments may also sit between a key and its `:`. `a: {x` then `  : 1}` is
   `{a: {x: 1}}`, and `a: [? x` then `  : 1]` is `{a: [{x: 1}]}`. Inside a flow list,
   a key with no `?` before it has its `:` on the key's line: `a: [x` then `  : 1]`
-  fails the file with ``expected `,` or `]` in the list``.
+  is refused with ``expected `,` or `]` in the list``.
 - Each line of a flow collection must be indented more than its key or `-`, the
-  line of its closing bracket too; a line indented less fails the file with
+  line of its closing bracket too; a line indented less is refused with
   `a line of a flow collection must be indented more than its key`. Inside a flow
   mapping that is the whole frontmatter, a line may start at any column.
 - Inside a flow collection, a `?` followed by a space, a tab, the end of the line,
@@ -720,7 +756,7 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   a quoted key inside a flow collection more than that collection's key or `-`,
   except inside a flow mapping that is the whole frontmatter. `a: {"x` then
   `  y": 1}` and `a: {'x` then `  y': 1}` are `{a: {"x y": 1}}`. Any other quoted
-  key stays on its line: `"x` then `  y": 1` fails the file with
+  key stays on its line: `"x` then `  y": 1` is refused with
   `the string is not closed`, and `a: ["x` then `  y": 1]` with
   ``expected `,` or `]` in the list``.
 - Blank lines and lines holding only a comment are skipped. A line holding only a
@@ -763,9 +799,9 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   `the anchors and aliases copy more than 1000000 bytes of text`. `a: &s` and a
   string of 10000 bytes, then `b:` and a list of 100 aliases `*s`, drops `b`: with
   the anchor's own copy, the text copied comes to 1010000 bytes.
-- An alias with a tag or an anchor fails the file with
-  `an alias holds no tag or anchor`, pointing at the first of them: `!!str *x` fails.
-  A value has at most one anchor: `a: &x &y 1` fails with
+- An alias with a tag or an anchor is refused with
+  `an alias holds no tag or anchor`, pointing at the first of them: `!!str *x` is
+  refused. A value has at most one anchor: `a: &x &y 1` is refused with
   `a value has at most one anchor`, pointing at the second.
 - In block context, properties may end their line. The value is then what the lines
   under them hold, as for a key with nothing after its `:`, and the first of those
@@ -792,7 +828,7 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
 - Its lines are those indented more than the key or the `-` it belongs to. The
   column of its text is that key's or that `-`'s column plus the digit; with no
   digit, it is the column of the first line of text, and a blank line before that
-  line may not be indented more: such a line fails the file with
+  line may not be indented more: such a line is refused with
   `a blank line before the text of a block scalar is indented more than the text`.
   The scalar ends before the first line of text indented less than that column.
 - A literal scalar keeps every line break. A folded scalar joins two lines of text
@@ -811,8 +847,8 @@ value, and the mapping keeps its other pairs. `a: !point {x: 1}` then `b: 2` is
 such a tag is not read, up to the end of the pair; a key after it is read first. A
 frontmatter that holds one list or one scalar with such a tag is empty. A value has
 at most one tag:
-`a: !!str !!str x` fails the file with `a value has at most one tag`, pointing at the
-second tag, and so does a second tag on a key, inside a flow collection, or on the
+`a: !!str !!str x` is refused with `a value has at most one tag`, pointing at the
+second tag, and so is a second tag on a key, inside a flow collection, or on the
 line under properties that end their line.
 
 - A tagged scalar's text is read again by the rules for an unquoted value of the
@@ -823,7 +859,7 @@ line under properties that end their line.
   `1e20`. `!!int 99999999999999999999` is the String `"99999999999999999999"`, as
   the same digits are untagged. `!!map` and `!!seq` only check that the value is a
   mapping or a list.
-- A value that does not fit its tag fails the file, as
+- A value that does not fit its tag is refused, as
   ``"`abc` is not a value of the tag `!!int`"``, or
   ``"a list is not a value of the tag `!!map`"``.
 - A tag on a key checks the key's text the same way.
@@ -833,7 +869,7 @@ line under properties that end their line.
   `a: 1` then `!!str : v` is `{a: 1, "": v}`, `{!!str : v}` is `{"": v}`,
   `{!!str :}` is `{"": null}`, `{!!str :, a: 1}` is `{"": null, a: 1}`, and
   `a: [!!str :]` is `{a: [{"": null}]}`. A tag written in full ends at its `>`, so
-  `!<tag:yaml.org,2002:str>: v` is `{"": v}` too. `!!int : v` fails the file with
+  `!<tag:yaml.org,2002:str>: v` is `{"": v}` too. `!!int : v` is refused with
   ``an empty value is not a value of the tag `!!int` ``.
 
 A `PLAIN` value's type comes from how it is written:
@@ -977,7 +1013,8 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   info string by the rule under [Blocks](#blocks).
 - `read_toml(source, range)` and `read_yaml(source, range)` read the TOML or YAML
   written at any range of a source into a `Mapping`, as the frontmatter is read, with
-  spans counting from the start of the source.
+  spans counting from the start of the source. Each drops nothing: it fails with the
+  error of the first entry or key the frontmatter would drop, as a strict parse does.
 - `read_toml_lines(source, lines)` and `read_yaml_lines(source, lines)` read the TOML
   or YAML written on `lines`, ranges of the source, as consecutive lines of one text
   joined by `\n`, and place every span of the `Mapping`, or of the error, back in the
@@ -1149,6 +1186,8 @@ with the text it reads from and the text it writes.
    refuses it.
 3. A value or a dotted key nested past 400 levels drops its pair, and a header past
    them drops its table with its pairs. TOML reads them.
+4. A pair or a header that does not read is dropped, and archie reads the rest of the
+   file. TOML refuses the file.
 
 ### From YAML
 
@@ -1167,10 +1206,12 @@ with the text it reads from and the text it writes.
    does not allow it.
 4. A pair whose key is a list or a mapping is dropped, and the mapping keeps its
    other pairs: TOML cannot hold such a key. YAML reads the pair.
-5. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
-   archie follows the grammar. `? k` then `  : v` fails, where the library reads
+5. An entry that does not read is dropped, and archie reads the rest of the file.
+   YAML refuses the file.
+6. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
+   archie follows the grammar. `? k` then `  : v` is refused, where the library reads
    `{k: v}`: the `:` of an explicit key's value stands at the column of its `?`. `? a`
    then `:` then `: b` is `{a: null, "": b}`, where the library reads
    `{a: {"": b}}`. `a:` then two spaces, a tab and `!!str x` is `{a: "x"}`, and
    `!<tag:yaml.org,2002:str>: v` is `{"": v}`, both of which the library refuses.
-   `!!int : v` fails, where the library reads `{"": v}`.
+   `!!int : v` is refused, where the library reads `{"": v}`.

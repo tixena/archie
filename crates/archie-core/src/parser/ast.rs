@@ -11,6 +11,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tixschema::model_schema;
 
+use crate::parser::error::{ParseError, parse_error_schema};
 use crate::parser::extension::{Extension, Markdown, markdown_schema};
 
 /// The type an extension gave a node, or `None`. Boxed, because a markdown
@@ -57,6 +58,10 @@ where
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Frontmatter {
+    /// Each entry and key that could not be read and was left out, in file
+    /// order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dropped: Vec<ParseError>,
     pub format: FrontmatterFormat,
     pub mapping: Mapping,
     pub span: Range<usize>,

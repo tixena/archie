@@ -1,6 +1,8 @@
 use super::{check, check_spans, on_two_megabytes};
+use crate::parser::ast::Value;
+use crate::parser::extension::Plain;
 use crate::parser::frontmatter::VALUE_CAP;
-use crate::parser::parse;
+use crate::parser::{ParseOptions, parse, parse_with};
 use crate::writer::{WriteOptions, write};
 
 /// The outline of a YAML frontmatter that holds no pair, before an empty body.
@@ -1417,4 +1419,351 @@ fn anchors_and_aliases_under_the_copy_budget_read_as_before() {
             ),
         );
     });
+}
+
+/// The keys of the frontmatter `source` reads, and the message and the text
+/// of each entry it dropped. A strict parse fails with the error of the
+/// first, which points into the entry, at its text or after.
+fn kept_and_dropped(source: &str) -> (Vec<String>, Vec<(String, &str)>) {
+    let frontmatter = parse(source).unwrap().frontmatter.unwrap();
+    let keys = frontmatter.mapping.pairs.keys().cloned().collect();
+    let dropped: Vec<(String, &str)> = frontmatter
+        .dropped
+        .iter()
+        .map(|drop| (drop.message.clone(), &source[drop.span.clone()]))
+        .collect();
+    let strict = parse_with::<Plain>(source, &ParseOptions::strict());
+    match frontmatter.dropped.first() {
+        Some(first) => {
+            let error = strict.unwrap_err();
+            assert_eq!(error.message, first.message, "{source:?}");
+            assert!(first.span.start <= error.span.start, "{source:?}");
+        }
+        None => assert!(strict.is_ok(), "{source:?}"),
+    }
+    (keys, dropped)
+}
+
+/// `keys` kept and one entry dropped, with `message`, at `text`.
+fn one_dropped<'src>(
+    keys: &[&str],
+    message: &str,
+    text: &'src str,
+) -> (Vec<String>, Vec<(String, &'src str)>) {
+    let kept = keys.iter().map(|&key| key.to_owned()).collect();
+    (kept, vec![(message.to_owned(), text)])
+}
+
+#[test]
+fn a_yaml_entry_that_does_not_read_is_dropped_up_to_the_next_line_at_its_column() {
+    let source = "---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=title
+        Scalar String "Notes"
+      Pair key=date
+        Scalar Date 2026-10-17
+  MarkdownBlock
+    Section
+      Heading
+        Text "Body"
+"#,
+    );
+    let flow = "a line of a flow collection must be indented more than its key";
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["title", "date"], flow, "tags: [a, b")
+    );
+    let quoted = "a line inside a quoted string must be indented more than its key or `-`";
+    assert_eq!(
+        kept_and_dropped("---\ntitle: \"Notes\ndate: 2026-10-17\n---\n# Body\n"),
+        one_dropped(&["date"], quoted, "title: \"Notes")
+    );
+    assert_eq!(
+        kept_and_dropped("---\na: 1\nabc # c: d\nb: 2\n---\n# Body\n"),
+        one_dropped(&["a", "b"], "expected `key: value`", "abc # c: d")
+    );
+}
+
+#[test]
+fn a_nested_yaml_entry_that_does_not_read_drops_only_itself() {
+    let source = "---\nowner:\n  name: Ada\n  @handle: ada\n  role: dev\n---\n# Body\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=owner
+        Mapping
+          Pair key=name
+            Scalar String "Ada"
+          Pair key=role
+            Scalar String "dev"
+  MarkdownBlock
+    Section
+      Heading
+        Text "Body"
+"#,
+    );
+    let at = "a plain key cannot start with `@`; quote it";
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["owner"], at, "@handle: ada")
+    );
+}
+
+#[test]
+fn a_yaml_list_entry_that_does_not_read_drops_only_itself() {
+    let flow = "a line of a flow collection must be indented more than its key";
+    let source = "---\nitems:\n- [a\n- b\n- c\n---\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Scalar String "b"
+          Scalar String "c"
+  MarkdownBlock
+"#,
+    );
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["items"], flow, "- [a")
+    );
+    let tab = "a tab cannot indent a line; use spaces";
+    assert_eq!(
+        kept_and_dropped("---\nitems:\n- a\n\tb: 1\nc: 2\n---\n"),
+        one_dropped(&["items", "c"], tab, "\tb: 1")
+    );
+}
+
+#[test]
+fn a_pair_of_a_flow_mapping_over_several_lines_is_dropped_up_to_the_next_line_at_its_column() {
+    let source = "---\n{\n  title: Notes,\n  tags: [a, b,\n  date: 2026-10-17\n}\n---\n";
+    let list = "expected `,` or `]` in the list";
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["title", "date"], list, "tags: [a, b,")
+    );
+    let nested = "---\na: {x: [1,\n    y: 2}\nb: 3\n---\n";
+    let mapping = parse(nested).unwrap().frontmatter.unwrap().mapping;
+    assert_eq!(mapping.pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
+    let inner = match &mapping.pairs["a"].value {
+        Value::Mapping(inner) => inner.pairs.keys().collect(),
+        Value::Scalar(_) | Value::Sequence(_) => Vec::new(),
+    };
+    assert_eq!(inner, ["y"]);
+}
+
+#[test]
+fn a_yaml_line_indented_more_than_the_value_above_it_drops_that_entry() {
+    let deeper = "this line is indented more than the keys above it";
+    assert_eq!(
+        kept_and_dropped("---\na: 1\n  b: 2\nc: 3\n---\n"),
+        one_dropped(&["c"], deeper, "a: 1\n  b: 2")
+    );
+    let shallower = "this line is indented less than the first key";
+    assert_eq!(
+        kept_and_dropped("---\n  a: 1\nb: 2\n---\n"),
+        one_dropped(&["a"], shallower, "b: 2")
+    );
+    let after = "expected the end of the frontmatter after the mapping";
+    assert_eq!(
+        kept_and_dropped("---\n{a: 1}\nb: 2\n---\n"),
+        one_dropped(&["a"], after, "b: 2")
+    );
+}
+
+#[test]
+fn a_value_or_a_list_entry_before_the_keys_of_a_yaml_frontmatter_is_dropped() {
+    let no_key = "expected `key: value`";
+    let list_entry = "expected a key, found a list entry";
+    assert_eq!(
+        kept_and_dropped("---\nhello\nc: 1\n---\n"),
+        one_dropped(&["c"], no_key, "hello")
+    );
+    assert_eq!(
+        kept_and_dropped("---\n- a\nc: 1\n---\n"),
+        one_dropped(&["c"], list_entry, "- a")
+    );
+    assert_eq!(
+        kept_and_dropped("---\n- !point a\nc: 1\n---\n"),
+        one_dropped(&["c"], list_entry, "- !point a")
+    );
+    assert_eq!(
+        kept_and_dropped("---\n!!int abc\n\nb: 1\n\n---\n"),
+        one_dropped(&["b"], no_key, "!!int abc")
+    );
+    let tab = "a tab cannot indent a line; use spaces";
+    assert_eq!(
+        kept_and_dropped("---\n\ta: 1\nb: 2\n---\n"),
+        one_dropped(&["b"], tab, "\ta: 1")
+    );
+}
+
+#[test]
+fn a_toml_statement_that_does_not_read_is_dropped_up_to_the_next_statement() {
+    let source = "+++\ntitle = Notes\ndate = 2026-10-17\n+++\n# Body\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=date
+        Scalar Date 2026-10-17
+  MarkdownBlock
+    Section
+      Heading
+        Text "Body"
+"#,
+    );
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(&["date"], "`Notes` is not a value", "title = Notes")
+    );
+    let array = "expected `,` or `]` in the array";
+    assert_eq!(
+        kept_and_dropped("+++\ntags = [\"a\", \"b\"\ndate = 2026-10-17\n+++\n# Body\n"),
+        one_dropped(&["date"], array, "tags = [\"a\", \"b\"")
+    );
+    let end = "expected the end of the line after the value";
+    assert_eq!(
+        kept_and_dropped("+++\na = 1 2\nb = 2\n+++\n"),
+        one_dropped(&["b"], end, "a = 1 2")
+    );
+}
+
+#[test]
+fn a_toml_header_that_does_not_read_is_dropped_and_a_string_left_open_drops_the_rest() {
+    let header = "expected `]` to close the table header";
+    assert_eq!(
+        kept_and_dropped("+++\nname = \"Ada\"\n[owner\n[t]\nx = 1\n+++\n"),
+        one_dropped(&["name", "t"], header, "[owner")
+    );
+    check(
+        "+++\n[a]\nx = 1\n[owner\ny = 2\n+++\n",
+        "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+          Pair key=y
+            Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    let open = "the string is not closed";
+    assert_eq!(
+        kept_and_dropped("+++\na = 1\nt = \"\"\"never\nb = 2\n+++\n"),
+        one_dropped(&["a"], open, "t = \"\"\"never\nb = 2")
+    );
+}
+
+#[test]
+fn the_drops_of_a_key_a_tag_a_circular_or_undefined_alias_are_listed() {
+    let key = "a key cannot be a list or a mapping";
+    assert_eq!(
+        kept_and_dropped("---\n[x]: 1\nb: 2\n---\n"),
+        one_dropped(&["b"], key, "[x]: 1")
+    );
+    assert_eq!(
+        kept_and_dropped("---\na: {[x]: 1, b: 2}\n---\n"),
+        one_dropped(&["a"], key, "[x]: 1")
+    );
+    let tag = "the tag `!point` is not one archie reads";
+    assert_eq!(
+        kept_and_dropped("---\na: !point 1\nb: 2\n---\n"),
+        one_dropped(&["b"], tag, "a: !point 1")
+    );
+    let circular = "the alias `*A` lies inside the value its anchor names";
+    assert_eq!(
+        kept_and_dropped("---\na: &A [*A]\nb: 2\n---\n"),
+        one_dropped(&["b"], circular, "a: &A [*A]")
+    );
+    let undefined = "no anchor `&B` is defined before this alias";
+    assert_eq!(
+        kept_and_dropped("---\na: *B\nb: 2\n---\n"),
+        one_dropped(&["b"], undefined, "a: *B")
+    );
+}
+
+#[test]
+fn the_drop_of_a_value_past_the_value_cap_is_listed() {
+    on_two_megabytes(|| {
+        let past = VALUE_CAP + 1;
+        let deep = format!("{}1{}", "[".repeat(past), "]".repeat(past));
+        let cap = format!("the value nests deeper than {VALUE_CAP} levels");
+        let yaml = format!("---\ndeep: {deep}\nb: 2\n---\n");
+        assert_eq!(
+            kept_and_dropped(&yaml),
+            one_dropped(&["b"], &cap, &format!("deep: {deep}"))
+        );
+        let toml = format!("+++\ndeep = {deep}\nb = 2\n+++\n");
+        assert_eq!(
+            kept_and_dropped(&toml),
+            one_dropped(&["b"], &cap, &format!("deep = {deep}"))
+        );
+    });
+}
+
+#[test]
+fn an_entry_dropped_inside_a_dropped_entry_or_a_lookahead_is_not_listed_again() {
+    let misfit = "a mapping is not a value of the tag `!!seq`";
+    assert_eq!(
+        kept_and_dropped("---\na: !!seq\n  b: !point 1\n  c: 2\nd: 1\n---\n"),
+        one_dropped(&["d"], misfit, "a: !!seq\n  b: !point 1\n  c: 2")
+    );
+    let key = "a key cannot be a list or a mapping";
+    assert_eq!(
+        kept_and_dropped("---\n{x: !point 1}: 3\nb: 2\n---\n"),
+        one_dropped(&["b"], key, "{x: !point 1}: 3")
+    );
+}
+
+#[test]
+fn every_drop_is_listed_in_file_order() {
+    let (keys, dropped) = kept_and_dropped("---\na: !point 1\nb: 2\nc: [x\nd: 4\n[y]: 5\n---\n");
+    assert_eq!(keys, ["b", "d"]);
+    let texts: Vec<&str> = dropped.iter().map(|(_, text)| *text).collect();
+    assert_eq!(texts, ["a: !point 1", "c: [x", "[y]: 5"]);
+}
+
+#[test]
+fn a_frontmatter_of_which_no_entry_reads_fails_with_the_error_of_the_first() {
+    let refused = |source: &str| parse(source).unwrap_err().message;
+    let open = "---\ntitle: \"Notes\n---\n# Body\n";
+    let error = parse(open).unwrap_err();
+    assert_eq!(error.message, "the string is not closed");
+    assert_eq!(&open[error.span.start..], "---\n# Body\n");
+    let at = "a plain key cannot start with `@`; quote it";
+    assert_eq!(refused("---\n{\n  @a: 1\n}\n---\n"), at);
+    assert_eq!(refused("---\na: !!seq\n  @x: 1\n---\n"), at);
+    assert_eq!(
+        refused("---\n- !!int abc\n---\n"),
+        "the frontmatter must be a mapping"
+    );
+    assert_eq!(
+        refused("+++\ntitle = Notes\n+++\n"),
+        "`Notes` is not a value"
+    );
+}
+
+#[test]
+fn a_frontmatter_with_no_drop_lists_none() {
+    for source in [
+        "---\ntitle: Notes\ntags: [a, b]\n---\n",
+        "+++\ntitle = \"Notes\"\n+++\n",
+        "---\n---\n",
+        "---\n- a\n---\n",
+    ] {
+        let frontmatter = parse(source).unwrap().frontmatter.unwrap();
+        assert!(frontmatter.dropped.is_empty(), "{source:?}");
+    }
 }

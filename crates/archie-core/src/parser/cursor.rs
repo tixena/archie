@@ -4,10 +4,25 @@ use core::ops::Range;
 
 use crate::parser::error::ParseError;
 
+/// An entry or a key a reader dropped: the text it covers, and the error
+/// that dropped it.
+pub struct Dropped {
+    pub error: ParseError,
+    pub span: Range<usize>,
+}
+
+/// Where an entry starts: the cursor's position, and how many drops were
+/// noted before it.
+#[derive(Clone, Copy)]
+pub struct Mark {
+    pub noted: usize,
+    pub pos: usize,
+}
+
 /// A byte cursor, with the `state` a reader keeps while it reads.
 pub struct Cursor<'src, S = ()> {
-    /// The error of each value a reader dropped, in the order it met them.
-    dropped: Vec<ParseError>,
+    /// Each entry and key a reader dropped, in the order it met them.
+    dropped: Vec<Dropped>,
     end: usize,
     pos: usize,
     source: &'src str,
@@ -23,6 +38,28 @@ impl<'src, S> Cursor<'src, S> {
         if self.pos < self.end {
             self.pos += 1;
         }
+    }
+
+    /// Notes the drop of the entry from `mark` to the cursor, with `error`, in
+    /// place of the drops noted inside it. Its text ends with its last line
+    /// that holds more than white space or a comment.
+    pub fn drop_since(&mut self, mark: Mark, error: ParseError) {
+        self.forget_since(mark);
+        let mut end = mark.pos;
+        let mut at = mark.pos;
+        for (number, line) in self.source[mark.pos..self.pos]
+            .split_inclusive('\n')
+            .enumerate()
+        {
+            let text = line.trim_end_matches([' ', '\t', '\r', '\n']);
+            let content = text.trim_start_matches([' ', '\t']);
+            if number == 0 || !(content.is_empty() || content.starts_with('#')) {
+                end = at + text.len();
+            }
+            at += line.len();
+        }
+        let span = mark.pos..end;
+        self.dropped.push(Dropped { error, span });
     }
 
     pub fn eat(&mut self, byte: u8) -> bool {
@@ -53,6 +90,11 @@ impl<'src, S> Cursor<'src, S> {
         Err(ParseError::new(message, self.pos..self.pos).into())
     }
 
+    /// Forgets the drops noted since `mark`.
+    pub fn forget_since(&mut self, mark: Mark) {
+        self.dropped.truncate(mark.noted);
+    }
+
     /// The character written as `digits` hexadecimal digits at the cursor.
     pub fn hex_char(&mut self, digits: usize) -> Option<char> {
         let hex = self.rest().get(..digits)?;
@@ -64,8 +106,15 @@ impl<'src, S> Cursor<'src, S> {
         Some(character)
     }
 
-    pub fn into_dropped(self) -> Vec<ParseError> {
+    pub fn into_dropped(self) -> Vec<Dropped> {
         self.dropped
+    }
+
+    pub const fn mark(&self) -> Mark {
+        Mark {
+            noted: self.dropped.len(),
+            pos: self.pos,
+        }
     }
 
     pub const fn new(source: &'src str, range: Range<usize>, state: S) -> Self {
@@ -76,10 +125,6 @@ impl<'src, S> Cursor<'src, S> {
             source,
             state,
         }
-    }
-
-    pub fn note_drop(&mut self, error: ParseError) {
-        self.dropped.push(error);
     }
 
     pub fn peek(&self) -> Option<u8> {
