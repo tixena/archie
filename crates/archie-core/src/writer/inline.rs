@@ -62,8 +62,9 @@ enum Segment {
 /// piece still to write, the next one last.
 pub struct Segments {
     breaks: Breaks,
-    /// The lines that a line break ended, when lines are cut at them.
-    cut: Vec<String>,
+    /// The lines that a line break ended, each with whether it starts with
+    /// text, when lines are cut at them.
+    cut: Vec<(String, bool)>,
     fences: Vec<Fence>,
     list: Vec<Segment>,
     /// Whether every `|` of the text is escaped.
@@ -267,7 +268,7 @@ impl Segments {
             Breaks::Backslash => self.markup("\\"),
             Breaks::Cut => {
                 self.markup("\\");
-                let (line, _) = self.line(self.cut.is_empty());
+                let line = self.line(self.cut.is_empty());
                 self.cut.push(line);
             }
             Breaks::Reference => self.markup("&#10;"),
@@ -279,13 +280,18 @@ impl Segments {
         self.breaks = Breaks::Reference;
     }
 
-    /// The lines written, each ended by a line break but the last, with the
-    /// guard of a paragraph's lines, when lines are cut at line breaks.
-    pub fn lines(&mut self) -> Vec<String> {
-        let (last, _) = self.line(self.cut.is_empty());
-        let mut lines = mem::take(&mut self.cut);
-        lines.push(last);
-        lines
+    /// The lines written, each ended by a line break but the last, each with
+    /// the guard of `line`, when lines are cut at line breaks, and whether
+    /// the first starts with text.
+    pub fn lines(&mut self) -> (Vec<String>, bool) {
+        let last = self.line(self.cut.is_empty());
+        self.cut.push(last);
+        let text_led = self.cut.first().is_some_and(|&(_, led)| led);
+        let lines = mem::take(&mut self.cut)
+            .into_iter()
+            .map(|(line, _)| line)
+            .collect();
+        (lines, text_led)
     }
 
     /// `[text](target "title")`, also for a reference link or an autolink,

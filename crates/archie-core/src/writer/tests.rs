@@ -688,6 +688,36 @@ fn each_file_writes_the_same_text_the_second_time_and_keeps_its_tree() {
 }
 
 #[test]
+fn an_underlined_heading_takes_the_guards_of_a_paragraph() {
+    for (source, text) in [
+        ("\\[a]: b  \nc\n===\n", "\\[a]: b\\\nc\n===\n"),
+        (
+            "a \\| b  \n--- \\| ---\n===\n",
+            "a \\| b\\\n--- \\| ---\n===\n",
+        ),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
+fn a_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line() {
+    let mut built = parse("- p\n  # h\n- q\n").unwrap();
+    if let Some(Block::List(list)) = built.body.sections[0].blocks.first_mut()
+        && let Some(heading) = &mut list.items[0].body.sections[1].heading
+    {
+        heading.children.push(Inline::LineBreak(LineBreak {
+            kind: Kind(None),
+            span: 0..0,
+        }));
+        heading.children.push(text_node("b"));
+    }
+    let text = write(&built, &WriteOptions::default()).unwrap();
+    assert_eq!(text, "- p\n  # h&#10;b\n- q\n");
+    assert_eq!(written(&text), text);
+}
+
+#[test]
 fn touching_spans_of_one_kind_are_written_as_one_span() {
     for (source, text) in [("*a*_b_\n", "*ab*\n"), ("**a**__b__\n", "**ab**\n")] {
         assert_eq!(written(source), text, "{source:?}");

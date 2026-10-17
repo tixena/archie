@@ -191,7 +191,9 @@ impl Writer {
     /// `#` marks, one per level of depth, then the heading's text, a line
     /// break in it written `&#10;`. At depth 1 or 2, a heading that holds a
     /// line break is written over lines instead, each but the last ended by
-    /// the break's `\`, then `===` or `---` on a line of its own.
+    /// the break's `\`, guarded as a paragraph's lines, then `===` or `---`
+    /// on a line of its own, unless text is written before it in a tight
+    /// list, which those lines would join.
     fn heading<T>(&mut self, heading: &Heading<T>)
     where
         T: Extension,
@@ -201,18 +203,23 @@ impl Writer {
             2 => "---",
             _ => "",
         };
-        let mut segments = Segments::new(&Pieces::of(&heading.children));
-        if !underline.is_empty() && inline::holds_line_break(&heading.children) {
-            segments.cut_at_line_breaks();
-            segments.nodes(self, &heading.children, false);
-            for line in segments.lines() {
-                self.put(&line);
-                self.put("\n");
-            }
+        let pieces = Pieces::of(&heading.children);
+        let after_text = self.tight && !self.out.is_empty();
+        if !underline.is_empty() && !after_text && inline::holds_line_break(&heading.children) {
+            self.put_lines(|writer, pipes| {
+                let mut segments = Segments::new(&pieces);
+                if pipes {
+                    segments.escape_pipes();
+                }
+                segments.cut_at_line_breaks();
+                segments.nodes(writer, &heading.children, false);
+                segments.lines()
+            });
             self.put(underline);
         } else {
             self.put(&"#".repeat(self.depth));
             if !heading.children.is_empty() {
+                let mut segments = Segments::new(&pieces);
                 segments.line_breaks_as_references();
                 segments.nodes(self, &heading.children, false);
                 self.put(" ");
@@ -390,9 +397,8 @@ impl Writer {
         self.end_line();
     }
 
-    /// Each line of the paragraph on a line of its own, written again with
-    /// a backslash before every `|` of its text when its lines would read as
-    /// a table.
+    /// Each line of the paragraph on a line of its own, guarded as a
+    /// paragraph's lines.
     fn paragraph<T>(&mut self, paragraph: &Paragraph<T>)
     where
         T: Extension,
@@ -401,25 +407,17 @@ impl Writer {
         for line in paragraph.lines.iter().filter(|line| line.kind.0.is_none()) {
             pieces.add(&line.children);
         }
-        let mut lines = self.paragraph_lines(paragraph, &pieces, false);
-        if inline::reads_as_table(&lines) {
-            lines = self.paragraph_lines(paragraph, &pieces, true);
-        }
-        for line in &lines {
-            self.put(line);
-            self.put("\n");
-        }
+        self.put_lines(|writer, pipes| writer.paragraph_lines(paragraph, &pieces, pipes));
     }
 
-    /// The lines of `paragraph`, with a backslash before a first line that
-    /// would open a TOML frontmatter, and before every `|` of the text when
-    /// `pipes` is set.
+    /// The lines of `paragraph`, with a backslash before every `|` of the
+    /// text when `pipes` is set, and whether the first starts with text.
     fn paragraph_lines<T>(
         &mut self,
         paragraph: &Paragraph<T>,
         pieces: &Pieces,
         pipes: bool,
-    ) -> Vec<String>
+    ) -> (Vec<String>, bool)
     where
         T: Extension,
     {
@@ -436,15 +434,7 @@ impl Writer {
             }
             lines.push(text);
         }
-        if text_led {
-            inline::guard_definition(&mut lines);
-            if self.at_file_start()
-                && let Some(first) = lines.first_mut().filter(|first| *first == "+++")
-            {
-                first.insert(0, '\\');
-            }
-        }
-        lines
+        (lines, text_led)
     }
 
     /// The heading, written when the section has one, then the blocks, then
@@ -501,6 +491,37 @@ impl Writer {
             self.blank = false;
         }
         self.out.push_str(text);
+    }
+
+    /// Writes the lines `build` gives, each on a line of its own, guarded as
+    /// a paragraph's lines: a backslash before a first line led by text that
+    /// would read as a link reference definition or open a TOML frontmatter,
+    /// and the lines built again with every `|` escaped when they would read
+    /// as a table. `build` takes whether to escape the `|`s and gives the
+    /// lines and whether the first starts with text.
+    fn put_lines<F>(&mut self, mut build: F)
+    where
+        F: FnMut(&mut Self, bool) -> (Vec<String>, bool),
+    {
+        let file_start = self.at_file_start();
+        let guarded = |(mut lines, text_led): (Vec<String>, bool)| {
+            if text_led {
+                inline::guard_definition(&mut lines);
+                if file_start && let Some(first) = lines.first_mut().filter(|first| *first == "+++")
+                {
+                    first.insert(0, '\\');
+                }
+            }
+            lines
+        };
+        let mut lines = guarded(build(self, false));
+        if inline::reads_as_table(&lines) {
+            lines = guarded(build(self, true));
+        }
+        for line in &lines {
+            self.put(line);
+            self.put("\n");
+        }
     }
 
     /// Keeps `error`, unless an error is kept already.
