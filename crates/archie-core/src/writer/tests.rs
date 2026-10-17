@@ -1613,6 +1613,18 @@ fn a_byte_order_mark_after_the_start_of_the_file_is_written_as_it_is() {
 }
 
 #[test]
+fn an_alias_is_written_as_a_copy_of_its_anchors_value_and_no_anchor_is_written() {
+    assert_eq!(
+        written("---\nauthor: &ada Ada\nreviewer: *ada\n---\n"),
+        "---\nauthor: Ada\nreviewer: Ada\n---\n"
+    );
+    assert_eq!(
+        written("---\ndefaults: &d\n  draft: false\n  lang: en\npost: *d\n---\n# Notes\n"),
+        "---\ndefaults:\n  draft: false\n  lang: en\npost:\n  draft: false\n  lang: en\n---\n# Notes\n"
+    );
+}
+
+#[test]
 fn the_owners_sample_frontmatter_is_written_with_its_quotes_dropped() {
     let text = written(OWNERS_SAMPLE);
     assert!(

@@ -4,15 +4,17 @@ use core::ops::Range;
 
 use crate::parser::error::ParseError;
 
-pub struct Cursor<'src> {
+/// A byte cursor, with the `state` a reader keeps while it reads.
+pub struct Cursor<'src, S = ()> {
     /// The error of each value a reader dropped, in the order it met them.
     dropped: Vec<ParseError>,
     end: usize,
     pos: usize,
     source: &'src str,
+    state: S,
 }
 
-impl<'src> Cursor<'src> {
+impl<'src, S> Cursor<'src, S> {
     pub const fn at_end(&self) -> bool {
         self.pos >= self.end
     }
@@ -66,12 +68,13 @@ impl<'src> Cursor<'src> {
         self.dropped
     }
 
-    pub const fn new(source: &'src str, range: Range<usize>) -> Self {
+    pub const fn new(source: &'src str, range: Range<usize>, state: S) -> Self {
         Self {
             dropped: Vec::new(),
             end: range.end,
             pos: range.start,
             source,
+            state,
         }
     }
 
@@ -115,6 +118,14 @@ impl<'src> Cursor<'src> {
 
     pub fn slice(&self, range: Range<usize>) -> &'src str {
         &self.source[range]
+    }
+
+    pub const fn state(&self) -> &S {
+        &self.state
+    }
+
+    pub const fn state_mut(&mut self) -> &mut S {
+        &mut self.state
     }
 
     /// Advances to the first of `stops`, or to the end, and returns what it

@@ -476,7 +476,7 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   header through such a key goes on into the last mapping of its list.
 - Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
   dotted keys and of headers count together, and in YAML so do flow and block
-  collections, tags on collections and explicit keys. The innermost pair that holds a
+  collections, properties on collections and explicit keys. The innermost pair that holds a
   value past that depth is dropped, and the mapping keeps its other pairs, so that
   every operation on the tree stays within a 2 MB stack in a debug build: a value or a
   dotted key past the cap drops its pair, and a header past it drops its table with the
@@ -511,9 +511,10 @@ entry         := key? ":" value
 value         := node | NEWLINE block?
 compact       := node | mapping | sequence | NEWLINE block?
 sequence      := ( "-" ( node | mapping | sequence | NEWLINE indented? ) )+
-node          := TAG? inline NEWLINE
-               | TAG? BLOCK_SCALAR
-               | TAG NEWLINE block?
+node          := PROPERTIES? inline NEWLINE
+               | PROPERTIES? BLOCK_SCALAR
+               | PROPERTIES NEWLINE block?
+               | ALIAS NEWLINE
 block         := indented | sequence
 indented      := INDENT mapping DEDENT
                | INDENT sequence DEDENT
@@ -525,11 +526,14 @@ flow_mapping  := "{" ( flow_pair ( "," flow_pair )* ","? )? "}"
 flow_pair     := flow_key ( ":" flow_node? )? | explicit_pair | empty_pair
 explicit_pair := "?" flow_key? ( ":" flow_node? )?
 empty_pair    := ":" flow_node?
-flow_node     := TAG? inline
-key           := TAG? ( double_quoted | single_quoted | PLAIN_KEY
-                      | flow_sequence | flow_mapping ) | TAG
-flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
-                      | flow_sequence | flow_mapping ) | TAG
+flow_node     := PROPERTIES? inline | ALIAS
+key           := PROPERTIES? ( double_quoted | single_quoted | PLAIN_KEY
+                             | flow_sequence | flow_mapping )
+               | PROPERTIES | ALIAS
+flow_key      := PROPERTIES? ( double_quoted | single_quoted | FLOW_KEY
+                             | flow_sequence | flow_mapping )
+               | PROPERTIES | ALIAS
+PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
 ```
 
 - The frontmatter is a block mapping, or one flow mapping with nothing but comments
@@ -723,13 +727,52 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
   written for it, by the same rule as in TOML: `tags: [a, b]` then `tags: c` is
   `tags: [a, b, c]`. An explicit key counts as written: `? k` then `: a` then
   `k: b` is `k: [a, b]`.
-- An anchor (`&name`) or an alias (`*name`), on a value or on a key, fails the file
-  with `anchors and aliases are not read`.
+- `ANCHOR` is `&` and a name, and `ALIAS` is `*` and a name. A name runs to the first
+  space, tab, line ending or one of `, [ ] { }`; a `&` or a `*` with no name fails
+  the file with ``expected a name after `&` `` or ``expected a name after `*` ``.
+  The properties of a node, its anchor and its tag, come in either order; spaces and
+  tabs may follow each, and inside a flow collection line breaks and comments too.
+- An anchor on a value or on a key names that node, and an alias reads as a copy of
+  the node its anchor names, tag and all. `author: &ada Ada` then `reviewer: *ada` is
+  `{author: Ada, reviewer: Ada}`, `base: &b` then `  x: 1` then `copy: *b` is
+  `{base: {x: 1}, copy: {x: 1}}`, `tags: [&t one, two, *t]` is
+  `{tags: [one, two, one]}`, and `a: !!str &s 1` and `a: &s !!str 1` both name the
+  String `"1"`. An anchor on an empty value names null.
+- An anchor on a key names the key's scalar, typed as the same text written as a
+  value, and an alias as a key is the text of the scalar it names: `&k a: 1` then
+  `*k : 2` is `{a: [1, 2]}`, the key written twice. A `:` right after an alias is part
+  of its name. An alias that names a list or a mapping, as a key, drops its pair, as
+  a key that is a list or a mapping does.
+- An alias copies the most recent anchor of its name before it: `a: &x 1`, `b: &x 2`,
+  `c: *x` is `{a: 1, b: 2, c: 2}`.
+- An alias inside the value its own anchor names drops the innermost key that holds
+  it, with ``the alias `*A` lies inside the value its anchor names``, and so does an
+  alias whose anchor is not defined before it, with
+  ``no anchor `&B` is defined before this alias``; the mapping keeps its other pairs.
+  `a: &A [*A]` then `b: 2` is `{b: 2}`, and `a: *B` then `b: &B 1` is `{b: 1}`.
+- The aliases of one frontmatter copy at most 100000 values, each list, mapping and
+  scalar of a copy counting as one, and an alias as a key as one. The alias that
+  passes the cap, and each alias after it, drops the innermost key that holds it,
+  with `the aliases copy more than 100000 values`.
+- An alias with a tag or an anchor fails the file with
+  `an alias holds no tag or anchor`, pointing at the first of them: `!!str *x` fails.
+  A value has at most one anchor: `a: &x &y 1` fails with
+  `a value has at most one anchor`, pointing at the second.
+- In block context, properties may end their line. The value is then what the lines
+  under them hold, as for a key with nothing after its `:`, and the first of those
+  lines may start with the rest of the properties: `a: !!str` then `  &s 1` names the
+  String `"1"`.
+- Every node of a copy spans the alias. The writer writes each copy in full and no
+  anchor.
+- A `<<` key has no special meaning, as in YAML 1.2.2: `e:` then `  <<: *d` is a key
+  `<<` holding a copy of `d`.
 - Values nest at most 400 deep, by the cap stated under
   [TOML frontmatter](#toml-frontmatter), and the innermost key that holds a value past
   it is dropped with its value: `deep:` and a list nested 401 deep under it, then
-  `b: 2`, is `{b: 2}`. A tag on a collection and an explicit key each count as a level
-  of their own, and an explicit key whose `?` passes the cap drops its own pair. A
+  `b: 2`, is `{b: 2}`. The properties of a collection, a tag, an anchor or both, and
+  an explicit key each count as a level of their own, and an explicit key whose `?`
+  passes the cap drops its own pair. A copy counts from where its alias stands: an
+  alias inside 2 values that names a list nested 399 deep passes the cap. A
   frontmatter that holds one list or one scalar nested past the cap is empty.
 
 `BLOCK_SCALAR` is read whole, by YAML 1.2.2 section 8.1:
@@ -761,7 +804,7 @@ frontmatter that holds one list or one scalar with such a tag is empty. A value 
 at most one tag:
 `a: !!str !!str x` fails the file with `a value has at most one tag`, pointing at the
 second tag, and so does a second tag on a key, inside a flow collection, or on the
-line under a tag that ends its line.
+line under properties that end their line.
 
 - A tagged scalar's text is read again by the rules for an unquoted value of the
   tag's type in the table below: `!!str 01234` is the String `"01234"`, and
@@ -815,10 +858,11 @@ A `PLAIN` value's type comes from how it is written:
 | `Sequence` written as `[[name]]` headers | The first header | The end of the last line of the last table |
 | `Sequence` of the values of a key written more than once | The first value's start | The first value's end; for tables a header wrote again, the end of the last line of the last table |
 | `Scalar` | Its first character, quotes included | Its last |
-| `Scalar` that is null because nothing is written | Empty, right after the `:`, the `-` or the tag, or at the end of a flow key with no `:` | |
+| `Scalar` that is null because nothing is written | Empty, right after the `:`, the `-` or the properties, or at the end of a flow key with no `:` | |
 | `Scalar` that is null because an explicit key has no `:` line | Empty, at the end of the key | |
 | `Scalar` written as a block scalar | `\|` or `>` | The end of its last line of text, or of its header when it has none |
-| `Scalar`, `Mapping` or `Sequence` after a tag | The value, without its tag | |
+| `Scalar`, `Mapping` or `Sequence` after properties | The value, without its properties | |
+| `Scalar`, `Mapping`, `Sequence` or `Pair` of a copy an alias made | The alias | |
 | `MarkdownBlock` of the document | The line after the frontmatter, or the first byte of a file with none | The last byte of the file |
 | `MarkdownBlock` of an item or a table cell | The start of its first section | The end of its last section; empty at the end of the item's marker, or at the start of the cell, when it has no section |
 | `MarkdownBlock` that a `markdown` code block holds | The first byte of the block's lines between its fences | The end of the last of them |
@@ -1099,9 +1143,13 @@ with the text it reads from and the text it writes.
 1. Dates and date-times are in the schema: an unquoted date whose day exists in the
    calendar, or a date-time whose date does, is a Date, a DateTime or a LocalDateTime.
    The YAML 1.2.2 core schema has no date type and reads it as a string.
-2. Anchors and aliases are refused, with an error that names them. A tag other than
-   the eight above, and a value nested past 400 levels, drop the innermost key that
-   holds them, with its value. YAML reads both.
+2. An alias is a copy of the value its anchor names, and a write holds the copies and
+   no anchor; in YAML both name one node. An alias inside the value its anchor names,
+   an alias whose anchor is not defined before it, and the aliases past 100000 copied
+   values drop the innermost key that holds them, with its value; YAML's graph may hold
+   a node inside itself, and an alias with no anchor before it is an error there. A
+   tag other than the eight above, and a value nested past 400 levels, drop the
+   innermost key that holds them too. YAML reads both.
 3. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
 4. A pair whose key is a list or a mapping is dropped, and the mapping keeps its

@@ -160,16 +160,44 @@ fn a_line_of_a_flow_collection_must_be_indented_more_than_its_key() {
 }
 
 #[test]
-fn anchors_and_aliases_are_refused() {
-    let refused = |at: &str| named("anchors and aliases are not read", at);
-    assert_eq!(failed("---\nbase: &base 1\n---\n"), refused("&"));
-    assert_eq!(failed("---\na: 1\nb: *a\n---\n"), refused("*"));
+fn an_alias_with_a_tag_or_an_anchor_is_refused_at_the_property() {
+    let refused = |at: &str| named("an alias holds no tag or anchor", at);
+    assert_eq!(failed("---\na: &x 1\nb: !!str *x\n---\n"), refused("!!str"));
+    assert_eq!(failed("---\na: !!str *a\n---\n"), refused("!!str"));
+    assert_eq!(failed("---\na: &x 1\nb: &y *x\n---\n"), refused("&y"));
+    assert_eq!(failed("---\na: &x 1\nb: [&y *x]\n---\n"), refused("&y"));
+    assert_eq!(failed("---\na: &x 1\nb: &y\n  *x\n---\n"), refused("&y"));
     assert_eq!(
-        failed("---\nitems:\n  - &first 1\n  - [*first]\n---\n"),
-        refused("&")
+        failed("---\na: &x 1\n!!str *x : 2\n---\n"),
+        refused("!!str")
     );
-    assert_eq!(failed("---\n&key a: 1\n---\n"), refused("&"));
-    assert_eq!(failed("---\na: !!str *a\n---\n"), refused("*"));
+}
+
+#[test]
+fn a_second_anchor_on_a_value_or_a_key_is_refused_where_it_starts() {
+    for source in [
+        "---\na: &x &y 1\n---\n",
+        "---\n&x &y a: 1\n---\n",
+        "---\na: [&x &y 1]\n---\n",
+        "---\na: &x\n  &y 1\n---\n",
+    ] {
+        let error = parse(source).unwrap_err();
+        assert_eq!(error.message, "a value has at most one anchor");
+        let at = source.rfind('&').unwrap();
+        assert_eq!(error.span, at..at + 1);
+    }
+}
+
+#[test]
+fn an_anchor_or_an_alias_with_no_name_is_refused() {
+    assert_eq!(
+        failed("---\na: & 1\n---\n"),
+        named("expected a name after `&`", "&")
+    );
+    assert_eq!(
+        failed("---\na: [*]\n---\n"),
+        named("expected a name after `*`", "*")
+    );
 }
 
 #[test]
@@ -631,6 +659,20 @@ fn reads_and_writes_at_depth(source: &str, depth: usize) {
         let written = write(&document, &options).unwrap();
         assert_eq!(frontmatter_depth(&parse(&written).unwrap()), depth);
     }
+}
+
+#[test]
+fn a_copy_counts_toward_the_value_cap_from_where_its_alias_stands() {
+    on_two_megabytes(|| {
+        // The anchor counts as a level of its own.
+        let lists = VALUE_CAP - 1;
+        let deep = format!("{}1{}", "[".repeat(lists), "]".repeat(lists));
+        let source = format!("---\na: &d {deep}\nb: [*d]\nc: [[*d]]\ne: 1\n---\n");
+        let document = parse(&source).unwrap();
+        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b", "e"]);
+        reads_and_writes_at_depth(&source, VALUE_CAP);
+    });
 }
 
 #[test]

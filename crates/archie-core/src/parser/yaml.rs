@@ -1,15 +1,21 @@
-//! YAML frontmatter: block and flow collections, block scalars, tags and
-//! plain scalars into a mapping.
+//! YAML frontmatter: block and flow collections, block scalars, tags,
+//! anchors and aliases, and plain scalars into a mapping.
 
+use core::mem;
 use core::ops::Range;
+use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
-use crate::parser::cursor::Cursor;
+use crate::parser::cursor;
 use crate::parser::error::ParseError;
 use crate::parser::frontmatter::{Stop, caught, finish, insert, nest};
 use crate::parser::scalar;
+
+/// How many values the aliases of one frontmatter may copy: nested aliases
+/// grow a copy exponentially.
+const COPY_CAP: usize = 100_000;
 
 /// The core-schema tags archie reads, plus `!!timestamp`.
 const TAGS: [&str; 8] = [
@@ -22,6 +28,9 @@ const TAGS: [&str; 8] = [
     "str",
     "timestamp",
 ];
+
+/// The cursor of the YAML reader, which keeps the anchors it has read.
+type Cursor<'src> = cursor::Cursor<'src, Anchors>;
 
 /// What a block scalar keeps of the line break after its text and of the
 /// empty lines after that.
@@ -79,6 +88,96 @@ impl Read {
     }
 }
 
+/// The values anchors name, the anchors still being read, and how many
+/// values the aliases have copied.
+#[derive(Default)]
+struct Anchors {
+    copied: usize,
+    named: HashMap<String, Value>,
+    open: Vec<String>,
+}
+
+impl Anchors {
+    /// Adds `count` values to those the aliases copied, or raises the drop
+    /// of the alias at `span` when that passes `COPY_CAP`.
+    fn charge(&mut self, count: usize, span: &Range<usize>) -> Result<(), Stop> {
+        self.copied += count;
+        if self.copied <= COPY_CAP {
+            return Ok(());
+        }
+        let message = format!("the aliases copy more than {COPY_CAP} values");
+        Err(Stop::Drop(ParseError::new(&message, span.clone())))
+    }
+
+    /// The value the anchor `name` names, or the drop of its alias at `span`:
+    /// the alias lies inside that value, or no such anchor comes before it.
+    fn get(&self, name: &str, span: &Range<usize>) -> Result<&Value, Stop> {
+        if let Some(value) = self.named.get(name) {
+            return Ok(value);
+        }
+        let message = if self.open.iter().any(|open| open == name) {
+            format!("the alias `*{name}` lies inside the value its anchor names")
+        } else {
+            format!("no anchor `&{name}` is defined before this alias")
+        };
+        Err(Stop::Drop(ParseError::new(&message, span.clone())))
+    }
+}
+
+/// The anchor and the tag of a node, at most one of each in either order,
+/// where the first of them is written, and where the last ends.
+struct Properties {
+    anchor: Option<String>,
+    end: usize,
+    first: Range<usize>,
+    tag: Option<Tag>,
+}
+
+impl Properties {
+    /// The depth inside `open` values that a collection after these opens
+    /// in: they count as a level of their own.
+    fn level(&self, open: usize) -> Result<usize, Stop> {
+        let at = self.first.start;
+        nest(open, at..at + 1)
+    }
+
+    const fn new(at: usize) -> Self {
+        Self {
+            anchor: None,
+            end: at,
+            first: at..at,
+            tag: None,
+        }
+    }
+
+    /// Reads the properties at the cursor, each followed by what `separate`
+    /// skips. A second anchor or tag, or an alias after them, is refused.
+    fn read<F>(&mut self, cursor: &mut Cursor<'_>, mut separate: F) -> Result<(), ParseError>
+    where
+        F: FnMut(&mut Cursor<'_>) -> Result<(), ParseError>,
+    {
+        loop {
+            let at = cursor.pos();
+            match cursor.peek() {
+                Some(b'!') if self.tag.is_some() => return Err(second_tag(at)),
+                Some(b'&') if self.anchor.is_some() => return Err(second_anchor(at)),
+                Some(b'!') => self.tag = Some(tag(cursor)),
+                Some(b'&') => self.anchor = Some(anchor_name(cursor)?),
+                Some(b'*') if !self.first.is_empty() => {
+                    let first = self.first.clone();
+                    return Err(ParseError::new("an alias holds no tag or anchor", first));
+                }
+                Some(_) | None => return Ok(()),
+            }
+            self.end = cursor.pos();
+            if self.first.is_empty() {
+                self.first = at..self.end;
+            }
+            separate(cursor)?;
+        }
+    }
+}
+
 /// A tag as written: the type it names, `None` when archie does not read
 /// it, and where it is written.
 struct Tag {
@@ -88,7 +187,7 @@ struct Tag {
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
     let empty_at = content.start;
-    let mut cursor = Cursor::new(source, content);
+    let mut cursor = Cursor::new(source, content, Anchors::default());
     let Some(indent) = next_line(&mut cursor) else {
         return Ok(finish(IndexMap::new(), empty_at));
     };
@@ -358,17 +457,25 @@ fn skip_block(cursor: &mut Cursor<'_>, indent: usize) {
     }
 }
 
-/// The text of an explicit key, or `None` for a list or a mapping.
+/// The text of an explicit key, or `None` for a list or a mapping. A copy an
+/// alias made has the text of the scalar its anchor names.
 fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Option<String> {
-    match key {
-        Value::Scalar(scalar) => Some(scalar_text(cursor, scalar.value, &scalar.span)),
-        Value::Mapping(_) | Value::Sequence(_) => None,
+    let Value::Scalar(scalar) = key else {
+        return None;
+    };
+    let copied = cursor
+        .slice(scalar.span.clone())
+        .strip_prefix('*')
+        .and_then(|name| cursor.state().named.get(name));
+    if let Some(Value::Scalar(original)) = copied {
+        return Some(scalar_text(cursor, original.value.clone(), &original.span));
     }
+    Some(scalar_text(cursor, scalar.value, &scalar.span))
 }
 
 /// The key at the cursor, read by `text`, or `None` for a key that is a list
-/// or a mapping, tagged or not, which is read as a value written in `context`
-/// inside `open` values.
+/// or a mapping, with properties or not, which is read as a value written in
+/// `context` inside `open` values, or an alias that names one.
 fn key_or_collection<F>(
     cursor: &mut Cursor<'_>,
     context: Context,
@@ -376,29 +483,36 @@ fn key_or_collection<F>(
     text: F,
 ) -> Result<Option<String>, Stop>
 where
-    F: FnOnce(&mut Cursor<'_>) -> Result<String, Stop>,
+    F: FnOnce(&mut Cursor<'_>) -> Result<Option<String>, Stop>,
 {
     if !is_collection_key(cursor) {
-        return text(cursor).map(Some);
+        return text(cursor);
     }
     let _: Value = inline_value(cursor, context, open)?;
     Ok(None)
 }
 
-/// Whether a `[` or a `{` starts the node at the cursor, after a tag or not.
+/// Whether a `[` or a `{` starts the node at the cursor, after properties or
+/// not.
 fn is_collection_key(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
-    skip_tag(cursor);
+    skip_properties(cursor);
     let is_collection = matches!(cursor.peek(), Some(b'[' | b'{'));
     cursor.set_pos(start);
     is_collection
 }
 
-/// Moves the cursor past the tag at it, whether archie reads it or not, and
-/// the spaces after it.
-fn skip_tag(cursor: &mut Cursor<'_>) {
-    if cursor.peek() == Some(b'!') {
-        pass_tag(cursor);
+/// Moves the cursor past the tags and anchors at it, whether archie reads
+/// them or not, and the spaces after each.
+fn skip_properties(cursor: &mut Cursor<'_>) {
+    loop {
+        match cursor.peek() {
+            Some(b'!') => pass_tag(cursor),
+            Some(b'&') => {
+                let _: &str = pass_name(cursor);
+            }
+            Some(_) | None => return,
+        }
         cursor.skip_spaces();
     }
 }
@@ -418,12 +532,21 @@ fn indicated_value(cursor: &mut Cursor<'_>, indent: usize, open: usize) -> Resul
     Ok(value)
 }
 
-fn key(cursor: &mut Cursor<'_>) -> Result<String, Stop> {
+/// The key at the cursor, or `None` for an alias that names a list or a
+/// mapping.
+fn key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
+    match cursor.peek() {
+        Some(b'!' | b'&') => propertied_key(cursor, false, scalar_key).map(Some),
+        Some(b'*') => alias_key(cursor),
+        Some(_) | None => scalar_key(cursor).map(Some),
+    }
+}
+
+/// A quoted or plain key.
+fn scalar_key(cursor: &mut Cursor<'_>) -> Result<String, Stop> {
     match cursor.peek() {
         Some(b'"') => double_quoted(cursor, None).map_err(Stop::Fail),
         Some(b'\'') => single_quoted(cursor, None).map_err(Stop::Fail),
-        Some(b'!') => tagged_key(cursor, false, key),
-        Some(b'&' | b'*') => anchor(cursor),
         Some(b'[' | b'{') => cursor.error("expected a key"),
         Some(_) | None => {
             no_indicator(cursor, false, "key")?;
@@ -447,18 +570,19 @@ fn plain_key_length(line: &str) -> Option<usize> {
 }
 
 /// Whether the cursor, inside `open` values, is on a pair that opens a
-/// mapping: an explicit key, or an empty key or a `key:` after a tag or not,
-/// whose key is plain, quoted or a flow collection. On a tab it is not.
+/// mapping: an explicit key, or an empty key or a `key:` after properties or
+/// not, whose key is plain, quoted, a flow collection or an alias. On a tab
+/// it is not.
 fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
     if is_explicit_key(cursor) {
         return true;
     }
     let start = cursor.pos();
-    skip_tag(cursor);
+    skip_properties(cursor);
     let is_mapping = is_empty_key(cursor, false)
         || match cursor.peek() {
             Some(b'"' | b'\'') => {
-                let is_key = key(cursor).is_ok();
+                let is_key = scalar_key(cursor).is_ok();
                 cursor.skip_spaces();
                 is_key && cursor.peek() == Some(b':')
             }
@@ -468,11 +592,28 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
                 cursor.skip_spaces();
                 is_key && cursor.peek() == Some(b':') && separated_at(cursor, 1)
             }
-            Some(b'\t' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
+            Some(b'*') => {
+                let _: &str = pass_name(cursor);
+                cursor.skip_spaces();
+                cursor.peek() == Some(b':') && separated_at(cursor, 1)
+            }
+            Some(b'\t' | b'|' | b'>' | b'&' | b'!') => false,
             Some(_) | None => plain_key_length(cursor.rest_of_line()).is_some(),
         };
     cursor.set_pos(start);
     is_mapping
+}
+
+/// What `look` gives, read with no anchor named, so that a lookahead copies
+/// and names nothing.
+fn unanchored<T, F>(cursor: &mut Cursor<'_>, look: F) -> T
+where
+    F: FnOnce(&mut Cursor<'_>) -> T,
+{
+    let anchors = mem::take(cursor.state_mut());
+    let seen = look(cursor);
+    *cursor.state_mut() = anchors;
+    seen
 }
 
 /// Whether the flow collection at the cursor, inside `open` values, reads,
@@ -480,8 +621,11 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
 /// unread.
 fn passes_collection(cursor: &mut Cursor<'_>, open: usize) -> bool {
     let start = cursor.pos();
-    match inline_value(cursor, Context::Flow(None), open) {
-        Ok(_) => true,
+    let read = unanchored(cursor, |inner| {
+        inline_value(inner, Context::Flow(None), open).map(|_| ())
+    });
+    match read {
+        Ok(()) => true,
         Err(Stop::Drop(_)) => {
             cursor.set_pos(start);
             skip_collection(cursor);
@@ -497,9 +641,9 @@ fn is_explicit_key(cursor: &Cursor<'_>) -> bool {
     cursor.peek() == Some(b'?') && separated_at(cursor, 1)
 }
 
-/// The value of a key, a list entry or a tag with nothing after it on its
-/// line, inside `open` values: what the lines indented more than it hold, a
-/// list at a key's own column, or null.
+/// The value of a key, a list entry or properties with nothing after them on
+/// their line, inside `open` values: what the lines indented more than it
+/// hold, a list at a key's own column, or null.
 fn nested(
     cursor: &mut Cursor<'_>,
     context: Context,
@@ -528,9 +672,9 @@ fn nested(
 }
 
 /// The indentation of the line that holds the value of a key, a list entry
-/// or a tag with nothing after it on its line, and whether a list entry
-/// starts that line, with the cursor at its start; `None` when the value is
-/// null.
+/// or properties with nothing after them on their line, and whether a list
+/// entry starts that line, with the cursor at its start; `None` when the
+/// value is null.
 fn under(cursor: &mut Cursor<'_>, context: Context) -> Option<(usize, bool)> {
     let found = next_line(cursor)?;
     let is_list = is_dash(cursor, found);
@@ -668,8 +812,8 @@ fn inline_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Resul
             }
             Context::Flow(_) => plain(cursor, context).map_err(Stop::Fail),
         },
-        Some(b'!') => tagged(cursor, context, open),
-        Some(b'&' | b'*') => anchor(cursor),
+        Some(b'!' | b'&') => propertied(cursor, context, open),
+        Some(b'*') => alias(cursor, open),
         Some(_) | None => plain(cursor, context).map_err(Stop::Fail),
     }
 }
@@ -715,7 +859,7 @@ fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>, open: usize) -> Res
             Err(Stop::Drop(error)) => {
                 // Passed over, to see whether a `:` makes it a key.
                 cursor.set_pos(start);
-                skip_tag(cursor);
+                skip_properties(cursor);
                 skip_collection(cursor);
                 Err(Stop::Drop(error))
             }
@@ -772,8 +916,11 @@ fn is_flow_pair(cursor: &mut Cursor<'_>) -> bool {
         return true;
     }
     let start = cursor.pos();
-    // A key's tag that archie does not read raises a drop after the key.
-    let is_key = !matches!(flow_key(cursor, None), Err(Stop::Fail(_)));
+    // A key's tag that archie does not read raises a drop after the key, and
+    // so does an alias with no anchor.
+    let is_key = unanchored(cursor, |inner| {
+        !matches!(flow_key(inner, None), Err(Stop::Fail(_)))
+    });
     cursor.skip_spaces();
     let is_pair = is_key && cursor.peek() == Some(b':');
     cursor.set_pos(start);
@@ -856,10 +1003,11 @@ fn flow_pair(
 
 /// Moves the cursor from the start of a flow entry that is dropped to its
 /// end: the first `,`, `]` or `}` outside every bracket the entry opens.
-/// Quoted scalars, tags and comments are passed over whole.
+/// Quoted scalars, properties, aliases and comments are passed over whole.
 fn skip_flow_entry(cursor: &mut Cursor<'_>) {
     let mut depth = 0_usize;
-    // Whether a node may start here, as a quoted scalar or a tag may.
+    // Whether a node may start here, as a quoted scalar, a property or an
+    // alias may.
     let mut node_start = true;
     let mut spaced = true;
     loop {
@@ -881,6 +1029,17 @@ fn skip_flow_entry(cursor: &mut Cursor<'_>) {
             }
             b'!' if node_start => {
                 pass_tag(cursor);
+                spaced = false;
+                continue;
+            }
+            b'&' if node_start => {
+                let _: &str = pass_name(cursor);
+                spaced = false;
+                continue;
+            }
+            b'*' if node_start => {
+                let _: &str = pass_name(cursor);
+                node_start = false;
                 spaced = false;
                 continue;
             }
@@ -919,7 +1078,8 @@ fn skip_collection(cursor: &mut Cursor<'_>) {
 }
 
 /// The key of a flow pair inside `open` values, or `None` for a list or a
-/// mapping; empty after a `?` with none or before a `:` that starts the pair.
+/// mapping or an alias that names one; empty after a `?` with none or before
+/// a `:` that starts the pair.
 /// It goes on over lines in a flow mapping or after a `?`, else stays on one.
 fn flow_pair_key(
     cursor: &mut Cursor<'_>,
@@ -957,17 +1117,28 @@ fn is_empty_key(cursor: &Cursor<'_>, in_flow: bool) -> bool {
     cursor.peek() == Some(b':') && is_indicator(cursor, in_flow)
 }
 
-/// A key inside a flow collection. A plain key ends at a `:` followed by a
-/// space or a flow indicator, at a flow indicator, or at a comment. With a
-/// `context`, as inside a flow mapping, a quoted key may go on over several
-/// lines as a quoted value does, and a plain key that runs to the end of its
-/// line goes on over the lines below as a `PLAIN` does, up to that end.
-fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, Stop> {
+/// A key inside a flow collection, or `None` for an alias that names a list
+/// or a mapping. A plain key ends at a `:` followed by a space or a flow
+/// indicator, at a flow indicator, or at a comment. With a `context`, as
+/// inside a flow mapping, a quoted key may go on over several lines as a
+/// quoted value does, and a plain key that runs to the end of its line goes on
+/// over the lines below as a `PLAIN` does, up to that end.
+fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<Option<String>, Stop> {
+    match cursor.peek() {
+        Some(b'!' | b'&') => {
+            propertied_key(cursor, true, |inner| flow_scalar_key(inner, context)).map(Some)
+        }
+        Some(b'*') => alias_key(cursor),
+        Some(_) | None => flow_scalar_key(cursor, context).map(Some),
+    }
+}
+
+/// A quoted or plain key inside a flow collection, read as [`flow_key`]
+/// reads one.
+fn flow_scalar_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, Stop> {
     match cursor.peek() {
         Some(b'"') => double_quoted(cursor, context).map_err(Stop::Fail),
         Some(b'\'') => single_quoted(cursor, context).map_err(Stop::Fail),
-        Some(b'!') => tagged_key(cursor, true, |inner| flow_key(inner, context)),
-        Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
             no_indicator(cursor, true, "key")?;
             let start = cursor.pos();
@@ -1356,38 +1527,79 @@ fn is_spaced(line: &str) -> bool {
     line.starts_with([' ', '\t'])
 }
 
-/// A value written after a tag, inside `open` values, read again under it.
-/// In block context a tag may end its line, and the value is what the lines
-/// under it hold, as for a key or a list entry with nothing after it; with
-/// none, it is empty. A collection counts its tag as a level of its own, and
-/// a value has at most one tag.
-fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, Stop> {
-    let tag = tag(cursor);
-    let under = match context {
-        Context::Entry(_) | Context::Key(_) => {
-            cursor.skip_spaces();
-            at_line_end(cursor)
-        }
-        Context::Flow(column) => {
-            skip_flow_space(cursor, column)?;
-            false
-        }
+/// A value written after its properties, inside `open` values: read again
+/// under its tag, and named by its anchor, which is open while it is read.
+fn propertied(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, Stop> {
+    let (properties, depth, under) = node_properties(cursor, context, open)?;
+    let name = match &properties.tag {
+        Some(tag) => Some(known(cursor, tag)?),
+        None => None,
     };
-    let depth = if under {
-        end_of_line(cursor)?;
-        depth_under(cursor, context, &tag, open)?
+    if let Some(anchor) = &properties.anchor {
+        let anchors = cursor.state_mut();
+        let _: Option<Value> = anchors.named.remove(anchor);
+        anchors.open.push(anchor.clone());
+    }
+    let read = if under {
+        nested(cursor, context, properties.end, depth).inspect(|_| to_line_end(cursor))
     } else {
-        tagged_depth(cursor, &tag, open)?
+        inline_value(cursor, context, depth)
     };
-    let name = known(cursor, &tag)?;
-    let value = if under {
-        let block = nested(cursor, context, tag.span.end, depth)?;
-        to_line_end(cursor);
-        block
-    } else {
-        inline_value(cursor, context, depth)?
+    finish_node(cursor, properties, name, read)
+}
+
+/// Reads the properties of the node at the cursor, inside `open` values, with
+/// the depth its value is read at and whether that value is under them. In
+/// block context they may end their line, and the value is what the lines
+/// under them hold, as for a key or a list entry with nothing after it; with
+/// none, it is empty. The first of those lines may start with more of them. A
+/// collection counts its properties as a level of its own.
+fn node_properties(
+    cursor: &mut Cursor<'_>,
+    context: Context,
+    open: usize,
+) -> Result<(Properties, usize, bool), Stop> {
+    let mut properties = Properties::new(cursor.pos());
+    let Context::Flow(column) = context else {
+        loop {
+            properties.read(cursor, |inner| {
+                inner.skip_spaces();
+                Ok(())
+            })?;
+            if !at_line_end(cursor) {
+                let depth = tagged_depth(cursor, &properties, open)?;
+                return Ok((properties, depth, false));
+            }
+            end_of_line(cursor)?;
+            if let Some(depth) = depth_under(cursor, context, &properties, open)? {
+                return Ok((properties, depth, true));
+            }
+        }
     };
-    retag(cursor, name, &tag.span, value).map_err(Stop::Fail)
+    properties.read(cursor, |inner| skip_flow_space(inner, column))?;
+    let depth = tagged_depth(cursor, &properties, open)?;
+    Ok((properties, depth, false))
+}
+
+/// The value `read` gives under `properties`, once its anchor is no longer
+/// open: retagged as `!!name`, and kept under its anchor.
+fn finish_node(
+    cursor: &mut Cursor<'_>,
+    properties: Properties,
+    name: Option<&str>,
+    read: Result<Value, Stop>,
+) -> Result<Value, Stop> {
+    if properties.anchor.is_some() {
+        let _: Option<String> = cursor.state_mut().open.pop();
+    }
+    let mut value = read?;
+    if let (Some(tag), Some(type_name)) = (&properties.tag, name) {
+        value = retag(cursor, type_name, &tag.span, value)?;
+    }
+    if let Some(anchor) = properties.anchor {
+        let _: Option<Value> = cursor.state_mut().named.insert(anchor, value.clone());
+    }
+    Ok(value)
 }
 
 /// Moves the cursor from the start of a line back onto the line ending
@@ -1400,50 +1612,51 @@ fn to_line_end(cursor: &mut Cursor<'_>) {
     }
 }
 
-/// The depth inside `open` values that the node after `tag`, at the cursor,
-/// is read at: a flow collection counts the tag as a level of its own. A
-/// second tag on the node is refused.
-fn tagged_depth(cursor: &Cursor<'_>, tag: &Tag, open: usize) -> Result<usize, Stop> {
+/// The depth inside `open` values that the node after `properties`, at the
+/// cursor, is read at: a flow collection counts them as a level of their own.
+fn tagged_depth(cursor: &Cursor<'_>, properties: &Properties, open: usize) -> Result<usize, Stop> {
     match cursor.peek() {
-        Some(b'!') => Err(second_tag(cursor.pos()).into()),
-        Some(b'[' | b'{') => tag_level(tag, open),
+        Some(b'[' | b'{') => properties.level(open),
         Some(_) | None => Ok(open),
     }
 }
 
-/// [`tagged_depth`] for the node that `nested` reads under a tag that ends
-/// its line, with the cursor at the start of the next line: a block
-/// collection there counts the tag as a level of its own too.
+/// [`tagged_depth`] for the node that `nested` reads under properties that
+/// end their line, with the cursor at the start of the next line: a block
+/// collection there counts them as a level of their own too. `None` when that
+/// line starts with more properties or an alias, with the cursor moved to
+/// them.
 fn depth_under(
     cursor: &mut Cursor<'_>,
     context: Context,
-    tag: &Tag,
+    properties: &Properties,
     open: usize,
-) -> Result<usize, Stop> {
+) -> Result<Option<usize>, Stop> {
     let start = cursor.pos();
     let depth = match under(cursor, context) {
         None => Ok(open),
-        Some((_, true)) => tag_level(tag, open),
+        Some((_, true)) => properties.level(open),
         Some((found, false)) => {
             cursor.set_pos(cursor.pos() + found);
             no_tab_before_block(cursor, open)?;
             if starts_mapping(cursor, open) {
-                tag_level(tag, open)
+                properties.level(open)
             } else {
                 cursor.skip_spaces();
-                tagged_depth(cursor, tag, open)
+                if matches!(cursor.peek(), Some(b'!' | b'&' | b'*')) {
+                    return Ok(None);
+                }
+                tagged_depth(cursor, properties, open)
             }
         }
     };
     cursor.set_pos(start);
-    depth
+    depth.map(Some)
 }
 
-/// The depth inside `open` values that a collection after `tag` opens in:
-/// the tag counts as a level of its own.
-fn tag_level(tag: &Tag, open: usize) -> Result<usize, Stop> {
-    let at = tag.span.start;
-    nest(open, at..at + 1)
+/// An anchor at `at` on a node that already has one.
+fn second_anchor(at: usize) -> ParseError {
+    ParseError::new("a value has at most one anchor", at..at + 1)
 }
 
 /// A tag at `at` on a node that already has one.
@@ -1451,31 +1664,40 @@ fn second_tag(at: usize) -> ParseError {
     ParseError::new("a value has at most one tag", at..at + 1)
 }
 
-/// A key written after a tag, read by `read` and checked against the tag. A
-/// `:` right after the tag leaves the key empty, as `is_empty_key` reads it
-/// inside a flow collection or not, and a second tag is refused.
-fn tagged_key<F>(cursor: &mut Cursor<'_>, in_flow: bool, read: F) -> Result<String, Stop>
+/// A key written after its properties, read by `read`, checked against its
+/// tag and named by its anchor. A `:` right after them leaves the key empty,
+/// as `is_empty_key` reads it inside a flow collection or not.
+fn propertied_key<F>(cursor: &mut Cursor<'_>, in_flow: bool, read: F) -> Result<String, Stop>
 where
     F: FnOnce(&mut Cursor<'_>) -> Result<String, Stop>,
 {
-    let tag = tag(cursor);
-    cursor.skip_spaces();
+    let mut properties = Properties::new(cursor.pos());
+    properties.read(cursor, |inner| {
+        inner.skip_spaces();
+        Ok(())
+    })?;
     let start = cursor.pos();
-    if cursor.peek() == Some(b'!') {
-        return Err(second_tag(start).into());
-    }
+    let quoted = matches!(cursor.peek(), Some(b'"' | b'\''));
     let text = if is_empty_key(cursor, in_flow) {
         String::new()
     } else {
         read(cursor)?
     };
-    let name = known(cursor, &tag)?;
-    let _: Value = retag(
-        cursor,
-        name,
-        &tag.span,
-        string(start..cursor.pos(), text.clone()),
-    )?;
+    let span = start..cursor.pos();
+    let node = match &properties.tag {
+        Some(tag) => {
+            let name = known(cursor, tag)?;
+            retag(cursor, name, &tag.span, string(span, text.clone()))?
+        }
+        None if quoted => string(span, text.clone()),
+        None => Value::Scalar(Scalar {
+            span,
+            value: scalar::yaml(&text),
+        }),
+    };
+    if let Some(anchor) = properties.anchor {
+        let _: Option<Value> = cursor.state_mut().named.insert(anchor, node);
+    }
     Ok(text)
 }
 
@@ -1590,10 +1812,114 @@ fn misfit(written: &str, name: &str, span: Range<usize>) -> ParseError {
     ParseError::new(&message, span)
 }
 
-/// Anchors and aliases are refused: reading one means copying a value.
-fn anchor<T>(cursor: &Cursor<'_>) -> Result<T, Stop> {
+/// A copy of the value the alias at the cursor names, inside `open` values,
+/// with every span in it on the alias. The copy counts toward `COPY_CAP`, and
+/// toward `VALUE_CAP` from where the alias stands.
+fn alias(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
+    let (name, span) = alias_name(cursor)?;
+    let anchors = cursor.state_mut();
+    let limit = COPY_CAP.saturating_sub(anchors.copied);
+    let (count, levels) = measure(anchors.get(&name, &span)?, limit);
+    anchors.charge(count, &span)?;
+    // The deepest list or mapping of the copy opens inside the others.
+    if let Some(inside) = levels.checked_sub(1) {
+        let _: usize = nest(open + inside, span.clone())?;
+    }
+    Ok(copy(anchors.get(&name, &span)?, &span))
+}
+
+/// The text of the scalar the alias at the cursor names, as a key, or `None`
+/// when it names a list or a mapping. The text counts as one copied value.
+fn alias_key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
+    let (name, span) = alias_name(cursor)?;
+    let anchors = cursor.state_mut();
+    let Value::Scalar(scalar) = anchors.get(&name, &span)? else {
+        return Ok(None);
+    };
+    let original = scalar.clone();
+    anchors.charge(1, &span)?;
+    Ok(Some(scalar_text(cursor, original.value, &original.span)))
+}
+
+/// Reads the alias at the cursor: its name and where it is written.
+fn alias_name(cursor: &mut Cursor<'_>) -> Result<(String, Range<usize>), ParseError> {
+    let start = cursor.pos();
+    let name = anchor_name(cursor)?;
+    Ok((name, start..cursor.pos()))
+}
+
+/// Reads the `&` or the `*` at the cursor and the name after it.
+fn anchor_name(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     let at = cursor.pos();
-    Err(ParseError::new("anchors and aliases are not read", at..at + 1).into())
+    let indicator = cursor.peek().map(char::from).unwrap_or_default();
+    let name = pass_name(cursor);
+    if name.is_empty() {
+        let message = format!("expected a name after `{indicator}`");
+        return Err(ParseError::new(&message, at..at + 1));
+    }
+    Ok(name.to_owned())
+}
+
+/// Moves the cursor past the `&` or the `*` at it and the name after it,
+/// which runs to the first space, tab, line ending or flow indicator, and
+/// returns the name.
+fn pass_name<'src>(cursor: &mut Cursor<'src>) -> &'src str {
+    cursor.bump();
+    cursor.take_until(b" \t\r\n,[]{}")
+}
+
+/// How many values `value` holds, itself included, counted up to one past
+/// `limit`, and how many lists and mappings nest in it at its deepest.
+fn measure(value: &Value, limit: usize) -> (usize, usize) {
+    let mut count = 0;
+    let mut levels = 0;
+    let mut open = vec![(0, value)];
+    while let Some((depth, held)) = open.pop() {
+        count += 1;
+        if count > limit {
+            break;
+        }
+        match held {
+            Value::Mapping(mapping) => {
+                levels = levels.max(depth + 1);
+                open.extend(mapping.pairs.values().map(|pair| (depth + 1, &pair.value)));
+            }
+            Value::Scalar(_) => {}
+            Value::Sequence(sequence) => {
+                levels = levels.max(depth + 1);
+                open.extend(sequence.items.iter().map(|item| (depth + 1, item)));
+            }
+        }
+    }
+    (count, levels)
+}
+
+/// `value` with every span in it set to `span`.
+fn copy(value: &Value, span: &Range<usize>) -> Value {
+    match value {
+        Value::Mapping(mapping) => {
+            let pairs = mapping.pairs.iter().map(|(key, pair)| {
+                let copied = Pair {
+                    repeats: vec![span.clone(); pair.repeats.len()],
+                    span: span.clone(),
+                    value: copy(&pair.value, span),
+                };
+                (key.clone(), copied)
+            });
+            Value::Mapping(Mapping {
+                pairs: pairs.collect(),
+                span: span.clone(),
+            })
+        }
+        Value::Scalar(scalar) => Value::Scalar(Scalar {
+            span: span.clone(),
+            value: scalar.value.clone(),
+        }),
+        Value::Sequence(sequence) => Value::Sequence(Sequence {
+            items: sequence.items.iter().map(|item| copy(item, span)).collect(),
+            span: span.clone(),
+        }),
+    }
 }
 
 /// A double-quoted string. With no `context`, as for a key held to its line,

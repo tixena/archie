@@ -32,7 +32,7 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
 /// dropped.
 pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<ParseError>), ParseError> {
     let empty_at = content.start;
-    let mut cursor = Cursor::new(source, content);
+    let mut cursor = Cursor::new(source, content, ());
     let mut root = IndexMap::new();
     // The path of the open table; empty is the root.
     let mut current: Vec<String> = Vec::new();

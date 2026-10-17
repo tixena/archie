@@ -342,7 +342,7 @@ fn rows(source: &str) -> Vec<Row> {
 /// Under a pair whose key is written more than once, the values come from
 /// several places, so each only lies inside the frontmatter. The cells of a
 /// row written over several lines interleave, so each only lies inside its
-/// row.
+/// row. Every node of a copy an alias made spans the alias.
 fn assert_nested(source: &str, rows: &[Row]) {
     let mut open: Vec<Range<usize>> = Vec::new();
     let mut merged: Option<(usize, Range<usize>)> = None;
@@ -374,7 +374,7 @@ fn assert_nested(source: &str, rows: &[Row]) {
         }
         if let Some(sibling) = open.get(row.depth) {
             assert!(
-                row.spread || sibling.end <= span.start,
+                row.spread || sibling.end <= span.start || sibling == span,
                 "{label} overlaps the node before it"
             );
         }

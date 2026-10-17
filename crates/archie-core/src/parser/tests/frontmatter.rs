@@ -873,3 +873,443 @@ fn the_empty_mapping_of_a_frontmatter_that_holds_one_value_spans_the_value() {
         ],
     );
 }
+
+#[test]
+fn an_alias_reads_as_a_copy_of_the_scalar_its_anchor_names() {
+    let source = "---\nauthor: &ada Ada\nreviewer: *ada\n---\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=author
+        Scalar String "Ada"
+      Pair key=reviewer
+        Scalar String "Ada"
+  MarkdownBlock
+"#,
+    );
+    check_spans(
+        source,
+        &[
+            ("Document", source),
+            (
+                "Frontmatter format=Yaml",
+                "---\nauthor: &ada Ada\nreviewer: *ada\n---",
+            ),
+            ("Mapping", "author: &ada Ada\nreviewer: *ada"),
+            ("Pair key=author", "author: &ada Ada"),
+            ("Scalar String \"Ada\"", "Ada"),
+            ("Pair key=reviewer", "reviewer: *ada"),
+            ("Scalar String \"Ada\"", "*ada"),
+            ("MarkdownBlock", ""),
+        ],
+    );
+}
+
+#[test]
+fn an_alias_of_a_mapping_copies_every_value_in_it_each_spanning_the_alias() {
+    let source = "---\nbase: &b\n  x: 1\n  y: [a, b]\ncopy: *b\n---\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=base
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+          Pair key=y
+            Sequence
+              Scalar String "a"
+              Scalar String "b"
+      Pair key=copy
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+          Pair key=y
+            Sequence
+              Scalar String "a"
+              Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+    let copy: Vec<(&str, &str)> = [
+        "Mapping",
+        "Pair key=x",
+        "Scalar Integer 1",
+        "Pair key=y",
+        "Sequence",
+        "Scalar String \"a\"",
+        "Scalar String \"b\"",
+    ]
+    .into_iter()
+    .map(|label| (label, "*b"))
+    .collect();
+    let mut expected = vec![
+        ("Document", source),
+        (
+            "Frontmatter format=Yaml",
+            "---\nbase: &b\n  x: 1\n  y: [a, b]\ncopy: *b\n---",
+        ),
+        ("Mapping", "base: &b\n  x: 1\n  y: [a, b]\ncopy: *b"),
+        ("Pair key=base", "base: &b\n  x: 1\n  y: [a, b]"),
+        ("Mapping", "x: 1\n  y: [a, b]"),
+        ("Pair key=x", "x: 1"),
+        ("Scalar Integer 1", "1"),
+        ("Pair key=y", "y: [a, b]"),
+        ("Sequence", "[a, b]"),
+        ("Scalar String \"a\"", "a"),
+        ("Scalar String \"b\"", "b"),
+        ("Pair key=copy", "copy: *b"),
+    ];
+    expected.extend(copy);
+    expected.push(("MarkdownBlock", ""));
+    check_spans(source, &expected);
+}
+
+#[test]
+fn an_anchor_and_its_alias_inside_flow_collections() {
+    check(
+        "---\ntags: [&t one, two, *t]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=tags
+        Sequence
+          Scalar String "one"
+          Scalar String "two"
+          Scalar String "one"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na: {k: &v 1, l: *v}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=k
+            Scalar Integer 1
+          Pair key=l
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+/// The outline of a YAML frontmatter that holds `a` and `b`, each the
+/// scalar labeled `scalar`, before an empty body.
+fn a_and_b(scalar: &str) -> String {
+    format!(
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar {scalar}
+      Pair key=b
+        Scalar {scalar}
+  MarkdownBlock
+"
+    )
+}
+
+#[test]
+fn a_tag_and_an_anchor_may_be_written_in_either_order() {
+    for source in [
+        "---\na: !!str &s 1\nb: *s\n---\n",
+        "---\na: &s !!str 1\nb: *s\n---\n",
+        "---\na: !!str\n  &s 1\nb: *s\n---\n",
+        "---\na: &s\n  !!str 1\nb: *s\n---\n",
+    ] {
+        check(source, &a_and_b("String \"1\""));
+    }
+}
+
+#[test]
+fn an_anchor_on_an_empty_value_names_null() {
+    check("---\na: &e\nb: *e\n---\n", &a_and_b("Null"));
+    check(
+        "---\nl:\n- &e\n- *e\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=l
+        Sequence
+          Scalar Null
+          Scalar Null
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn an_anchor_on_a_key_names_the_key_and_its_alias_writes_that_key_again() {
+    check(
+        "---\n&k a: 1\n*k : 2\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Scalar Integer 1
+          Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    check(
+        "---\nk:\n  &a x: 1\n  y: *a\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=k
+        Mapping
+          Pair key=x
+            Scalar Integer 1
+          Pair key=y
+            Scalar String "x"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn an_alias_as_a_key_is_the_text_of_the_scalar_its_anchor_names() {
+    check(
+        "---\nn: &n 0x1A\n? *n\n: v\n{*n : w}: x\nl: [*n : y]\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=n
+        Scalar Integer 26
+      Pair key=0x1A
+        Scalar String "v"
+      Pair key=l
+        Sequence
+          Mapping
+            Pair key=0x1A
+              Scalar String "y"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn an_alias_of_a_list_or_a_mapping_as_a_key_drops_its_pair() {
+    for source in [
+        "---\nm: &m {x: 1}\n*m : 2\nb: 2\n---\n",
+        "---\nm: &m [1]\n? *m\n: v\nb: 2\n---\n",
+    ] {
+        let document = parse(source).unwrap();
+        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        assert_eq!(pairs.keys().collect::<Vec<_>>(), ["m", "b"], "{source:?}");
+    }
+    check(
+        "---\nm: &m [1]\nf: {*m : 1, b: 2}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=m
+        Sequence
+          Scalar Integer 1
+      Pair key=f
+        Mapping
+          Pair key=b
+            Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn an_alias_copies_the_most_recent_anchor_of_its_name_before_it() {
+    check(
+        "---\na: &x 1\nb: &x 2\nc: *x\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+      Pair key=b
+        Scalar Integer 2
+      Pair key=c
+        Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    let inner = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Scalar Integer 1
+          Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\na: &A [&A 1, *A]\n---\n", inner);
+    let before = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 0
+      Pair key=b
+        Sequence
+          Scalar Integer 0
+          Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\na: &x 0\nb: [*x, &x 1]\n---\n", before);
+    check("---\na: &x 0\nb:\n  [*x, &x 1]\n---\n", before);
+    check("---\na: &x 0\nb:\n- [*x, &x 1]\n---\n", &before.replace(
+        "        Sequence\n          Scalar Integer 0\n          Scalar Integer 1\n",
+        "        Sequence\n          Sequence\n            Scalar Integer 0\n            Scalar Integer 1\n",
+    ));
+}
+
+#[test]
+fn an_alias_inside_the_value_its_anchor_names_drops_the_innermost_key_that_holds_it() {
+    check("---\na: &A [*A]\nb: 2\n---\n", &only_b("Yaml"));
+    check(
+        "---\nx: &A 1\na: &A [*A]\nb: 2\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=x
+        Scalar Integer 1
+      Pair key=b
+        Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    let emptied = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+      Pair key=b
+        Scalar Integer 2
+  MarkdownBlock
+";
+    check("---\na: &A {x: [*A]}\nb: 2\n---\n", emptied);
+    check("---\na: &A\n  x: *A\nb: 2\n---\n", emptied);
+}
+
+#[test]
+fn an_alias_with_no_anchor_before_it_drops_the_key_that_holds_it() {
+    check(
+        "---\na: *B\nb: &B 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=b
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\na: 1\nb: *a\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check("---\nx: [*y, &y \"]\"]\nb: 2\n---\n", &only_b("Yaml"));
+    check(
+        "---\na: {x: [*y, &y \"]\"], b: 2}\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=b
+            Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn anchors_on_values_list_entries_and_keys_are_read() {
+    check(
+        "---\nbase: &base 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=base
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\nitems:\n  - &first 1\n  - [*first]\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Scalar Integer 1
+          Sequence
+            Scalar Integer 1
+  MarkdownBlock
+",
+    );
+    check(
+        "---\n&key a: 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_merge_key_is_a_key_like_any_other() {
+    check(
+        "---\nd: &d {a: 1}\ne:\n  <<: *d\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=d
+        Mapping
+          Pair key=a
+            Scalar Integer 1
+      Pair key=e
+        Mapping
+          Pair key=<<
+            Mapping
+              Pair key=a
+                Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+/// A frontmatter of ten anchors, each a list of ten aliases of the one
+/// before, the first a list of ten scalars, then `b: 2` and `c: *a0`.
+fn ten_anchors_of_ten_aliases() -> String {
+    let mut lines = vec!["a0: &a0 [x, x, x, x, x, x, x, x, x, x]".to_owned()];
+    for level in 1_usize..10 {
+        let aliases = vec![format!("*a{}", level - 1); 10].join(", ");
+        lines.push(format!("a{level}: &a{level} [{aliases}]"));
+    }
+    format!("---\n{}\nb: 2\nc: *a0\n---\n", lines.join("\n"))
+}
+
+#[test]
+fn aliases_that_copy_more_than_the_cap_drop_the_key_that_passes_it_and_every_later_alias() {
+    let document = parse(&ten_anchors_of_ten_aliases()).unwrap();
+    let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+    // `a3` brings the copies to 12330 values, and the eighth alias in `a4`
+    // passes 100000.
+    assert_eq!(
+        pairs.keys().collect::<Vec<_>>(),
+        ["a0", "a1", "a2", "a3", "b"]
+    );
+}

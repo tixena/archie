@@ -76,14 +76,14 @@ pub fn nest(open: usize, span: Range<usize>) -> Result<usize, Stop> {
 /// What `read` gives, or the error of the drop it raised, after which
 /// `skip` moves the cursor from `start` past what is dropped. A failure
 /// stays one.
-pub fn caught<T, F>(
-    cursor: &mut Cursor<'_>,
+pub fn caught<S, T, F>(
+    cursor: &mut Cursor<'_, S>,
     start: usize,
     read: Result<T, Stop>,
     skip: F,
 ) -> Result<Result<T, ParseError>, Stop>
 where
-    F: FnOnce(&mut Cursor<'_>),
+    F: FnOnce(&mut Cursor<'_, S>),
 {
     match read {
         Ok(value) => Ok(Ok(value)),
