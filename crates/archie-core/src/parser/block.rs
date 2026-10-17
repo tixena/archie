@@ -16,6 +16,7 @@ use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::inline::{self, children_mut};
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
+use crate::parser::line::Base;
 use crate::parser::read_toml;
 use crate::parser::table::{Cell, RowToken, TableToken};
 
@@ -455,9 +456,9 @@ where
 }
 
 /// The markdown block that starts at byte `start` of `source`, each line read
-/// with at most `base` columns of its leading white space left out, its link
-/// definitions, each destination by its label, folded, and its grid cells'
-/// lines. `outer` containers hold it.
+/// with at most `base` columns of its leading white space left out and its tab
+/// stops counted from there, its link definitions, each destination by its
+/// label, folded, and its grid cells' lines. `outer` containers hold it.
 pub fn parse_from<E>(
     source: &str,
     start: usize,
@@ -469,7 +470,15 @@ where
 {
     read(
         source,
-        lex_from(source, start, base, outer),
+        lex_from(
+            source,
+            start,
+            Base {
+                columns: base,
+                restart: true,
+            },
+            outer,
+        ),
         start..source.len(),
     )
 }

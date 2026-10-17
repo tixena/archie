@@ -7,7 +7,7 @@ use core::ops::Range;
 
 use crate::parser::ast::{Alignment, TableFormat};
 use crate::parser::lexer::trim_end_spaces;
-use crate::parser::line::{line_from, space};
+use crate::parser::line::{Base, line_from, space};
 
 pub struct TableToken {
     pub alignments: Vec<Alignment>,
@@ -64,22 +64,20 @@ impl Cell {
 }
 
 /// One line of a table: its text from `start` to `end`, the column the text
-/// starts at, the start of the line it is on, where the next line starts,
-/// and the column of that line its columns count from.
+/// starts at, the start of the line it is on, and where the next line starts.
 #[derive(Clone)]
 struct TableLine {
     column: usize,
     end: usize,
     line_start: usize,
     next: usize,
-    origin: usize,
     start: usize,
 }
 
 /// The table whose first line holds `first`, at `column`, read on from
-/// `next`. Every later line is indented at least `level` columns, counted
-/// past at most `base` columns of its leading white space. Returns the
-/// table, its span, and where the line after it starts.
+/// `next`. Every line is read past `base`, and every later one is indented
+/// at least `level` columns. Returns the table, its span, and where the line
+/// after it starts.
 pub fn read(
     source: &str,
     line_start: usize,
@@ -87,14 +85,13 @@ pub fn read(
     first: Range<usize>,
     next: usize,
     level: usize,
-    base: usize,
+    base: Base,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let head = TableLine {
         column,
         end: first.end,
         line_start,
         next,
-        origin: line_from(source, line_start, base).origin,
         start: first.start,
     };
     pipe(source, &head, level, base)
@@ -103,8 +100,8 @@ pub fn read(
 }
 
 /// The line starting at `at`, when it holds text and is indented at least
-/// `level` columns past at most `base` columns of its leading white space.
-fn line_after(source: &str, at: usize, level: usize, base: usize) -> Option<TableLine> {
+/// `level` columns once read past `base`.
+fn line_after(source: &str, at: usize, level: usize, base: Base) -> Option<TableLine> {
     if at >= source.len() {
         return None;
     }
@@ -118,7 +115,6 @@ fn line_after(source: &str, at: usize, level: usize, base: usize) -> Option<Tabl
         end: line.start + indent.bytes + trimmed.len(),
         line_start: at,
         next: line.next,
-        origin: line.origin,
         start: line.start + indent.bytes,
     })
 }
@@ -131,7 +127,7 @@ fn pipe(
     source: &str,
     head: &TableLine,
     level: usize,
-    base: usize,
+    base: Base,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let head_cells = pipe_cells(source, head)?;
     let delimiter = line_after(source, head.next, level, base)?;
@@ -214,7 +210,7 @@ fn grid(
     source: &str,
     head: &TableLine,
     level: usize,
-    base: usize,
+    base: Base,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let top: Vec<char> = source[head.start..head.end].chars().collect();
     let (corners, mut alignments) = border(&top, '-')?;
@@ -362,10 +358,10 @@ fn simple(
     source: &str,
     head: &TableLine,
     level: usize,
-    base: usize,
+    base: Base,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let dashes = line_after(source, head.next, level, base)?;
-    let groups = dash_groups(&columns(source, &dashes))?;
+    let groups = dash_groups(&columns(source, &dashes, base))?;
     let mut lines = Vec::new();
     let mut last = dashes;
     while let Some(line) = line_after(source, last.next, level, base) {
@@ -375,7 +371,7 @@ fn simple(
     if lines.is_empty() {
         return None;
     }
-    let head_columns = columns(source, head);
+    let head_columns = columns(source, head, base);
     let head_cells = simple_cells(source, head, &head_columns, &groups);
     let alignments = head_cells
         .iter()
@@ -401,7 +397,7 @@ fn simple(
         .map(|line| {
             row(
                 line,
-                simple_cells(source, line, &columns(source, line), &groups),
+                simple_cells(source, line, &columns(source, line, base), &groups),
             )
         })
         .collect();
@@ -469,20 +465,21 @@ fn simple_cells(
         .collect()
 }
 
-/// The byte and the character at each column of `line`, from its column
-/// `origin` on: a tab fills the columns up to the next multiple of 4.
-fn columns(source: &str, line: &TableLine) -> Vec<(usize, char)> {
-    let text = &source[line.line_start..line.end];
-    let mut columns = Vec::new();
-    let mut reached = 0;
+/// The byte and the character at each column of `line` read past `base`,
+/// from its column 0 on: a tab fills the columns up to its next tab stop.
+fn columns(source: &str, line: &TableLine, base: Base) -> Vec<(usize, char)> {
+    let read = line_from(source, line.line_start, base);
+    let text = &source[read.start..line.end];
+    let split = read.start - usize::from(read.column > 0);
+    let mut columns = vec![(split, '\t'); read.column];
+    let mut reached = read.column;
     for (at, character) in text.char_indices() {
         let next = if character == '\t' {
-            reached + space(&text[at..=at], reached).columns
+            reached + space(&text[at..=at], read.origin + reached).columns
         } else {
             reached + 1
         };
-        let kept = next.saturating_sub(reached.max(line.origin));
-        columns.extend(iter::repeat_n((line.line_start + at, character), kept));
+        columns.extend(iter::repeat_n((read.start + at, character), next - reached));
         reached = next;
     }
     columns

@@ -8,7 +8,7 @@ use core::ops::Range;
 
 use crate::parser::definition::{self, Target};
 use crate::parser::html::{self, End};
-use crate::parser::line::{Line, line_at, line_from, space, space_to};
+use crate::parser::line::{Base, Line, line_at, line_from, space, space_to};
 use crate::parser::table::{self, TableToken};
 
 /// How deep list items, markdown blocks and table cells nest, counted
@@ -145,8 +145,8 @@ struct Cut<'src> {
     text: &'src str,
 }
 
-/// A place on a line read: its byte, and its column, counted from column
-/// `origin` of the source line.
+/// A place on a line read: its byte, and its column. The line's tab stops
+/// count from `origin` columns before its column 0.
 #[derive(Clone, Copy)]
 struct Spot {
     at: usize,
@@ -203,9 +203,8 @@ impl Spot {
 }
 
 struct Lexer<'src> {
-    /// How many columns of the white space that starts each line are left
-    /// out, at most.
-    base: usize,
+    /// What each line is read past.
+    base: Base,
     /// The content column of each open list item, outermost first.
     levels: Vec<usize>,
     /// How many containers hold the text read: list items, markdown blocks
@@ -599,10 +598,9 @@ impl Lexer<'_> {
     }
 }
 
-/// The tokens of `source` from byte `start`, each line read with at most
-/// `base` columns of its leading white space left out, so its columns count
-/// from `base`. `outer` containers hold the text.
-pub fn lex_from(source: &str, start: usize, base: usize, outer: usize) -> Vec<Token> {
+/// The tokens of `source` from byte `start`, each line read past `base`, so
+/// its columns count from `base.columns`. `outer` containers hold the text.
+pub fn lex_from(source: &str, start: usize, base: Base, outer: usize) -> Vec<Token> {
     let mut lexer = Lexer {
         base,
         levels: Vec::new(),
@@ -754,7 +752,15 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize, outer: usize
             .zip(starts.get(index))
             .map_or(at, |(line, &start)| line.start + (at - start))
     };
-    let mut tokens = lex_from(&text, 0, base, outer);
+    let mut tokens = lex_from(
+        &text,
+        0,
+        Base {
+            columns: base,
+            restart: false,
+        },
+        outer,
+    );
     for token in &mut tokens {
         token.span = place(token.span.start)..place(token.span.end);
         match &mut token.kind {

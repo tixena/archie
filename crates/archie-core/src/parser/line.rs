@@ -2,8 +2,8 @@
 //! space that starts a text.
 
 /// One line of the source. `end` excludes the line ending; `next` is where
-/// the following line starts. The line's columns count from column
-/// `origin` of the source line, and `start` is at its column `column`.
+/// the following line starts. Its tab stops count from `origin` columns
+/// before its column 0, and `start` is at its column `column`.
 #[derive(Clone, Copy)]
 pub struct Line {
     pub column: usize,
@@ -11,6 +11,15 @@ pub struct Line {
     pub next: usize,
     pub origin: usize,
     pub start: usize,
+}
+
+/// What each line is read past: at most `columns` columns of the white
+/// space that starts it. Its tab stops count from its column 0 when
+/// `restart` is set, or else from the start of the source line.
+#[derive(Clone, Copy, Default)]
+pub struct Base {
+    pub columns: usize,
+    pub restart: bool,
 }
 
 /// The white space that starts a text: the bytes it takes and the columns
@@ -41,16 +50,16 @@ pub fn line_at(source: &str, start: usize) -> Line {
     }
 }
 
-/// The line at `start`, read past at most `base` columns of its leading
-/// white space. A tab that `base` falls inside is passed, and its columns
-/// past `base` are the line's first columns, before `start`.
-pub fn line_from(source: &str, start: usize, base: usize) -> Line {
+/// The line at `start`, read past `base`. A tab that `base.columns` falls
+/// inside is passed, and its columns past them are the line's first
+/// columns, before `start`.
+pub fn line_from(source: &str, start: usize, base: Base) -> Line {
     let line = line_at(source, start);
-    let left_out = space_to(&source[line.start..line.end], 0, base);
-    let origin = left_out.columns.min(base);
+    let left_out = space_to(&source[line.start..line.end], 0, base.columns);
+    let origin = left_out.columns.min(base.columns);
     Line {
         column: left_out.columns - origin,
-        origin,
+        origin: if base.restart { 0 } else { origin },
         start: line.start + left_out.bytes,
         ..line
     }

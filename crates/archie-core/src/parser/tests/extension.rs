@@ -8,7 +8,7 @@ use crate::parser::ast::{
     Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, ScalarValue, TableCell, Value,
 };
 use crate::parser::error::ParseError;
-use crate::parser::extension::{Construct, Context, Either, Extension, With};
+use crate::parser::extension::{Construct, Context, Either, Extension, Plain, With};
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{ParseOptions, from_json, parse, parse_with, read_yaml, rebuild_with, to_json};
 use crate::writer::{WriteOptions, Writer, write};
@@ -866,6 +866,141 @@ fn a_line_indented_less_than_the_fence_loses_only_the_spaces_it_has() {
             .map(|(label, text)| (label.as_str(), *text))
             .collect::<Vec<_>>(),
         expected
+    );
+}
+
+#[test]
+fn tab_stops_in_a_markdown_block_count_from_its_fence_as_in_its_value() {
+    let source = "- x\n\n    ```md\n   -\ty\n        z\n    ```\n";
+    let options = ParseOptions::default();
+    let document = parse_with::<Plain>(source, &options).unwrap();
+    let claimed = |read: &Document<With<Plain>>| {
+        let block = code_blocks(first_item(&read.body))[0];
+        (
+            block.value.clone(),
+            block.kind.0.as_deref().and_then(first).map(block_outline),
+        )
+    };
+    let (value, markdown) = claimed(&document);
+    assert_eq!(value, "-\ty\n    z");
+    assert_eq!(markdown, Some(block_outline(&parse(&value).unwrap().body)));
+    assert_eq!(
+        markdown.as_deref(),
+        Some(
+            r#"MarkdownBlock
+  Section
+    List
+      Item
+        MarkdownBlock
+          Section
+            Paragraph
+              Line
+                Text "y"
+              Line
+                Text "z"
+"#
+        )
+    );
+    let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+    let again = rebuild_with::<Plain>(&back, &options).unwrap();
+    assert_eq!(claimed(&again), claimed(&document));
+    let written = "- x\n\n  ```md\n  - y\n    z\n  ```\n";
+    assert_eq!(write(&document, &WriteOptions::default()).unwrap(), written);
+    assert_eq!(write(&again, &WriteOptions::default()).unwrap(), written);
+}
+
+#[test]
+fn a_simple_table_in_a_markdown_block_counts_its_tab_stops_from_the_fence() {
+    let source = "- x\n\n  ```md\n  Name\tAge\n  ----\t-\t---\n  Ada\t\t36\n  ```\n";
+    let document = parse(source).unwrap();
+    let block = code_blocks(first_item(&document.body))[0];
+    let claimed = block_outline(block.kind.0.as_deref().unwrap());
+    assert_eq!(claimed, block_outline(&parse(&block.value).unwrap().body));
+    assert_eq!(
+        claimed,
+        r#"MarkdownBlock
+  Section
+    Table format=Simple alignments=Default,Left,Default
+      TableRow head
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "Name"
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "Age"
+        TableCell
+          MarkdownBlock
+      TableRow
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "Ada"
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "36"
+        TableCell
+          MarkdownBlock
+"#
+    );
+}
+
+#[test]
+fn a_markdown_block_at_column_0_counts_its_tab_stops_from_the_start_of_the_line() {
+    let source = "```md\n-\ty\n    z\n\n\t\tcode\n\nName\tAge\n----\t---\nAda\t\t36\n```\n";
+    let document = parse(source).unwrap();
+    assert_eq!(
+        block_outline(code_blocks(&document.body)[0].kind.0.as_deref().unwrap()),
+        r#"MarkdownBlock
+  Section
+    List loose
+      Item
+        MarkdownBlock
+          Section
+            Paragraph
+              Line
+                Text "y"
+              Line
+                Text "z"
+            CodeBlock value="code"
+    Table format=Simple alignments=Default,Default
+      TableRow head
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "Name"
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "Age"
+      TableRow
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "Ada"
+        TableCell
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "36"
+"#
     );
 }
 

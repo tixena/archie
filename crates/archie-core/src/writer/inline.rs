@@ -9,7 +9,7 @@ use crate::parser::definition;
 use crate::parser::entity;
 use crate::parser::extension::{Construct, Extension};
 use crate::parser::inline::{is_punctuation, is_whitespace};
-use crate::parser::line::space;
+use crate::parser::line::{Base, space};
 use crate::parser::table;
 use crate::writer::Writer;
 
@@ -549,7 +549,16 @@ pub fn reads_as_table(lines: &[String]) -> bool {
         let start = line_start + indent.bytes;
         let end = start + line[indent.bytes..].trim_end_matches([' ', '\t']).len();
         let next = (line_start + line.len() + 1).min(source.len());
-        if table::read(&source, line_start, indent.columns, start..end, next, 0, 0).is_some() {
+        let read = table::read(
+            &source,
+            line_start,
+            indent.columns,
+            start..end,
+            next,
+            0,
+            Base::default(),
+        );
+        if read.is_some() {
             return true;
         }
         line_start = next;
