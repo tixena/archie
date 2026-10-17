@@ -45,7 +45,11 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
         } else {
             let table = table_at(&mut root, &current);
             let keys = entry(&mut cursor, table, make(&mut made, &current), current.len())?;
-            implicit.retain(|path| !dotted_through(path, &current, &keys));
+            // The key written with `=` holds a value of its own, so no table
+            // under it is one only a deeper header made.
+            let full = [current.as_slice(), keys.as_slice()].concat();
+            implicit
+                .retain(|path| !dotted_through(path, &current, &keys) && !path.starts_with(&full));
         }
         stretch(&mut root, &current, cursor.pos());
         end_of_line(&mut cursor)?;
@@ -111,9 +115,15 @@ fn header(
                 let pair = slot.into_mut();
                 pair.repeats.push(span.clone());
                 if named {
-                    let adds = !array
-                        && matches!(pair.value, Value::Mapping(_))
-                        && implicit.iter().any(|other| other.as_slice() == prefix);
+                    let opens = match &pair.value {
+                        Value::Mapping(_) => true,
+                        Value::Sequence(sequence) => {
+                            matches!(sequence.items.last(), Some(Value::Mapping(_)))
+                        }
+                        Value::Scalar(_) => false,
+                    };
+                    let adds =
+                        !array && opens && implicit.iter().any(|other| other.as_slice() == prefix);
                     if adds {
                         implicit.retain(|other| other.as_slice() != prefix);
                     } else {
@@ -123,6 +133,7 @@ fn header(
                 }
                 if !named && inside.is_none() {
                     append(&mut pair.value, mapping_at(span.end));
+                    implicit.push(prefix.to_vec());
                 }
                 pair
             }

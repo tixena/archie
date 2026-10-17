@@ -695,6 +695,217 @@ Document
 }
 
 #[test]
+fn a_header_adds_to_the_table_a_header_through_an_inline_table_made() {
+    check(
+        "+++\na = {b = 1}\n\n[a.x]\ny = 1\n\n[a]\nc = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=2
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_adds_to_the_table_a_header_through_an_array_written_with_equals_made() {
+    check(
+        "+++\na = [{b = 1}]\n\n[a.x]\ny = 1\n\n[a]\nc = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=2
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_second_header_after_a_header_through_an_inline_table_writes_the_key_again() {
+    check(
+        "+++\na = {b = 1}\n\n[a.x]\ny = 1\n\n[a]\nc = 2\n\n[a]\nd = 3\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=3
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+            Pair key=c
+              Scalar Integer 2
+          Mapping
+            Pair key=d
+              Scalar Integer 3
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_second_header_after_a_table_only_a_deeper_header_made_writes_the_key_again() {
+    check(
+        "+++\n[a.x]\ny = 1\n\n[a]\nb = 1\n\n[a]\nc = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=2
+        Sequence
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn an_array_header_after_a_header_through_an_inline_table_adds_an_item() {
+    check(
+        "+++\na = {b = 1}\n\n[a.x]\ny = 1\n\n[[a]]\nc = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=2
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=x
+              Mapping
+                Pair key=y
+                  Scalar Integer 1
+          Mapping
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_after_an_inline_table_written_over_a_deeper_header_writes_the_key_again() {
+    check(
+        "+++\n[p.a.x]\ny = 1\n\n[p]\na = {z = 1}\n\n[p.a]\nw = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=p repeats=2
+        Mapping
+          Pair key=a repeats=2
+            Sequence
+              Mapping
+                Pair key=x
+                  Mapping
+                    Pair key=y
+                      Scalar Integer 1
+              Mapping
+                Pair key=z
+                  Scalar Integer 1
+              Mapping
+                Pair key=w
+                  Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_after_an_array_written_over_a_deeper_header_writes_the_key_again() {
+    check(
+        "+++\n[p.a.x]\ny = 1\n\n[p]\na = [{z = 1}]\n\n[p.a]\nw = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=p repeats=2
+        Mapping
+          Pair key=a repeats=2
+            Sequence
+              Mapping
+                Pair key=x
+                  Mapping
+                    Pair key=y
+                      Scalar Integer 1
+              Mapping
+                Pair key=z
+                  Scalar Integer 1
+              Mapping
+                Pair key=w
+                  Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_after_a_scalar_written_over_a_deeper_header_writes_the_key_again() {
+    check(
+        "+++\n[p.a.x]\ny = 1\n\n[p]\na = 1\n\n[p.a]\nw = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=p repeats=2
+        Mapping
+          Pair key=a repeats=2
+            Sequence
+              Mapping
+                Pair key=x
+                  Mapping
+                    Pair key=y
+                      Scalar Integer 1
+              Scalar Integer 1
+              Mapping
+                Pair key=w
+                  Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
 fn a_header_opens_a_sub_table_of_a_table_a_header_made() {
     check(
         "+++\n[a]\nb = 1\n\n[a.x]\ny = 1\n+++\n",
