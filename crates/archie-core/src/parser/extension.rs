@@ -97,6 +97,24 @@ pub struct Context<'text> {
 }
 
 impl Context<'_> {
+    /// The parts of `range` on the construct's own lines: on each of the
+    /// grid cell's lines, or else `range` split at each `\n`, which it leaves out.
+    #[must_use]
+    pub fn lines_of(&self, range: Range<usize>) -> Vec<Range<usize>> {
+        if let Some(lines) = self.lines {
+            return within(lines, &range);
+        }
+        let mut start = range.start;
+        self.source[range]
+            .split('\n')
+            .map(|line| {
+                let part = start..start + line.len();
+                start = part.end + 1;
+                part
+            })
+            .collect()
+    }
+
     /// Reads `range` of the source as a markdown block, with the extensions
     /// `T`, each line read past the frame of the markdown block that holds
     /// the construct, then with at most `column` columns of its leading white

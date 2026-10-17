@@ -25,7 +25,7 @@ use core::ops::Range;
 use serde::ser::Error as _;
 use serde::{Deserialize as _, Serialize as _};
 
-use crate::parser::ast::{Document, Kind, Mapping};
+use crate::parser::ast::{Document, Kind, Mapping, Value};
 use crate::parser::error::{ParseError, RebuildError};
 use crate::parser::extension::{Context, Extension, Frame, Markdown, With};
 use crate::writer;
@@ -179,6 +179,17 @@ pub fn read_toml(source: &str, range: Range<usize>) -> Result<Mapping, ParseErro
     toml::parse(source, range)
 }
 
+/// Reads the TOML written on `lines`, ranges of `source`, as consecutive
+/// lines of one text, the way `read_toml` reads a range. Spans count from
+/// the start of `source`.
+///
+/// # Errors
+///
+/// Returns an error when the text is not TOML that archie reads.
+pub fn read_toml_lines(source: &str, lines: &[Range<usize>]) -> Result<Mapping, ParseError> {
+    read_lines(source, lines, toml::parse)
+}
+
 /// Reads the YAML written at `range` of `source` into a mapping, the way
 /// YAML frontmatter is read. Spans count from the start of `source`.
 ///
@@ -187,6 +198,87 @@ pub fn read_toml(source: &str, range: Range<usize>) -> Result<Mapping, ParseErro
 /// Returns an error when the text is not YAML that archie reads.
 pub fn read_yaml(source: &str, range: Range<usize>) -> Result<Mapping, ParseError> {
     yaml::parse(source, range)
+}
+
+/// Reads the YAML written on `lines`, ranges of `source`, as consecutive
+/// lines of one text, the way `read_yaml` reads a range. Spans count from
+/// the start of `source`.
+///
+/// # Errors
+///
+/// Returns an error when the text is not YAML that archie reads.
+pub fn read_yaml_lines(source: &str, lines: &[Range<usize>]) -> Result<Mapping, ParseError> {
+    read_lines(source, lines, yaml::parse)
+}
+
+/// Reads `lines`, ranges of `source` joined by `\n`, with `read`, and places
+/// every span of the mapping or of the error back in `source`.
+fn read_lines(
+    source: &str,
+    lines: &[Range<usize>],
+    read: fn(&str, Range<usize>) -> Result<Mapping, ParseError>,
+) -> Result<Mapping, ParseError> {
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut text = String::new();
+    for line in lines {
+        if !starts.is_empty() {
+            text.push('\n');
+        }
+        starts.push(text.len());
+        text.push_str(&source[line.clone()]);
+    }
+    let place = |span: &Range<usize>| {
+        let at = |offset: usize| {
+            let index = starts
+                .partition_point(|&start| start <= offset)
+                .saturating_sub(1);
+            lines
+                .get(index)
+                .zip(starts.get(index))
+                .map_or(offset, |(line, &start)| line.start + (offset - start))
+        };
+        at(span.start)..at(span.end)
+    };
+    match read(&text, 0..text.len()) {
+        Ok(mut mapping) => {
+            place_mapping(&mut mapping, &place);
+            Ok(mapping)
+        }
+        Err(mut error) => {
+            error.span = place(&error.span);
+            Err(error)
+        }
+    }
+}
+
+fn place_mapping<F>(mapping: &mut Mapping, place: &F)
+where
+    F: Fn(&Range<usize>) -> Range<usize>,
+{
+    mapping.span = place(&mapping.span);
+    for pair in mapping.pairs.values_mut() {
+        pair.span = place(&pair.span);
+        for repeat in &mut pair.repeats {
+            *repeat = place(repeat);
+        }
+        place_value(&mut pair.value, place);
+    }
+}
+
+fn place_value<F>(value: &mut Value, place: &F)
+where
+    F: Fn(&Range<usize>) -> Range<usize>,
+{
+    match value {
+        Value::Mapping(mapping) => place_mapping(mapping, place),
+        Value::Scalar(scalar) => scalar.span = place(&scalar.span),
+        Value::Sequence(sequence) => {
+            sequence.span = place(&sequence.span);
+            for item in &mut sequence.items {
+                place_value(item, place);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

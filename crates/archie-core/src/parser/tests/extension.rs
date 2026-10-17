@@ -10,7 +10,10 @@ use crate::parser::ast::{
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, Plain, With};
 use crate::parser::lexer::BLOCK_CAP;
-use crate::parser::{ParseOptions, from_json, parse, parse_with, read_yaml, rebuild_with, to_json};
+use crate::parser::{
+    ParseOptions, from_json, parse, parse_with, read_toml_lines, read_yaml_lines, rebuild_with,
+    to_json,
+};
 use crate::writer::{WriteOptions, Writer, write};
 
 const SOURCE: &str = "\
@@ -37,12 +40,12 @@ fn main() {}
 ```
 ";
 
-const NO_HEADER: &str = "a comment opens with a header between `---` lines";
+const NO_HEADER: &str = "a comment opens with a header between `---` or `+++` lines";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Comments;
 
-/// A comment: its YAML header, and its body read as markdown with the
+/// A comment: its YAML or TOML header, and its body read as markdown with the
 /// extensions the file is parsed with.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Comment<T>
@@ -283,26 +286,39 @@ impl Extension for Marks {
     }
 }
 
-/// A `---` line, the YAML header, a `---` line, then the body.
+/// A `---` line, the YAML header, a `---` line, then the body; or the same
+/// with a TOML header between `+++` lines.
 fn comment<T>(block: &CodeBlock<T>, context: &Context<'_>) -> Result<Comment<T>, ParseError>
 where
     T: Extension,
 {
     let refused = || ParseError::new(NO_HEADER, block.content.clone());
     let lines = content_lines(&block.content, context);
-    let fence = |line: &Range<usize>| context.source[line.clone()].trim() == "---";
-    if !lines.first().is_some_and(fence) {
-        return Err(refused());
-    }
-    let close = lines.iter().skip(1).position(fence).ok_or_else(refused)? + 1;
+    let text = |line: &Range<usize>| context.source[line.clone()].trim();
+    let fence = lines
+        .first()
+        .map(text)
+        .filter(|first| matches!(*first, "---" | "+++"))
+        .ok_or_else(refused)?;
+    let close = lines
+        .iter()
+        .skip(1)
+        .position(|line| text(line) == fence)
+        .ok_or_else(refused)?
+        + 1;
     let header = &lines[1..close];
     let header_range = header.first().zip(header.last()).map_or_else(
         || lines[close].start..lines[close].start,
         |(first, last)| first.start..last.end,
     );
+    let read = if fence == "+++" {
+        read_toml_lines
+    } else {
+        read_yaml_lines
+    };
     Ok(Comment {
         body: context.markdown::<T>(lines[close].end..block.content.end)?,
-        header: read_yaml(context.source, header_range)?,
+        header: read(context.source, &context.lines_of(header_range))?,
     })
 }
 
@@ -467,6 +483,29 @@ where
     let mut rows = Rows::default();
     rows.document(document);
     outline(&rows.rows)
+}
+
+/// Each node of the header of the first comment in `source`, or in its
+/// first grid cell when `in_cell` is set, with the source text it covers.
+fn header_spans(source: &str, in_cell: bool) -> Vec<(String, String)> {
+    let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
+    let body = if in_cell {
+        &first_cell(&document.body).body
+    } else {
+        &document.body
+    };
+    let comment = code_blocks(body)[0]
+        .kind
+        .0
+        .as_deref()
+        .and_then(second)
+        .unwrap();
+    let mut rows = Rows::default();
+    rows.mapping(0, &comment.header);
+    rows.rows
+        .into_iter()
+        .map(|row| (row.label, source[row.span].to_owned()))
+        .collect()
 }
 
 /// `document` written to JSON, read back, and its extension nodes built
@@ -1376,6 +1415,68 @@ fn a_comment_in_a_grid_cell_has_the_same_body_as_at_the_root() {
         outline(&rows.rows)
     };
     assert_eq!(header(in_cell), header(at_root));
+}
+
+#[test]
+fn a_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root() {
+    let written = "```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```";
+    let grid = in_grid_cell(written);
+    assert_eq!(
+        header_spans(&grid, true),
+        [
+            ("Mapping", "id: abc     | x |\n| author: ada"),
+            ("Pair key=id", "id: abc"),
+            (r#"Scalar String "abc""#, "abc"),
+            ("Pair key=author", "author: ada"),
+            (r#"Scalar String "ada""#, "ada"),
+        ]
+        .map(|(label, text)| (label.to_owned(), text.to_owned())),
+        "{grid}"
+    );
+    assert_eq!(
+        header_spans(&format!("{written}\n"), false),
+        [
+            ("Mapping", "id: abc\nauthor: ada"),
+            ("Pair key=id", "id: abc"),
+            (r#"Scalar String "abc""#, "abc"),
+            ("Pair key=author", "author: ada"),
+            (r#"Scalar String "ada""#, "ada"),
+        ]
+        .map(|(label, text)| (label.to_owned(), text.to_owned()))
+    );
+    let refused = in_grid_cell("```remargin\n---\nid: abc\nauthor: @ada\n---\n```");
+    let error = parse_with::<Comments>(&refused, &ParseOptions::strict()).unwrap_err();
+    assert_eq!(error.span.start, refused.find('@').unwrap(), "{error}");
+    assert_eq!(&refused[error.span], "@");
+}
+
+#[test]
+fn a_toml_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root() {
+    let written = "```remargin\n+++\nid = \"abc\"\nauthor = \"ada\"\n+++\nBody.\n```";
+    let grid = in_grid_cell(written);
+    assert_eq!(
+        header_spans(&grid, true),
+        [
+            ("Mapping", "id = \"abc\"     | x |\n| author = \"ada\""),
+            ("Pair key=id", "id = \"abc\""),
+            (r#"Scalar String "abc""#, "\"abc\""),
+            ("Pair key=author", "author = \"ada\""),
+            (r#"Scalar String "ada""#, "\"ada\""),
+        ]
+        .map(|(label, text)| (label.to_owned(), text.to_owned())),
+        "{grid}"
+    );
+    assert_eq!(
+        header_spans(&format!("{written}\n"), false),
+        [
+            ("Mapping", "id = \"abc\"\nauthor = \"ada\""),
+            ("Pair key=id", "id = \"abc\""),
+            (r#"Scalar String "abc""#, "\"abc\""),
+            ("Pair key=author", "author = \"ada\""),
+            (r#"Scalar String "ada""#, "\"ada\""),
+        ]
+        .map(|(label, text)| (label.to_owned(), text.to_owned()))
+    );
 }
 
 #[test]

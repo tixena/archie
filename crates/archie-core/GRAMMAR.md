@@ -891,6 +891,13 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
 - `read_toml(source, range)` and `read_yaml(source, range)` read the TOML or YAML
   written at any range of a source into a `Mapping`, as the frontmatter is read, with
   spans counting from the start of the source.
+- `read_toml_lines(source, lines)` and `read_yaml_lines(source, lines)` read the TOML
+  or YAML written on `lines`, ranges of the source, as consecutive lines of one text
+  joined by `\n`, and place every span of the `Mapping`, or of the error, back in the
+  source. `context.lines_of(range)` gives the parts of a range on the construct's own
+  lines: on each of its grid cell's lines, or else the range split at each `\n`, which
+  it leaves out. So an extension reads a header the same way inside a grid cell and
+  out, with `read_yaml_lines(context.source, &context.lines_of(range))`.
 - `to_json(document)` writes a document as JSON, and `from_json::<E>(text)` reads it
   back, at any depth archie reads. No node writes its `kind`.
   `rebuild_with::<E>(document, &options)` builds the extension nodes again on such a
