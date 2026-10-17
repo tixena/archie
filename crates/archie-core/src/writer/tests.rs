@@ -148,12 +148,12 @@ impl Extension for Headings {
 }
 
 fn written(source: &str) -> String {
-    write(&parse(source).unwrap(), &WriteOptions::default()).unwrap()
+    write(&parse(source), &WriteOptions::default()).unwrap()
 }
 
 /// The body `source` reads as, every span emptied.
 fn body(source: &str) -> MarkdownBlock {
-    let mut read = parse(source).unwrap().body;
+    let mut read = parse(source).body;
     clear_block(&mut read);
     read
 }
@@ -579,7 +579,7 @@ fn a_section_twenty_two_levels_deep_reads_back_to_the_same_tree() {
         ]
     );
     assert_eq!(written(&text), text);
-    let read = parse(&text).unwrap().body;
+    let read = parse(&text).body;
     let mut read_back = MarkdownBlock {
         sections: read.sections.into_iter().map(lifted).collect(),
         ..read
@@ -779,7 +779,7 @@ fn a_later_line_led_by_inline_html_or_a_code_span_piece_that_would_start_a_block
 fn a_first_body_line_that_would_open_a_toml_frontmatter_is_escaped() {
     let text = round_trip("\\+++\nx = 1\n\\+++\n");
     assert_eq!(text, "\\+++\nx = 1\n+++\n");
-    assert!(parse(&text).unwrap().frontmatter.is_none());
+    assert!(parse(&text).frontmatter.is_none());
     assert_eq!(round_trip("+++ x\n"), "+++ x\n");
     assert_eq!(round_trip("\\---\nx: 1\n\\---\n"), "\\---\nx: 1\n\\---\n");
 }
@@ -886,7 +886,7 @@ fn a_star_item_opening_with_a_thematic_break_and_a_destination_with_a_line_endin
 
 #[test]
 fn a_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line() {
-    let mut built = parse("- p\n  # h\n- q\n").unwrap();
+    let mut built = parse("- p\n  # h\n- q\n");
     if let Some(Block::List(list)) = built.body.sections[0].blocks.first_mut()
         && let Some(heading) = &mut list.items[0].body.sections[1].heading
     {
@@ -1151,12 +1151,12 @@ fn a_broken_frontmatter_is_written_back_as_it_was_read_whatever_syntax_is_picked
         "---\n{a: 1, b: [}\n---\n# A\n",
         "+++\na = \"\"\"never closed\n+++\n# A\n",
     ] {
-        let document = parse(source).unwrap();
+        let document = parse(source);
         assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");
         for options in [WriteOptions::default(), TOML] {
             let text = write(&document, &options).unwrap();
             assert_eq!(text, source);
-            assert_eq!(parse(&text).unwrap(), document);
+            assert_eq!(parse(&text), document);
         }
     }
 }
@@ -1168,7 +1168,7 @@ fn a_broken_frontmatter_whose_text_holds_a_line_that_would_close_it_fails_the_wr
         ("---\na: [\n---\n# A\n", "a: [\n...  \nb: 1", "..."),
         ("+++\na = [\n+++\n# A\n", "a = [\n+++\nb = 1", "+++"),
     ] {
-        let mut document = parse(source).unwrap();
+        let mut document = parse(source);
         document
             .frontmatter
             .as_mut()
@@ -1196,27 +1196,27 @@ fn a_broken_frontmatter_whose_text_holds_a_delimiter_inside_a_line_is_written_as
         "---\n{a: 1, b: [}\n---x\n---\n# A\n",
         "+++\na = \"\"\"never closed\n---\n+++\n# A\n",
     ] {
-        let document = parse(source).unwrap();
+        let document = parse(source);
         assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");
         for options in [WriteOptions::default(), TOML] {
             let text = write(&document, &options).unwrap();
             assert_eq!(text, source);
-            assert_eq!(parse(&text).unwrap(), document);
+            assert_eq!(parse(&text), document);
         }
     }
 }
 
 fn toml(source: &str) -> String {
-    write(&parse(source).unwrap(), &TOML).unwrap()
+    write(&parse(source), &TOML).unwrap()
 }
 
 fn toml_error(source: &str) -> WriteError {
-    write(&parse(source).unwrap(), &TOML).unwrap_err()
+    write(&parse(source), &TOML).unwrap_err()
 }
 
 /// The frontmatter mapping `source` reads as, every span emptied.
 fn mapping(source: &str) -> Mapping {
-    let mut read = parse(source).unwrap().frontmatter.unwrap().unwrap().mapping;
+    let mut read = parse(source).frontmatter.unwrap().unwrap().mapping;
     clear_mapping(&mut read);
     read
 }
@@ -1616,7 +1616,7 @@ fn a_null_cannot_be_written_into_toml() {
 fn every_fixture_frontmatter_reads_back_to_the_same_mapping_in_yaml_and_in_toml() {
     let mut with_frontmatter_count = 0_usize;
     for (name, source) in FIXTURES {
-        if parse(source).unwrap().frontmatter.is_none() {
+        if parse(source).frontmatter.is_none() {
             continue;
         }
         with_frontmatter_count += 1;
@@ -1688,13 +1688,12 @@ fn an_alias_is_written_as_a_copy_of_its_anchors_value_and_no_anchor_is_written()
 
 #[test]
 fn a_write_leaves_every_dropped_entry_out() {
-    let document =
-        parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n").unwrap();
+    let document = parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n");
     assert_eq!(
         write(&document, &WriteOptions::default()).unwrap(),
         "---\ntitle: Notes\ndate: !!timestamp 2026-10-17\n---\n# Body\n"
     );
-    let toml = parse("+++\ntitle = Notes\ndate = 2026-10-17\n+++\n# Body\n").unwrap();
+    let toml = parse("+++\ntitle = Notes\ndate = 2026-10-17\n+++\n# Body\n");
     assert_eq!(
         write(&toml, &TOML).unwrap(),
         "+++\ndate = 2026-10-17\n+++\n# Body\n"

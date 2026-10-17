@@ -304,7 +304,7 @@ fn check(source: &str, expected: &str) {
 
 /// The frontmatter of `source`, one of which no entry reads.
 fn broken(source: &str) -> BrokenFrontmatter {
-    parse(source).unwrap().frontmatter.unwrap().unwrap_err()
+    parse(source).frontmatter.unwrap().unwrap_err()
 }
 
 /// Parses `source` and checks, node by node, the source text each span
@@ -343,7 +343,7 @@ fn outline(rows: &[Row]) -> String {
 }
 
 fn rows(source: &str) -> Vec<Row> {
-    let document = parse(source).unwrap();
+    let document = parse(source);
     assert_eq!(document.span, 0..source.len());
     let mut rows = Rows {
         rows: Vec::new(),

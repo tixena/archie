@@ -713,7 +713,7 @@ fn a_tag_that_ends_its_line_over_a_mapping_whose_every_pair_is_dropped_holds_it_
 
 #[test]
 fn a_frontmatter_with_a_dropped_tag_is_written_without_its_key() {
-    let document = parse("---\ntitle: Notes\nshape: !point {x: 1, y: 2}\n---\n# Notes\n").unwrap();
+    let document = parse("---\ntitle: Notes\nshape: !point {x: 1, y: 2}\n---\n# Notes\n");
     let pairs = &frontmatter_of(&document).mapping.pairs;
     assert_eq!(pairs.keys().collect::<Vec<_>>(), ["title"]);
     assert_eq!(
@@ -747,7 +747,7 @@ fn a_yaml_value_nested_past_the_value_cap_drops_the_key_that_holds_it() {
             check(&source, &only_b("Yaml"));
         }
         for source in deep_yaml_lists(VALUE_CAP) {
-            let document = parse(&source).unwrap();
+            let document = parse(&source);
             let pairs = &frontmatter_of(&document).mapping.pairs;
             assert_eq!(pairs.keys().collect::<Vec<_>>(), ["deep", "b"]);
         }
@@ -809,12 +809,7 @@ fn a_toml_table_keeps_its_span_to_its_last_pair_that_is_not_dropped() {
             "[".repeat(VALUE_CAP + 1),
             "]".repeat(VALUE_CAP + 1)
         );
-        let mapping = parse(&source)
-            .unwrap()
-            .frontmatter
-            .unwrap()
-            .unwrap()
-            .mapping;
+        let mapping = parse(&source).frontmatter.unwrap().unwrap().mapping;
         let pair = &mapping.pairs["t"];
         assert_eq!(&source[pair.span.clone()], "[t]\na = 1");
     });
@@ -824,7 +819,7 @@ fn a_toml_table_keeps_its_span_to_its_last_pair_that_is_not_dropped() {
 fn a_yaml_frontmatter_that_holds_one_value_or_one_list_is_empty() {
     for source in ["---\nabc\n---\n# A\n", "---\n- a\n- b\n---\n# A\n"] {
         check(source, EMPTY_BEFORE_A);
-        let document = parse(source).unwrap();
+        let document = parse(source);
         assert_eq!(
             write(&document, &WriteOptions::default()).unwrap(),
             "---\n---\n# A\n"
@@ -1140,7 +1135,7 @@ fn an_alias_of_a_list_or_a_mapping_as_a_key_drops_its_pair() {
         "---\nm: &m {x: 1}\n*m : 2\nb: 2\n---\n",
         "---\nm: &m [1]\n? *m\n: v\nb: 2\n---\n",
     ] {
-        let document = parse(source).unwrap();
+        let document = parse(source);
         let pairs = &frontmatter_of(&document).mapping.pairs;
         assert_eq!(pairs.keys().collect::<Vec<_>>(), ["m", "b"], "{source:?}");
     }
@@ -1344,7 +1339,7 @@ fn ten_anchors_of_ten_aliases() -> String {
 #[test]
 fn aliases_that_copy_more_than_the_cap_drop_the_key_that_passes_it_and_every_later_alias() {
     on_two_megabytes(|| {
-        let document = parse(&ten_anchors_of_ten_aliases()).unwrap();
+        let document = parse(&ten_anchors_of_ten_aliases());
         let pairs = &frontmatter_of(&document).mapping.pairs;
         // With the copy each anchor keeps, `a3` brings the copies to 24674
         // values, and the seventh alias in `a4` passes 100000.
@@ -1369,7 +1364,7 @@ fn nested_anchors_that_keep_more_than_the_cap_drop_the_key_that_holds_them() {
     on_two_megabytes(|| {
         check(&nested_anchors(20_000), &only_b("Yaml"));
         // Around 100 integers, the anchors keep 37145 values.
-        let document = parse(&nested_anchors(100)).unwrap();
+        let document = parse(&nested_anchors(100));
         let pairs = &frontmatter_of(&document).mapping.pairs;
         assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
     });
@@ -1400,7 +1395,7 @@ fn aliases_that_copy_more_than_the_text_cap_drop_the_key_that_holds_them() {
         check(&aliases_of_a_long_string(10_000), &only_a);
         // The anchor's own copy and 99 aliases come to 1000000 bytes, and a
         // hundredth alias passes.
-        let document = parse(&aliases_of_a_long_string(99)).unwrap();
+        let document = parse(&aliases_of_a_long_string(99));
         let pairs = &frontmatter_of(&document).mapping.pairs;
         assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
         check(&aliases_of_a_long_string(100), &only_a);
@@ -1442,7 +1437,7 @@ fn frontmatter_of(document: &Document) -> &Frontmatter {
 /// of each entry it dropped. A strict parse fails with the error of the
 /// first, which points into the entry, at its text or after.
 fn kept_and_dropped(source: &str) -> (Vec<String>, Vec<(String, &str)>) {
-    let frontmatter = parse(source).unwrap().frontmatter.unwrap().unwrap();
+    let frontmatter = parse(source).frontmatter.unwrap().unwrap();
     let keys = frontmatter.mapping.pairs.keys().cloned().collect();
     let dropped: Vec<(String, &str)> = frontmatter
         .dropped
@@ -1568,7 +1563,7 @@ fn a_pair_of_a_flow_mapping_over_several_lines_is_dropped_up_to_the_next_line_at
         one_dropped(&["title", "date"], list, "tags: [a, b,")
     );
     let nested = "---\na: {x: [1,\n    y: 2}\nb: 3\n---\n";
-    let mapping = parse(nested).unwrap().frontmatter.unwrap().unwrap().mapping;
+    let mapping = parse(nested).frontmatter.unwrap().unwrap().mapping;
     assert_eq!(mapping.pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
     let inner = match &mapping.pairs["a"].value {
         Value::Mapping(inner) => inner.pairs.keys().collect(),
@@ -2158,7 +2153,7 @@ fn an_empty_frontmatter_or_one_that_holds_no_key_is_an_empty_mapping() {
         "---\n- a\n- b\n---\n",
         "---\n[a, !point b]\n---\n",
     ] {
-        let frontmatter = parse(source).unwrap().frontmatter.unwrap().unwrap();
+        let frontmatter = parse(source).frontmatter.unwrap().unwrap();
         assert!(frontmatter.mapping.pairs.is_empty(), "{source:?}");
     }
 }
@@ -2183,7 +2178,7 @@ fn a_frontmatter_with_no_drop_lists_none() {
         "---\n---\n",
         "---\n- a\n---\n",
     ] {
-        let frontmatter = parse(source).unwrap().frontmatter.unwrap().unwrap();
+        let frontmatter = parse(source).frontmatter.unwrap().unwrap();
         assert!(frontmatter.dropped.is_empty(), "{source:?}");
     }
 }

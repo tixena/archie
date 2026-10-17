@@ -185,7 +185,7 @@ fn a_heading_line_with_no_text_is_a_heading_with_no_children() {
           Text "foo"
 "#,
     );
-    let written = write(&parse(source).unwrap(), &WriteOptions::default()).unwrap();
+    let written = write(&parse(source), &WriteOptions::default()).unwrap();
     assert_eq!(written, source);
 }
 
@@ -1518,7 +1518,7 @@ fn args_nested_past_the_value_cap_are_text_and_written_back_as_they_were() {
         );
         for args in [lists, tables] {
             let source = format!("```md {args}\nx\n```\n");
-            let document = parse(&source).unwrap();
+            let document = parse(&source);
             let read = match &document.body.sections[0].blocks[0] {
                 Block::CodeBlock(code) => Some(&code.args),
                 Block::BlockQuote(_)
@@ -1538,7 +1538,7 @@ fn args_nested_past_the_value_cap_are_text_and_written_back_as_they_were() {
 fn a_fence_with_no_info_string_has_no_language_and_empty_toml_args() {
     let source = "```\nx\n```\n";
     check(source, &code_block_outline(None, "x"));
-    let document = parse(source).unwrap();
+    let document = parse(source);
     let read = match &document.body.sections[0].blocks[0] {
         Block::CodeBlock(code) => Some((code.language.as_deref(), &code.args)),
         Block::BlockQuote(_)
@@ -1566,7 +1566,7 @@ fn every_span_of_toml_args_covers_its_text_in_the_source() {
         .collect();
     let grid = format!("{}\n", lines.join("\n"));
     for source in [format!("{fence}\nx\n```\n"), grid] {
-        let document = parse(&source).unwrap();
+        let document = parse(&source);
         let mut rows = Rows::default();
         rows.mapping(0, toml_args(&document.body).unwrap());
         let spans: Vec<(&str, &str)> = rows
@@ -2343,12 +2343,12 @@ fn assert_block_capped(document: &Document, rest: &str) {
 #[test]
 fn lists_nest_the_block_cap_deep_and_the_markers_past_it_stay_text() {
     on_two_megabytes(|| {
-        let document = parse(&format!("{}a\n", "- ".repeat(10_000))).unwrap();
+        let document = parse(&format!("{}a\n", "- ".repeat(10_000)));
         let rest = format!("{}a", "- ".repeat(10_000 - BLOCK_CAP));
         assert_block_capped(&document, &rest);
         let written = write(&document, &WriteOptions::default()).unwrap();
         assert_eq!(written, format!("{}\\{rest}\n", "- ".repeat(BLOCK_CAP)));
-        assert_block_capped(&parse(&written).unwrap(), &rest);
+        assert_block_capped(&parse(&written), &rest);
         let copy = document.clone();
         assert_eq!(copy, document);
         let printed = format!("{document:?}");
@@ -2362,11 +2362,11 @@ fn lists_nest_the_block_cap_deep_and_the_markers_past_it_stay_text() {
 fn lists_at_the_block_cap_read_back_from_their_written_text_to_the_same_tree() {
     on_two_megabytes(|| {
         let source = format!("{}a\n", "- ".repeat(BLOCK_CAP));
-        let document = parse(&source).unwrap();
+        let document = parse(&source);
         assert_eq!(list_depth(&document.body).0, BLOCK_CAP);
         let written = write(&document, &WriteOptions::default()).unwrap();
         assert_eq!(written, source);
-        assert_eq!(parse(&written).unwrap(), document);
+        assert_eq!(parse(&written), document);
     });
 }
 
@@ -2378,7 +2378,7 @@ fn an_item_past_the_block_cap_on_its_own_line_continues_the_innermost_paragraph(
             source.push_str(&"  ".repeat(depth));
             source.push_str("- a\n");
         }
-        let document = parse(&source).unwrap();
+        let document = parse(&source);
         let mut blocks = document.body.sections[0].blocks.as_slice();
         let mut depth = 0_usize;
         while let Some(Block::List(list)) = blocks.last()
@@ -2559,7 +2559,7 @@ fn mixed_containers(levels: usize) -> String {
 fn markdown_blocks_nest_the_block_cap_deep_and_the_block_past_it_stays_a_code_block() {
     on_two_megabytes(|| {
         let source = nested_markdown_blocks(1000);
-        let document = parse(&source).unwrap();
+        let document = parse(&source);
         let (depth, inner) = innermost(&document.body);
         assert_eq!(depth, BLOCK_CAP);
         let rest = nested_markdown_blocks(1000 - BLOCK_CAP - 1);
@@ -2588,7 +2588,7 @@ fn markdown_blocks_nest_the_block_cap_deep_and_the_block_past_it_stays_a_code_bl
 fn grid_tables_nest_the_block_cap_deep_and_the_tables_past_it_stay_text() {
     on_two_megabytes(|| {
         let source = nested_grid_tables(1000);
-        let document = parse(&source).unwrap();
+        let document = parse(&source);
         let (depth, inner) = innermost(&document.body);
         assert_eq!(depth, BLOCK_CAP);
         let lines = match inner.sections.as_slice() {
@@ -2621,7 +2621,7 @@ fn grid_tables_nest_the_block_cap_deep_and_the_tables_past_it_stay_text() {
 #[test]
 fn lists_markdown_blocks_and_grid_tables_in_turn_nest_the_block_cap_deep_together() {
     on_two_megabytes(|| {
-        let document = parse(&mixed_containers(1000)).unwrap();
+        let document = parse(&mixed_containers(1000));
         assert_eq!(innermost(&document.body).0, BLOCK_CAP);
         assert_eq!(container_depth(&document.body), BLOCK_CAP);
     });
@@ -2683,7 +2683,7 @@ fn containers_that_hold_headings_of_every_level_nest_the_block_cap_deep() {
             &[Container::List, Container::Markdown, Container::Grid],
         ];
         for cycle in shapes {
-            let document = parse(&headed_containers(cycle)).unwrap();
+            let document = parse(&headed_containers(cycle));
             assert_eq!(container_depth(&document.body), BLOCK_CAP);
             let written = write(&document, &WriteOptions::default()).unwrap();
             assert_eq!(written.matches("###### h").count(), BLOCK_CAP);

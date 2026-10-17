@@ -51,7 +51,7 @@ fn a_section_runs_from_its_heading_to_the_end_of_what_it_holds() {
 #[test]
 fn an_empty_heading_has_an_empty_span_at_the_start_of_its_section() {
     let source = "intro\n\n# A\n### C\n##\n";
-    let sections = parse(source).unwrap().body.sections;
+    let sections = parse(source).body.sections;
     assert_eq!(sections.len(), 2);
     let subsections = &sections[1].subsections;
     assert_eq!(subsections.len(), 2);

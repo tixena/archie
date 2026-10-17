@@ -1122,7 +1122,7 @@ pattern = '''
 
 /// The value under `key` in the frontmatter of `source`, when it is a scalar.
 fn scalar(source: &str, key: &str) -> Option<ScalarValue> {
-    let mapping = parse(source).ok()?.frontmatter?.ok()?.mapping;
+    let mapping = parse(source).frontmatter?.ok()?.mapping;
     match &mapping.pairs.get(key)?.value {
         Value::Scalar(scalar) => Some(scalar.value.clone()),
         Value::Mapping(_) | Value::Sequence(_) => None,

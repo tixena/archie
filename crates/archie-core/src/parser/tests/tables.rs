@@ -1013,7 +1013,7 @@ fn an_added_cell_is_empty_at_the_end_of_its_row() {
             (r#"Text "2""#, "2"),
         ],
     );
-    let document = parse(whole).unwrap();
+    let document = parse(whole);
     let block = &document.body.sections[0].blocks[0];
     assert!(matches!(block, Block::Table(read) if read.head[0].cells[1].span == (5..5)));
 }
@@ -1292,7 +1292,7 @@ fn an_empty_first_cell_of_an_indented_simple_row_is_empty_at_the_start_of_its_ro
                     Text "2"
 "#,
     );
-    let document = parse(source).unwrap();
+    let document = parse(source);
     let block = &document.body.sections[0].blocks[0];
     assert!(matches!(
         block,

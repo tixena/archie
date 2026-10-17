@@ -21,7 +21,7 @@ use crate::writer::{WriteOptions, write};
 /// Parses `source`, writes the tree to JSON and reads it back: the same
 /// tree, every `kind` empty.
 pub(super) fn reads_back_from_json(source: &str) {
-    let mut parsed = parse(source).unwrap();
+    let mut parsed = parse(source);
     let back: Document = from_json(&to_json(&parsed).unwrap()).unwrap();
     unclaim(&mut parsed);
     assert_eq!(back, parsed);
@@ -49,7 +49,7 @@ pub(super) fn rebuilds_from_json(source: &str) {
 
 #[test]
 fn the_sample_document_reads_back_from_json() {
-    let document = parse("---\ntitle: Notes\n---\n# A\ntext\n").unwrap();
+    let document = parse("---\ntitle: Notes\n---\n# A\ntext\n");
     let json = to_json(&document).unwrap();
     assert_eq!(
         json,
@@ -71,8 +71,7 @@ fn the_sample_document_reads_back_from_json() {
 
 #[test]
 fn the_entries_a_frontmatter_drops_are_written_to_json_and_read_back() {
-    let document =
-        parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n").unwrap();
+    let document = parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n");
     let json = to_json(&document).unwrap();
     assert!(
         json.contains(concat!(
@@ -93,7 +92,7 @@ fn the_entries_a_frontmatter_drops_are_written_to_json_and_read_back() {
 #[test]
 fn a_broken_frontmatter_is_written_to_json_as_err_and_read_back() {
     let source = "---\n{a: 1, b: [}\n---\n# A\n";
-    let document = parse(source).unwrap();
+    let document = parse(source);
     let json = to_json(&document).unwrap();
     assert!(
         json.contains(concat!(
@@ -141,7 +140,7 @@ fn json_that_is_not_a_document_does_not_read() {
 
 #[test]
 fn a_span_is_written_as_its_start_and_its_end() {
-    let json = to_json(&parse("  text\n").unwrap()).unwrap();
+    let json = to_json(&parse("  text\n")).unwrap();
     assert!(
         json.contains(r#"{"Text":{"span":{"start":2,"end":6},"value":"text"}}"#),
         "{json}"
@@ -219,7 +218,7 @@ fn a_non_finite_float_reads_back_from_json() {
         ("---\nx: -.inf\n---\n", NonFinite::NegativeInfinity),
         ("+++\nx = nan\n+++\n", NonFinite::Nan),
     ] {
-        let document = parse(source).unwrap();
+        let document = parse(source);
         let back: Document = from_json(&to_json(&document).unwrap()).unwrap();
         assert_eq!(back, document);
         assert_eq!(scalar(&back, "x"), ScalarValue::NonFinite(value));
@@ -228,7 +227,7 @@ fn a_non_finite_float_reads_back_from_json() {
 
 #[test]
 fn a_non_finite_float_is_written_as_its_name() {
-    let json = to_json(&parse("---\nx: .nan\n---\n").unwrap()).unwrap();
+    let json = to_json(&parse("---\nx: .nan\n---\n")).unwrap();
     assert!(json.contains(r#""value":{"NonFinite":"Nan"}"#), "{json}");
 }
 

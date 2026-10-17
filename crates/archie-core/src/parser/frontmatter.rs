@@ -10,7 +10,7 @@ use crate::parser::ast::{
     BrokenFrontmatter, Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value,
 };
 use crate::parser::cursor::{Cursor, Dropped, Undo};
-use crate::parser::error::ParseError;
+use crate::parser::error::{Failure, ParseError};
 use crate::parser::line::{Line, line_at};
 use crate::parser::{toml, yaml};
 
@@ -43,11 +43,14 @@ impl From<Stop> for ParseError {
 /// The frontmatter `source` opens with at byte `start`, if any, and the
 /// offset its body starts at. A `strict` parse fails with the error of the
 /// first entry the frontmatter drops, or of a frontmatter no entry of reads.
-pub fn parse(
+pub fn parse<F>(
     source: &str,
     start: usize,
     strict: bool,
-) -> Result<(Option<Result<Frontmatter, BrokenFrontmatter>>, usize), ParseError> {
+) -> Result<(Option<Result<Frontmatter, BrokenFrontmatter>>, usize), F>
+where
+    F: Failure,
+{
     let opening = line_at(source, start);
     let format = match source[start..opening.end].trim_end() {
         "+++" => FrontmatterFormat::Toml,
@@ -66,7 +69,7 @@ pub fn parse(
     let frontmatter = match read.and_then(kept) {
         Ok((mapping, drops)) => {
             if let Some(first) = drops.first().filter(|_| strict) {
-                return Err(first.error.clone());
+                F::fail(first.error.clone())?;
             }
             let dropped = drops
                 .into_iter()
@@ -82,13 +85,17 @@ pub fn parse(
                 span,
             })
         }
-        Err(error) if strict => return Err(error),
-        Err(error) => Err(BrokenFrontmatter {
-            error,
-            format,
-            span,
-            text: without_line_ending(&source[content]).to_owned(),
-        }),
+        Err(error) => {
+            if strict {
+                F::fail(error.clone())?;
+            }
+            Err(BrokenFrontmatter {
+                error,
+                format,
+                span,
+                text: without_line_ending(&source[content]).to_owned(),
+            })
+        }
     };
     Ok((Some(frontmatter), closing.next))
 }

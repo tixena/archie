@@ -241,5 +241,5 @@ fn the_example_parses_into_the_tree_written_by_hand() {
         span: span(0, SOURCE),
     };
 
-    assert_eq!(parse(SOURCE), Ok(document));
+    assert_eq!(parse(SOURCE), document);
 }

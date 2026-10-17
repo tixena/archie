@@ -1,5 +1,6 @@
 //! The errors a document fails to parse or to be rebuilt with.
 
+use core::convert::Infallible;
 use core::ops::Range;
 
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,24 @@ impl ParseError {
             message: message.to_owned(),
             span,
         }
+    }
+}
+
+/// What a parse fails with where a strict parse would: `ParseError` returns
+/// the error, and `Infallible` goes on past it, for a parse that cannot fail.
+pub(crate) trait Failure: Sized {
+    fn fail(error: ParseError) -> Result<(), Self>;
+}
+
+impl Failure for ParseError {
+    fn fail(error: ParseError) -> Result<(), Self> {
+        Err(error)
+    }
+}
+
+impl Failure for Infallible {
+    fn fail(_error: ParseError) -> Result<(), Self> {
+        Ok(())
     }
 }
 

@@ -484,7 +484,7 @@ fn a_key_written_again_keeps_its_first_place() {
 #[test]
 fn each_later_occurrence_of_a_key_is_recorded_from_its_key_to_its_value() {
     let source = "---\ntitle: Draft\nonce: 1\ntitle: Final\ntitle:\n  - x\n---\n";
-    let document = parse(source).unwrap();
+    let document = parse(source);
     let mapping = document.frontmatter.unwrap().unwrap().mapping;
     let title = &mapping.pairs["title"];
     assert_eq!(&source[title.span.clone()], "title: Draft");

@@ -20,13 +20,14 @@ pub(crate) mod table;
 mod toml;
 mod yaml;
 
+use core::convert::Infallible;
 use core::ops::Range;
 
 use serde::ser::Error as _;
 use serde::{Deserialize as _, Serialize as _};
 
 use crate::parser::ast::{Document, Kind, Mapping, Value};
-use crate::parser::error::{ParseError, RebuildError};
+use crate::parser::error::{Failure, ParseError, RebuildError};
 use crate::parser::extension::{Context, Extension, Frame, Markdown, With};
 use crate::writer;
 
@@ -63,14 +64,12 @@ impl ParseOptions {
 /// Parses a markdown file into its document tree, with archie's markdown
 /// extension alone.
 ///
-/// # Errors
-///
-/// Never returns an error. An entry of the frontmatter that does not read is
-/// dropped and listed in `Frontmatter::dropped`, a frontmatter of which no
-/// entry reads is held as a `BrokenFrontmatter`, and what the body does not
-/// recognize stays as text.
-pub fn parse(source: &str) -> Result<Document, ParseError> {
-    parse_with_set::<Markdown>(source, &ParseOptions::default())
+/// A frontmatter entry that does not read is dropped and listed, and a
+/// frontmatter of which no entry reads is a `BrokenFrontmatter`.
+#[must_use]
+pub fn parse(source: &str) -> Document {
+    let Ok(document) = parse_with_set::<Markdown, Infallible>(source, &ParseOptions::default());
+    document
 }
 
 /// Parses a markdown file into its document tree, with archie's markdown
@@ -85,7 +84,7 @@ pub fn parse_with<E>(source: &str, options: &ParseOptions) -> Result<Document<Wi
 where
     E: Extension,
 {
-    parse_with_set::<With<E>>(source, options)
+    parse_with_set::<With<E>, ParseError>(source, options)
 }
 
 /// Builds the extension nodes of `document` again, for a document read from
@@ -146,9 +145,10 @@ where
 }
 
 /// Builds the tree, then offers every node to the extensions `T`.
-fn parse_with_set<T>(source: &str, options: &ParseOptions) -> Result<Document<T>, ParseError>
+fn parse_with_set<T, F>(source: &str, options: &ParseOptions) -> Result<Document<T>, F>
 where
     T: Extension,
+    F: Failure,
 {
     let start = if source.starts_with('\u{feff}') {
         '\u{feff}'.len_utf8()
@@ -172,7 +172,7 @@ where
         source,
         strict,
     };
-    claim::document(&mut document, &context, &cells)?;
+    claim::document(&mut document, &context, &cells).or_else(F::fail)?;
     Ok(document)
 }
 

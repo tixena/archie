@@ -1035,7 +1035,8 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   first one that claims a construct gets it. More nest as pairs.
 - `With<E>` is `(Markdown, E)`. `parse(source)` reads with `Markdown` alone, and
   `parse_with::<E>(source, &options)` reads with `With<E>`, so archie's markdown
-  extension is always first.
+  extension is always first. `parse` returns the `Document`, since a parse that is not
+  strict cannot fail, and `parse_with` a `Result`, an error only in a strict parse.
 - A code block's `language` and `args`, `Args::Toml` or `Args::Text`, come from its
   info string by the rule under [Blocks](#blocks).
 - `read_toml(source, range)` and `read_yaml(source, range)` read the TOML or YAML

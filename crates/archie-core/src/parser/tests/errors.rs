@@ -11,7 +11,7 @@ use crate::writer::{WriteOptions, write};
 /// reads, and else drops an entry first with its message.
 fn strict_error(source: &str) -> ParseError {
     let error = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
-    match parse(source).unwrap().frontmatter.unwrap() {
+    match parse(source).frontmatter.unwrap() {
         Ok(frontmatter) => {
             let first = frontmatter.dropped.first().map(|drop| &drop.message);
             assert_eq!(first, Some(&error.message), "{source:?}");
@@ -643,14 +643,14 @@ fn frontmatter_depth(document: &Document) -> Option<usize> {
 fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
     on_two_megabytes(|| {
         for source in nested_frontmatter(VALUE_CAP) {
-            let document = parse(&source).unwrap();
+            let document = parse(&source);
             assert_eq!(frontmatter_depth(&document), Some(VALUE_CAP));
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
                 let options = WriteOptions {
                     frontmatter: format,
                 };
                 let written = write(&document, &options).unwrap();
-                let depth = frontmatter_depth(&parse(&written).unwrap());
+                let depth = frontmatter_depth(&parse(&written));
                 assert_eq!(depth, Some(VALUE_CAP));
             }
             let copy = document.clone();
@@ -671,14 +671,14 @@ fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
 /// when no entry of it reads, and writes it in YAML and in TOML, each written
 /// text reading back to that depth.
 fn reads_and_writes_at_depth(source: &str, depth: Option<usize>) {
-    let document = parse(source).unwrap();
+    let document = parse(source);
     assert_eq!(frontmatter_depth(&document), depth);
     for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
         let options = WriteOptions {
             frontmatter: format,
         };
         let written = write(&document, &options).unwrap();
-        assert_eq!(frontmatter_depth(&parse(&written).unwrap()), depth);
+        assert_eq!(frontmatter_depth(&parse(&written)), depth);
     }
 }
 
@@ -689,7 +689,7 @@ fn a_copy_counts_toward_the_value_cap_from_where_its_alias_stands() {
         let lists = VALUE_CAP - 1;
         let deep = format!("{}1{}", "[".repeat(lists), "]".repeat(lists));
         let source = format!("---\na: &d {deep}\nb: [*d]\nc: [[*d]]\ne: 1\n---\n");
-        let document = parse(&source).unwrap();
+        let document = parse(&source);
         let read = document.frontmatter.as_ref().unwrap().as_ref().unwrap();
         assert_eq!(
             read.mapping.pairs.keys().collect::<Vec<_>>(),
@@ -760,14 +760,14 @@ fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
     on_two_megabytes(|| {
         let levels = VALUE_CAP / 2;
         for source in tagged_frontmatter(levels) {
-            let document = parse(&source).unwrap();
+            let document = parse(&source);
             assert_eq!(frontmatter_depth(&document), Some(levels));
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
                 let options = WriteOptions {
                     frontmatter: format,
                 };
                 let written = write(&document, &options).unwrap();
-                let depth = frontmatter_depth(&parse(&written).unwrap());
+                let depth = frontmatter_depth(&parse(&written));
                 assert_eq!(depth, Some(levels));
             }
             let copy = document.clone();
