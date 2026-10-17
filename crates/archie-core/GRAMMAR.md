@@ -521,8 +521,10 @@ flow_pair     := flow_key ( ":" flow_node? )? | explicit_pair | empty_pair
 explicit_pair := "?" flow_key? ( ":" flow_node? )?
 empty_pair    := ":" flow_node?
 flow_node     := TAG? inline
-key           := TAG? ( double_quoted | single_quoted | PLAIN_KEY ) | TAG
-flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
+key           := TAG? ( double_quoted | single_quoted | PLAIN_KEY
+                      | flow_sequence | flow_mapping ) | TAG
+flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
+                      | flow_sequence | flow_mapping ) | TAG
 ```
 
 - The frontmatter is a block mapping, or one flow mapping with nothing but comments
@@ -589,10 +591,10 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   at that column. With nothing after it on its line, the `?` or the `:` takes the
   block under it, as a key's `:` does. `? k` then `: a: 1` is `{k: {a: 1}}`, and
   `? k` then `: - x` is `{k: [x]}`.
-- The key after `?` is a scalar, plain, quoted or tagged, on the `?` line or on the
-  lines indented under it. A mapping or a list there, on the `?` line too, fails
-  the file with `expected a key`, pointing at its first character: a key is a
-  string. `? - a` then `: v`, and `? a: 1` then `: v`, both fail.
+- The key after `?` is a scalar, plain, quoted or tagged, or a list or a mapping,
+  on the `?` line or on the lines indented under it. A pair whose key is a list or
+  a mapping is dropped, as stated below: `? - a` then `: v`, and `? a: 1` then
+  `: v`, are both `{}`.
 - A `:` line indented more than its `?` does not give the pair's value: `? k` then
   `  : v` fails the file with `this line is indented more than the keys above it`.
 - `PLAIN_KEY` runs to the first `:` followed by a space, a tab or the end of the
@@ -635,16 +637,27 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   the line or one of `, [ ] { }`. Such a key fails the file with
   ``a plain key cannot start with `@`; quote it``, naming the character as for a
   `PLAIN`: `@a: 1`, `` `a: 1 ``, `|x: 1`, `>x: 1` and `a: {@y: 1}` all fail.
-- A line at the column of a mapping's keys that starts with `[` or `{` fails the
-  file with `expected a key`, pointing at the bracket: its key is a collection, and
-  a key is a string. `a: 1` then `[x]: 2` fails, and so does `a: 1` then
-  `{x: 2}: 3`. A frontmatter whose first line starts with `{` is still one flow
-  mapping, and one whose first line starts with `[` is not a mapping.
-- The first line of a value under a key or a bare `-`, and the rest of a `-`, `?` or
-  `:` line, fail the file the same way when their flow collection is followed by `:`
-  and a space, a tab or the end of the line: `c:` then two spaces and `[x]: y`
-  fails with `expected a key`, pointing at the `[`, and so does `items:` then
-  `- {x: 1}: 12`, pointing at the `{`.
+- A key may be a list or a mapping, in block or flow form, tagged or not. A flow
+  collection followed by `:` and a space, a tab or the end of the line is such a
+  key on a line at the column of a mapping's keys, on the first line of a value
+  under a key or a bare `-`, on the rest of a `-`, `?` or `:` line, and on the
+  frontmatter's first line. Inside a flow mapping, a flow collection where a key
+  starts is a key; inside a flow list, a flow collection followed by `:` on its line
+  is the key of a pair. After `?`, a block list or a block mapping is a key too.
+- A key that is a list or a mapping is read to the end of its value, and the pair
+  is dropped: TOML cannot hold such a key. The mapping keeps its other pairs, and a
+  mapping that held no other pair is an empty mapping. `title: Trip` then
+  `[48.85, 2.35]: Paris` then `year: 2026` is `{title: Trip, year: 2026}`,
+  `{x: 2}: 3` is `{}`, `c:` then two spaces and `[x]: y` is `{c: {}}`, `items:`
+  then `- {x: 1}: 12` is `{items: [{}]}`, `a: {[x]: 1, b: 2}` is `{a: {b: 2}}`,
+  `a: [[x]: 1, c]` is `{a: [{}, c]}`, and `a: [? [x] : 1]` is `{a: [{}]}`.
+- A dropped pair's key and value are read as any other's, and an error in them
+  fails the file: `[x]: [unclosed` fails with ``expected `,` or `]` in the list``,
+  as `a: [unclosed` does, and `!!str [x]: y` with
+  ``a list is not a value of the tag `!!str` ``.
+- A frontmatter whose first line starts with `{` is one flow mapping, and one whose
+  first line starts with `[` is not a mapping, unless the flow collection is a key
+  as above.
 - Outside a flow collection, a `PLAIN` whose line has no comment goes on over each
   following line that is indented more than its key or `-`, is not a comment and
   holds no `key:`; blank lines may sit between them, and a comment ends the last
@@ -772,7 +785,8 @@ A `PLAIN` value's type comes from how it is written:
 | `Document` | The first byte of the file | The last |
 | `Frontmatter` | The opening delimiter | The end of the closing delimiter |
 | `Mapping` written as `{ ... }` | `{` | `}` |
-| `Mapping` with no pairs, at the root | Empty, on the line after the opening delimiter | |
+| `Mapping` whose every pair is dropped | Empty, at the start of its first pair | |
+| `Mapping` with no pairs written, at the root | Empty, on the line after the opening delimiter | |
 | `Mapping` of a TOML table with no pairs | Empty, right after its header | |
 | Any other `Mapping` | The start of its first pair | The end of the last value written in it |
 | `Pair` | Its key, the `?` of an explicit key, the first part of a dotted key, or the header that makes it | The end of its value, or for a header, the end of the last line of the table it opens, where the key is first written; `repeats` holds the same range for each later place the key is written |
@@ -1065,7 +1079,9 @@ with the text it reads from and the text it writes.
    Each is refused with an error that names it.
 3. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
-4. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
+4. A pair whose key is a list or a mapping is dropped, and the mapping keeps its
+   other pairs: TOML cannot hold such a key. YAML reads the pair.
+5. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
    archie follows the grammar. `? k` then `  : v` fails, where the library reads
    `{k: v}`: the `:` of an explicit key's value stands at the column of its `?`. `? a`
    then `:` then `: b` is `{a: null, "": b}`, where the library reads

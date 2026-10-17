@@ -295,9 +295,35 @@ fn a_yaml_flow_collection_left_open_is_refused() {
 
     let (mapping, _) = failure("---\nowner: {name: Ada\n---\n");
     assert_eq!(mapping, "expected `,` or `}` in the mapping");
+}
 
-    let (no_key, _) = failure("---\nowner: {[a]: Ada}\n---\n");
-    assert_eq!(no_key, "expected a key");
+#[test]
+fn a_dropped_pair_fails_the_file_as_its_value_fails_in_a_pair_that_is_kept() {
+    let at_end = |source: &str| {
+        let end = source.find("[unclosed\n").unwrap() + "[unclosed\n".len();
+        ("expected `,` or `]` in the list".to_owned(), end..end)
+    };
+    let refused = |source: &str| {
+        let error = parse(source).unwrap_err();
+        (error.message, error.span)
+    };
+    for source in [
+        "---\na: [unclosed\n---\n",
+        "---\n[x]: [unclosed\n---\n",
+        "---\na: 1\n{x: 2}: [unclosed\n---\n",
+        "---\n? [x]\n: [unclosed\n---\n",
+        "---\nitems:\n- [x]: [unclosed\n---\n",
+    ] {
+        assert_eq!(refused(source), at_end(source));
+    }
+    assert_eq!(
+        failed("---\n!!str [x]: y\n---\n"),
+        named("a list is not a value of the tag `!!str`", "[x]")
+    );
+    assert_eq!(
+        failed("---\na: {[!!int x]: 1}\n---\n"),
+        named("`x` is not a value of the tag `!!int`", "x")
+    );
 }
 
 #[test]
@@ -476,16 +502,6 @@ fn a_block_key_needs_a_space_after_its_colon() {
 }
 
 #[test]
-fn an_explicit_key_that_is_a_collection_is_refused() {
-    let refused = |at: &'static str| ("expected a key".to_owned(), at);
-    assert_eq!(refusal("---\n? [a, b]\n: v\n---\n"), refused("[a, b]"));
-    assert_eq!(refusal("---\n?\n  a: 1\n: v\n---\n"), refused("a: 1"));
-    assert_eq!(refusal("---\n?\n  - a\n: v\n---\n"), refused("- a"));
-    assert_eq!(refusal("---\n? - a\n: v\n---\n"), refused("- a"));
-    assert_eq!(refusal("---\n? a: 1\n: v\n---\n"), refused("a: 1"));
-}
-
-#[test]
 fn the_colon_line_of_an_explicit_key_indented_more_than_its_question_mark_is_refused() {
     assert_eq!(
         refusal("---\n? k\n  : v\n---\n"),
@@ -497,7 +513,7 @@ fn the_colon_line_of_an_explicit_key_indented_more_than_its_question_mark_is_ref
 }
 
 #[test]
-fn a_block_key_cannot_start_with_a_block_scalar_indicator_or_a_bracket() {
+fn a_block_key_cannot_start_with_a_block_scalar_indicator() {
     let refused = |character: &str| {
         named(
             &format!("a plain key cannot start with `{character}`; quote it"),
@@ -507,10 +523,6 @@ fn a_block_key_cannot_start_with_a_block_scalar_indicator_or_a_bracket() {
     assert_eq!(failed("---\n|x: 1\n---\n"), refused("|"));
     assert_eq!(failed("---\na: 1\n>x: 2\n---\n"), refused(">"));
     assert_eq!(failed("---\na:\n  b: 1\n  >x: 2\n---\n"), refused(">"));
-
-    let no_key = |at: &'static str| ("expected a key".to_owned(), at);
-    assert_eq!(refusal("---\na: 1\n[x]: 2\n---\n"), no_key("[x]: 2"));
-    assert_eq!(refusal("---\na: 1\n{x: 2}: 3\n---\n"), no_key("{x: 2}: 3"));
 }
 
 #[test]
@@ -534,6 +546,7 @@ fn a_tab_before_a_key_or_a_list_entry_is_refused_at_the_tab() {
     assert_eq!(refused("---\n\t? k\n---\n"), at_tab(4));
     assert_eq!(refused("---\n\t: v\n---\n"), at_tab(4));
     assert_eq!(refused("---\na:\n  \t!!str : v\n---\n"), at_tab(9));
+    assert_eq!(refused("---\na:\n  \t[x]: y\n---\n"), at_tab(9));
 }
 
 #[test]
@@ -541,16 +554,6 @@ fn an_implicit_key_inside_a_flow_list_keeps_its_colon_on_its_line() {
     assert_eq!(
         refusal("---\na: [x\n  : 1]\n---\n"),
         ("expected `,` or `]` in the list".to_owned(), ": 1]")
-    );
-}
-
-#[test]
-fn a_collection_key_on_the_first_line_of_a_block_or_after_a_dash_is_refused() {
-    let no_key = |at: &'static str| ("expected a key".to_owned(), at);
-    assert_eq!(refusal("---\nc:\n  [x]: y\n---\n"), no_key("[x]: y"));
-    assert_eq!(
-        refusal("---\nitems:\n- {x: 1}: 12\n---\n"),
-        no_key("{x: 1}: 12")
     );
 }
 

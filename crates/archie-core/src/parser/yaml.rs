@@ -56,6 +56,29 @@ impl Context {
     }
 }
 
+/// One pair as read: kept under its key, or dropped because its key is a
+/// list or a mapping, which TOML cannot hold.
+enum Read {
+    Dropped,
+    Kept(String, Pair),
+}
+
+impl Read {
+    /// The pair from `start` to the end of `value`, kept under `name`, or
+    /// dropped when it has none.
+    fn new(name: Option<String>, start: usize, value: Value) -> Self {
+        let Some(key) = name else {
+            return Self::Dropped;
+        };
+        let pair = Pair {
+            repeats: Vec::new(),
+            span: start..value.span().end,
+            value,
+        };
+        Self::Kept(key, pair)
+    }
+}
+
 /// A tag archie reads: the type it names and where it is written.
 struct Tag {
     name: &'static str,
@@ -70,12 +93,12 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
     };
     let line_start = cursor.pos();
     cursor.set_pos(line_start + indent);
-    no_tab_before_block(&mut cursor)?;
+    no_tab_before_block(&mut cursor, 0)?;
     // A tab after the indentation separates a flow node from it.
     cursor.skip_spaces();
     let root = cursor.pos();
     match cursor.peek() {
-        Some(b'{') => {
+        Some(b'{') if !starts_mapping(&mut cursor, 0) => {
             let mapping = flow_mapping(&mut cursor, None, 0)?;
             end_of_line(&mut cursor)?;
             if next_line(&mut cursor).is_some() {
@@ -83,7 +106,7 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             }
             Ok(mapping)
         }
-        Some(b'[') => {
+        Some(b'[') if !starts_mapping(&mut cursor, 0) => {
             let span = flow_sequence(&mut cursor, None, 0)
                 .map_or_else(|_| to_last_text(&cursor, root), |list| list.span().clone());
             Err(not_a_mapping(&span))
@@ -124,7 +147,7 @@ fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Range<usize>> {
 /// Whether the line at the cursor holds a key: it starts a mapping, or a
 /// `key:` follows an anchor, a tag or an indicator on it.
 fn holds_key(cursor: &mut Cursor<'_>) -> bool {
-    starts_mapping(cursor) || holds_pair(uncommented(cursor.rest_of_line()).trim_end())
+    starts_mapping(cursor, 0) || holds_pair(uncommented(cursor.rest_of_line()).trim_end())
 }
 
 /// From `start` to the end of the frontmatter's last line of text.
@@ -164,7 +187,7 @@ fn block_mapping(
     indent: usize,
     depth: usize,
 ) -> Result<Mapping, ParseError> {
-    let empty_at = cursor.pos();
+    let empty_at = cursor.pos() + indent;
     let mut pairs = IndexMap::new();
     mapping_lines(cursor, indent, depth, &mut pairs)?;
     Ok(finish(pairs, empty_at))
@@ -197,6 +220,13 @@ fn mapping_lines(
     Ok(())
 }
 
+/// Adds the pair `read` gives to `pairs`; a dropped pair adds nothing.
+fn add(pairs: &mut IndexMap<String, Pair>, read: Read) {
+    if let Read::Kept(name, pair) = read {
+        insert(pairs, name, pair);
+    }
+}
+
 /// A mapping `depth` values deep whose first key is written on a list
 /// entry's line, at `column`; its other keys follow on lines indented to that
 /// column.
@@ -226,9 +256,9 @@ fn entry(
     }
     let start = cursor.pos();
     let name = if is_empty_key(cursor, false) {
-        String::new()
+        Some(String::new())
     } else {
-        key(cursor)?
+        key_or_collection(cursor, Context::Key(indent), open, key)?
     };
     cursor.skip_spaces();
     if !cursor.eat(b':') {
@@ -238,12 +268,7 @@ fn entry(
         return cursor.error("expected a space after the `:`");
     }
     let value = indicated_value(cursor, indent, open)?;
-    let pair = Pair {
-        repeats: Vec::new(),
-        span: start..value.span().end,
-        value,
-    };
-    insert(pairs, name, pair);
+    add(pairs, Read::new(name, start, value));
     Ok(())
 }
 
@@ -268,7 +293,7 @@ fn explicit_entry(
         false,
     )?;
     let key_end = key.span().end;
-    let name = explicit_key(cursor, key)?;
+    let name = explicit_key(cursor, key);
     let value = if next_line(cursor) == Some(indent)
         && cursor.peek_at(indent) == Some(b':')
         && separated_at(cursor, indent + 1)
@@ -285,23 +310,46 @@ fn explicit_entry(
     } else {
         null(key_end)
     };
-    let pair = Pair {
-        repeats: Vec::new(),
-        span: start..value.span().end,
-        value,
-    };
-    insert(pairs, name, pair);
+    add(pairs, Read::new(name, start, value));
     Ok(())
 }
 
-/// The text of an explicit key, which must be a scalar.
-fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Result<String, ParseError> {
-    let span = match key {
-        Value::Scalar(scalar) => return Ok(scalar_text(cursor, scalar.value, &scalar.span)),
-        Value::Mapping(mapping) => mapping.span,
-        Value::Sequence(sequence) => sequence.span,
-    };
-    Err(ParseError::new("expected a key", span.start..span.start))
+/// The text of an explicit key, or `None` for a list or a mapping.
+fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Option<String> {
+    match key {
+        Value::Scalar(scalar) => Some(scalar_text(cursor, scalar.value, &scalar.span)),
+        Value::Mapping(_) | Value::Sequence(_) => None,
+    }
+}
+
+/// The key at the cursor, read by `text`, or `None` for a key that is a list
+/// or a mapping, tagged or not, which is read as a value written in `context`
+/// inside `open` values.
+fn key_or_collection<F>(
+    cursor: &mut Cursor<'_>,
+    context: Context,
+    open: usize,
+    text: F,
+) -> Result<Option<String>, ParseError>
+where
+    F: FnOnce(&mut Cursor<'_>) -> Result<String, ParseError>,
+{
+    if !is_collection_key(cursor) {
+        return text(cursor).map(Some);
+    }
+    let _: Value = inline_value(cursor, context, open, true)?;
+    Ok(None)
+}
+
+/// Whether a `[` or a `{` starts the node at the cursor, after a tag or not.
+fn is_collection_key(cursor: &mut Cursor<'_>) -> bool {
+    let start = cursor.pos();
+    if cursor.peek() == Some(b'!') && tag(cursor).is_ok() {
+        cursor.skip_spaces();
+    }
+    let is_collection = matches!(cursor.peek(), Some(b'[' | b'{'));
+    cursor.set_pos(start);
+    is_collection
 }
 
 /// The value after the `:` of a key at column `indent`, with the cursor
@@ -351,10 +399,10 @@ fn plain_key_length(line: &str) -> Option<usize> {
         .filter(|&at| at > 0)
 }
 
-/// Whether the cursor is on a pair that opens a mapping: an explicit key, or
-/// an empty key or a `key:` after a tag or not, whose key is plain or quoted.
-/// On a tab it is not: a tab is never indentation.
-fn starts_mapping(cursor: &mut Cursor<'_>) -> bool {
+/// Whether the cursor, inside `open` values, is on a pair that opens a
+/// mapping: an explicit key, or an empty key or a `key:` after a tag or not,
+/// whose key is plain, quoted or a flow collection. On a tab it is not.
+fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
     if is_explicit_key(cursor) {
         return true;
     }
@@ -369,7 +417,13 @@ fn starts_mapping(cursor: &mut Cursor<'_>) -> bool {
                 cursor.skip_spaces();
                 is_key && cursor.peek() == Some(b':')
             }
-            Some(b'\t' | b'[' | b'{' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
+            // Reading the key checks the indentation of its lines.
+            Some(b'[' | b'{') => {
+                let is_key = inline_value(cursor, Context::Flow(None), open, true).is_ok();
+                cursor.skip_spaces();
+                is_key && cursor.peek() == Some(b':') && separated_at(cursor, 1)
+            }
+            Some(b'\t' | b'|' | b'>' | b'&' | b'*' | b'!') => false,
             Some(_) | None => plain_key_length(cursor.rest_of_line()).is_some(),
         };
     cursor.set_pos(start);
@@ -403,8 +457,8 @@ fn nested(
         return block_sequence(cursor, line_start, found, depth);
     }
     cursor.set_pos(at);
-    no_tab_before_block(cursor)?;
-    if starts_mapping(cursor) {
+    no_tab_before_block(cursor, open)?;
+    if starts_mapping(cursor, open) {
         let depth = nest(open, at..at + 1)?;
         cursor.set_pos(line_start);
         return Ok(Value::Mapping(block_mapping(cursor, found, depth)?));
@@ -428,15 +482,15 @@ fn under(cursor: &mut Cursor<'_>, context: Context) -> Option<(usize, bool)> {
     Some((found, is_list))
 }
 
-/// Refuses the tab at the cursor, after the indentation of a line, when a
-/// key, an explicit key or a list entry follows it.
-fn no_tab_before_block(cursor: &mut Cursor<'_>) -> Result<(), ParseError> {
+/// Refuses the tab at the cursor, after the indentation of a line inside
+/// `open` values, when a key, an explicit key or a list entry follows it.
+fn no_tab_before_block(cursor: &mut Cursor<'_>, open: usize) -> Result<(), ParseError> {
     let tab = cursor.pos();
     if cursor.peek() != Some(b'\t') {
         return Ok(());
     }
     cursor.skip_spaces();
-    let starts_block = is_dash(cursor, 0) || starts_mapping(cursor);
+    let starts_block = is_dash(cursor, 0) || starts_mapping(cursor, open);
     cursor.set_pos(tab);
     if starts_block {
         return Err(tab_indent(tab));
@@ -519,7 +573,7 @@ fn compact_value(
         let depth = nest(open, at..at + 1)?;
         return block_sequence(cursor, line_start, column, depth);
     }
-    if indented && starts_mapping(cursor) {
+    if indented && starts_mapping(cursor, open) {
         let depth = nest(open, at..at + 1)?;
         return Ok(Value::Mapping(entry_mapping(cursor, column, depth)?));
     }
@@ -527,9 +581,8 @@ fn compact_value(
 }
 
 /// The value that starts a line of a block or follows its `-`, `?` or `:`,
-/// inside `open` values, up to the end of that line. A flow collection
-/// followed by `:` there is a key, and a key is a string. A plain scalar is
-/// read as `plain` reads it with `check_size`.
+/// inside `open` values, up to the end of that line. A plain scalar is read
+/// as `plain` reads it with `check_size`.
 fn line_value(
     cursor: &mut Cursor<'_>,
     context: Context,
@@ -537,14 +590,6 @@ fn line_value(
     check_size: bool,
 ) -> Result<Value, ParseError> {
     let value = inline_value(cursor, context, open, check_size)?;
-    cursor.skip_spaces();
-    if matches!(value, Value::Mapping(_) | Value::Sequence(_))
-        && cursor.peek() == Some(b':')
-        && separated_at(cursor, 1)
-    {
-        let at = value.span().start;
-        return Err(ParseError::new("expected a key", at..at));
-    }
     end_of_line(cursor)?;
     Ok(value)
 }
@@ -615,20 +660,54 @@ fn flow_sequence(
 }
 
 /// One entry of a flow list, inside `open` values: a value, or a pair, which
-/// makes a mapping of one pair.
+/// makes a mapping of one pair. A list or a mapping is read once, and is the
+/// key of a pair when a `:` follows it on its line.
 fn flow_item(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     open: usize,
 ) -> Result<Value, ParseError> {
-    if !is_flow_pair(cursor) {
-        return inline_value(cursor, Context::Flow(column), open, true);
-    }
     let start = cursor.pos();
+    if is_collection_key(cursor) {
+        let item = inline_value(cursor, Context::Flow(column), open, true);
+        if item.is_err() || !colon_follows(cursor) {
+            return item;
+        }
+        return one_pair(cursor, column, open, start, false);
+    }
+    if is_flow_pair(cursor) {
+        return one_pair(cursor, column, open, start, true);
+    }
+    inline_value(cursor, Context::Flow(column), open, true)
+}
+
+/// The mapping of the one pair of a flow list that starts at `start`, inside
+/// `open` values. With `read_key`, its key is read here; otherwise the cursor
+/// is after a key that is a list or a mapping.
+fn one_pair(
+    cursor: &mut Cursor<'_>,
+    column: Option<usize>,
+    open: usize,
+    start: usize,
+    read_key: bool,
+) -> Result<Value, ParseError> {
     let depth = nest(open, start..start + 1)?;
+    let name = if read_key {
+        flow_pair_key(cursor, column, true, depth)?
+    } else {
+        None
+    };
     let mut pairs = IndexMap::new();
-    flow_entry(cursor, column, true, depth, &mut pairs)?;
+    flow_pair(cursor, column, depth, start, name, &mut pairs)?;
     Ok(Value::Mapping(finish(pairs, start)))
+}
+
+/// Whether a `:` follows the cursor on its line, after spaces or tabs.
+fn colon_follows(cursor: &Cursor<'_>) -> bool {
+    cursor
+        .rest_of_line()
+        .trim_start_matches([' ', '\t'])
+        .starts_with(':')
 }
 
 /// Whether the flow entry at the cursor is a pair: an explicit key, an empty
@@ -670,7 +749,9 @@ fn flow_mapping(
             break;
         }
         no_empty_entry(cursor)?;
-        flow_entry(cursor, column, false, depth, &mut pairs)?;
+        let entry = cursor.pos();
+        let name = flow_pair_key(cursor, column, false, depth)?;
+        flow_pair(cursor, column, depth, entry, name, &mut pairs)?;
         skip_flow_space(cursor, column)?;
         if cursor.eat(b'}') {
             break;
@@ -685,19 +766,17 @@ fn flow_mapping(
     })
 }
 
-/// One pair of a flow mapping, or of a flow list, inside `open` values. Line
-/// breaks and comments may come before its `:`; in a flow list,
-/// `is_flow_pair` allows that only after an explicit key. A key with no `:`,
-/// or with nothing after it, holds null.
-fn flow_entry(
+/// The rest of a flow pair that starts at `start`, inside `open` values, after
+/// its key `name`. Line breaks and comments may come before its `:`; with no
+/// `:`, or with nothing after it, the value is null.
+fn flow_pair(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
-    in_list: bool,
     open: usize,
+    start: usize,
+    name: Option<String>,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
-    let start = cursor.pos();
-    let name = flow_pair_key(cursor, column, in_list)?;
     let key_end = cursor.pos();
     skip_flow_space(cursor, column)?;
     let value = if cursor.eat(b':') {
@@ -711,24 +790,19 @@ fn flow_entry(
     } else {
         null(key_end)
     };
-    let pair = Pair {
-        repeats: Vec::new(),
-        span: start..value.span().end,
-        value,
-    };
-    insert(pairs, name, pair);
+    add(pairs, Read::new(name, start, value));
     Ok(())
 }
 
-/// The key of a flow pair: the key after a `?`, or the empty key when none
-/// follows it or when the pair starts with its `:`. A key goes on over
-/// several lines inside a flow mapping or after a `?`, and otherwise stays on
-/// one inside a flow list.
+/// The key of a flow pair inside `open` values, or `None` for a list or a
+/// mapping; empty after a `?` with none or before a `:` that starts the pair.
+/// It goes on over lines in a flow mapping or after a `?`, else stays on one.
 fn flow_pair_key(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     in_list: bool,
-) -> Result<String, ParseError> {
+    open: usize,
+) -> Result<Option<String>, ParseError> {
     let explicit = is_flow_explicit_key(cursor);
     if explicit {
         cursor.bump();
@@ -737,12 +811,12 @@ fn flow_pair_key(
     if is_empty_key(cursor, true)
         || (explicit && matches!(cursor.peek(), None | Some(b',' | b']' | b'}')))
     {
-        return Ok(String::new());
+        return Ok(Some(String::new()));
     }
-    flow_key(
-        cursor,
-        (explicit || !in_list).then_some(Context::Flow(column)),
-    )
+    let context = Context::Flow(column);
+    key_or_collection(cursor, context, open, |inner| {
+        flow_key(inner, (explicit || !in_list).then_some(context))
+    })
 }
 
 /// Whether the cursor is on a `?` that starts an explicit key inside a flow
@@ -1220,8 +1294,8 @@ fn depth_under(
         Some((_, true)) => tag_level(tag, open),
         Some((found, false)) => {
             cursor.set_pos(cursor.pos() + found);
-            no_tab_before_block(cursor)?;
-            if starts_mapping(cursor) {
+            no_tab_before_block(cursor, open)?;
+            if starts_mapping(cursor, open) {
                 tag_level(tag, open)
             } else {
                 cursor.skip_spaces();
