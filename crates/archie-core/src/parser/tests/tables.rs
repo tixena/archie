@@ -1209,3 +1209,94 @@ fn a_row_line_keeps_a_no_break_space_at_its_end_and_loses_its_spaces() {
         ],
     );
 }
+
+#[test]
+fn a_simple_table_on_an_items_first_line_leaves_the_marker_to_the_item() {
+    for (source, list) in [
+        ("- a    b\n  ---  ---\n  1    2\n", "List"),
+        ("1. a    b\n   ---  ---\n   1    2\n", "List start=1"),
+    ] {
+        check(
+            source,
+            &format!(
+                r#"Document
+  MarkdownBlock
+    Section
+      {list}
+        Item
+          MarkdownBlock
+            Section
+              Table format=Simple alignments=Left,Left
+                TableRow head
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "a"
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "b"
+                TableRow
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "1"
+                  TableCell
+                    MarkdownBlock
+                      Section
+                        Paragraph
+                          Line
+                            Text "2"
+"#
+            ),
+        );
+    }
+}
+
+#[test]
+fn an_empty_first_cell_of_an_indented_simple_row_is_empty_at_the_start_of_its_row() {
+    let source = "a    b\n---  ---\n       2\n";
+    check(
+        source,
+        r#"Document
+  MarkdownBlock
+    Section
+      Table format=Simple alignments=Left,Left
+        TableRow head
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "a"
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "b"
+        TableRow
+          TableCell
+            MarkdownBlock
+          TableCell
+            MarkdownBlock
+              Section
+                Paragraph
+                  Line
+                    Text "2"
+"#,
+    );
+    let document = parse(source).unwrap();
+    let block = &document.body.sections[0].blocks[0];
+    assert!(matches!(
+        block,
+        Block::Table(read)
+            if read.rows[0].cells[0].span == (23..23) && read.rows[0].cells[1].span == (23..24)
+    ));
+}

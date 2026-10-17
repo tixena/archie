@@ -433,8 +433,8 @@ fn dash_groups(columns: &[(usize, char)]) -> Option<Vec<Range<usize>>> {
 }
 
 /// The cells of a simple row. Each column runs from its dash group to the
-/// next group, the first one from the start of the line, and a word that
-/// crosses into the next column stays in the column it starts in.
+/// next group, the first one from the start of the line's text, and a word
+/// that crosses into the next column stays in the column it starts in.
 fn simple_cells(
     source: &str,
     line: &TableLine,
@@ -456,7 +456,12 @@ fn simple_cells(
         }
         edges.push(edge);
     }
-    let byte_at = |column: usize| columns.get(column).map_or(line.end, |&(at, _)| at);
+    let byte_at = |column: usize| {
+        columns
+            .get(column)
+            .map_or(line.end, |&(at, _)| at)
+            .max(line.start)
+    };
     let starts = iter::once(0).chain(edges.iter().copied());
     let ends = edges.iter().copied().chain([columns.len()]);
     starts
