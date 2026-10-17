@@ -193,22 +193,34 @@ Document
 }
 
 #[test]
-fn numbers_are_read_more_loosely_than_toml_allows() {
+fn a_lone_zero_underscores_between_digits_and_zeros_leading_an_exponent_are_read() {
     check(
         "\
 +++
-leading_zeros = 007
-doubled_underscore = 1__0
+zero = 0
+thousand = 1_000
+zero_led_exponent = 1e02
+fraction = 0.5
+hexadecimal = 0xff_ff
+exponent_underscore = 1e0_1
 +++
 ",
         "\
 Document
   Frontmatter format=Toml
     Mapping
-      Pair key=leading_zeros
-        Scalar Integer 7
-      Pair key=doubled_underscore
-        Scalar Integer 10
+      Pair key=zero
+        Scalar Integer 0
+      Pair key=thousand
+        Scalar Integer 1000
+      Pair key=zero_led_exponent
+        Scalar Float 100
+      Pair key=fraction
+        Scalar Float 0.5
+      Pair key=hexadecimal
+        Scalar Integer 65535
+      Pair key=exponent_underscore
+        Scalar Float 10
   MarkdownBlock
 ",
     );

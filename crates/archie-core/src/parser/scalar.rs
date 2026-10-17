@@ -18,12 +18,12 @@ pub fn toml(text: &str) -> Option<ScalarValue> {
         "-inf" => Some(ScalarValue::NonFinite(NonFinite::NegativeInfinity)),
         "nan" | "+nan" | "-nan" => Some(ScalarValue::NonFinite(NonFinite::Nan)),
         _ => {
-            let number = text.replace('_', "");
+            let number = is_toml_number(text).then(|| text.replace('_', ""));
             date_time(text)
                 .or_else(|| date(text).map(ScalarValue::Date))
                 .or_else(|| time(text).map(ScalarValue::Time))
-                .or_else(|| integer(&number, TOML_RADIXES).map(ScalarValue::Integer))
-                .or_else(|| float(&number).map(finite_or_infinite))
+                .or_else(|| integer(number.as_deref()?, TOML_RADIXES).map(ScalarValue::Integer))
+                .or_else(|| float(number.as_deref()?).map(finite_or_infinite))
         }
     }
 }
@@ -145,6 +145,33 @@ fn offset(text: &str) -> Option<i16> {
     let minutes: i16 = digits(&text[4..6])?;
     let total = hours * 60 + minutes;
     Some(if *sign == b'-' { -total } else { total })
+}
+
+/// Whether `text` is shaped as TOML writes a number: each underscore stands
+/// between two digits of one part, and the whole part of a decimal integer or
+/// a float is `0` or starts with a digit from 1 to 9.
+fn is_toml_number(text: &str) -> bool {
+    if let Some(digits) = TOML_RADIXES
+        .iter()
+        .find_map(|&(prefix, _)| text.strip_prefix(prefix))
+    {
+        return underscores_between(digits, u8::is_ascii_hexdigit);
+    }
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let whole = unsigned
+        .find(['.', 'e', 'E'])
+        .map_or(unsigned, |at| &unsigned[..at]);
+    (whole == "0" || !whole.starts_with('0')) && underscores_between(text, u8::is_ascii_digit)
+}
+
+/// Whether each underscore of `text` stands between two bytes `is_digit`
+/// accepts.
+fn underscores_between(text: &str, is_digit: fn(&u8) -> bool) -> bool {
+    let runs = text.split('_');
+    runs.clone().zip(runs.skip(1)).all(|(before, after)| {
+        before.as_bytes().last().is_some_and(is_digit)
+            && after.as_bytes().first().is_some_and(is_digit)
+    })
 }
 
 fn integer(text: &str, radixes: &[(&str, u32)]) -> Option<i64> {

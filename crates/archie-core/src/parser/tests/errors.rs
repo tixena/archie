@@ -325,6 +325,16 @@ fn a_toml_time_or_offset_out_of_range_is_refused() {
 }
 
 #[test]
+fn a_toml_number_with_a_leading_zero_or_a_misplaced_underscore_is_refused() {
+    for written in ["01", "1__0", "_1", "1_", "0x_ff", "01.5"] {
+        assert_eq!(
+            failed(&format!("+++\na = {written}\n+++\n")),
+            named(&format!("`{written}` is not a value"), written)
+        );
+    }
+}
+
+#[test]
 fn yaml_indentation_that_matches_no_block_is_refused() {
     let (deeper, _) = failure("---\na: 1\n  b: 2\n---\n");
     assert_eq!(deeper, "this line is indented more than the keys above it");

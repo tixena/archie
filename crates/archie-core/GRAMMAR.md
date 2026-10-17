@@ -483,8 +483,8 @@ A value's type comes from how it is written:
 | `07:32:00`, optionally with a fraction such as `.250` | Time |
 | A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | DateTime |
 | A date, then `T`, `t` or one space, then a time, with no offset | LocalDateTime |
-| An optional sign and digits; or `0x`, `0o`, `0b` and digits in that base | Integer, 64 bits |
-| Digits with a fraction of digits, an exponent or both, with an optional sign | Float, finite |
+| An optional sign, then `0` or a digit from 1 to 9 followed by any digits; or, with no sign, `0x`, `0o` or `0b` and digits in that base. An underscore may stand between two digits, but not right after `0x`, `0o` or `0b`: `0`, `1_000` and `0xff_ff` are integers, and `01`, `1__0`, `_1`, `1_` and `0x_ff` are not values | Integer, 64 bits |
+| A whole part written as a decimal integer, with its optional sign, then a fraction of digits, an exponent or both. The exponent is `e` or `E`, an optional sign and digits, which may start with zeros. An underscore may stand between two digits of the whole part, of the fraction or of the exponent: `0.5`, `1e02` and `1e0_1` are floats, and `01.5` is not a value | Float, finite |
 | `inf` and `nan`, with an optional sign; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 
 ## YAML frontmatter
@@ -1030,8 +1030,6 @@ with the text it reads from and the text it writes.
    values, and so does a key that a dotted key or a header goes through after its value
    was written with `=`, or a table a header names after a header or a dotted key made
    it. TOML refuses each of them.
-2. Numbers are read more loosely: underscores are dropped wherever they are, and
-   leading zeros are accepted.
 
 ### From YAML
 
