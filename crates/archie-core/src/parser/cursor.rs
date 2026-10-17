@@ -5,6 +5,8 @@ use core::ops::Range;
 use crate::parser::error::ParseError;
 
 pub struct Cursor<'src> {
+    /// The error of each value a reader dropped, in the order it met them.
+    dropped: Vec<ParseError>,
     end: usize,
     pos: usize,
     source: &'src str,
@@ -42,8 +44,11 @@ impl<'src> Cursor<'src> {
         self.end
     }
 
-    pub fn error<T>(&self, message: &str) -> Result<T, ParseError> {
-        Err(ParseError::new(message, self.pos..self.pos))
+    pub fn error<T, E>(&self, message: &str) -> Result<T, E>
+    where
+        E: From<ParseError>,
+    {
+        Err(ParseError::new(message, self.pos..self.pos).into())
     }
 
     /// The character written as `digits` hexadecimal digits at the cursor.
@@ -57,12 +62,21 @@ impl<'src> Cursor<'src> {
         Some(character)
     }
 
+    pub fn into_dropped(self) -> Vec<ParseError> {
+        self.dropped
+    }
+
     pub const fn new(source: &'src str, range: Range<usize>) -> Self {
         Self {
+            dropped: Vec::new(),
             end: range.end,
             pos: range.start,
             source,
         }
+    }
+
+    pub fn note_drop(&mut self, error: ParseError) {
+        self.dropped.push(error);
     }
 
     pub fn peek(&self) -> Option<u8> {

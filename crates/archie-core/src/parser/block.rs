@@ -17,8 +17,8 @@ use crate::parser::extension::Extension;
 use crate::parser::inline::{self, children_mut};
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
 use crate::parser::line::Base;
-use crate::parser::read_toml;
 use crate::parser::table::{Cell, RowToken, TableToken};
+use crate::parser::toml;
 
 /// What the rest of a code block's info string is put after to read it as
 /// the inside of a TOML inline table.
@@ -558,27 +558,30 @@ fn split_info(source: &str, info: &Range<usize>) -> (Option<String>, Args) {
 
 /// The args written at `rest` of `source`: `Toml` when `args = {`, the
 /// rest, then `}` reads as TOML whose inline table ends at that last `}`,
-/// with no key written twice at any depth, or else `Text`, as written. The
-/// mapping's spans count from the start of `source`, and its own span is
-/// `rest`.
+/// with nothing dropped and no key written twice at any depth, or else
+/// `Text`, as written. The mapping's spans count from the start of
+/// `source`, and its own span is `rest`.
 fn args(source: &str, rest: Range<usize>) -> Args {
     let written = &source[rest.clone()];
     let text = format!("{ARGS_OPENING}{written}}}");
-    let read = read_toml(&text, 0..text.len()).ok().and_then(|mut read| {
-        let pair = read.pairs.swap_remove("args")?;
-        let Value::Mapping(mut mapping) = pair.value else {
-            return None;
-        };
-        let whole = read.pairs.is_empty()
-            && pair.repeats.is_empty()
-            && mapping.span.end == text.len()
-            && !repeats(&mapping);
-        whole.then(|| {
-            moved_pairs(&mut mapping, rest.start);
-            mapping.span = rest;
-            mapping
-        })
-    });
+    let read = toml::read(&text, 0..text.len())
+        .ok()
+        .and_then(|(mut read, dropped)| {
+            let pair = read.pairs.swap_remove("args")?;
+            let Value::Mapping(mut mapping) = pair.value else {
+                return None;
+            };
+            let whole = dropped.is_empty()
+                && read.pairs.is_empty()
+                && pair.repeats.is_empty()
+                && mapping.span.end == text.len()
+                && !repeats(&mapping);
+            whole.then(|| {
+                moved_pairs(&mut mapping, rest.start);
+                mapping.span = rest;
+                mapping
+            })
+        });
     read.map_or_else(|| Args::Text(written.to_owned()), Args::Toml)
 }
 

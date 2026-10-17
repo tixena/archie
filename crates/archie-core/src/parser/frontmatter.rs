@@ -7,6 +7,7 @@ use indexmap::IndexMap;
 use indexmap::map::Entry;
 
 use crate::parser::ast::{Frontmatter, FrontmatterFormat, Mapping, Pair, Sequence, Value};
+use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
 use crate::parser::line::{Line, line_at};
 use crate::parser::{toml, yaml};
@@ -15,6 +16,27 @@ use crate::parser::{toml, yaml};
 /// together: YAML block mappings 467 deep, each key indented under the one
 /// before, overflow a 2 MB debug stack when they are read.
 pub const VALUE_CAP: usize = 400;
+
+/// Why the TOML and YAML readers stop reading a value: what they met drops
+/// the innermost pair around it, or fails the file.
+pub enum Stop {
+    Drop(ParseError),
+    Fail(ParseError),
+}
+
+impl From<ParseError> for Stop {
+    fn from(error: ParseError) -> Self {
+        Self::Fail(error)
+    }
+}
+
+impl From<Stop> for ParseError {
+    fn from(stop: Stop) -> Self {
+        match stop {
+            Stop::Drop(error) | Stop::Fail(error) => error,
+        }
+    }
+}
 
 /// The frontmatter `source` opens with at byte `start`, if any, and the
 /// offset its body starts at.
@@ -41,14 +63,37 @@ pub fn parse(source: &str, start: usize) -> Result<(Option<Frontmatter>, usize),
     Ok((Some(frontmatter), closing.next))
 }
 
-/// The depth of a value opened at `span` inside `open` values, or an error
+/// The depth of a value opened at `span` inside `open` values, or a drop
 /// pointing at `span` when that passes `VALUE_CAP`.
-pub fn nest(open: usize, span: Range<usize>) -> Result<usize, ParseError> {
+pub fn nest(open: usize, span: Range<usize>) -> Result<usize, Stop> {
     if open < VALUE_CAP {
         return Ok(open + 1);
     }
     let message = format!("the value nests deeper than {VALUE_CAP} levels");
-    Err(ParseError::new(&message, span))
+    Err(Stop::Drop(ParseError::new(&message, span)))
+}
+
+/// What `read` gives, or the error of the drop it raised, after which
+/// `skip` moves the cursor from `start` past what is dropped. A failure
+/// stays one.
+pub fn caught<T, F>(
+    cursor: &mut Cursor<'_>,
+    start: usize,
+    read: Result<T, Stop>,
+    skip: F,
+) -> Result<Result<T, ParseError>, Stop>
+where
+    F: FnOnce(&mut Cursor<'_>),
+{
+    match read {
+        Ok(value) => Ok(Ok(value)),
+        Err(Stop::Drop(error)) => {
+            cursor.set_pos(start);
+            skip(cursor);
+            Ok(Err(error))
+        }
+        Err(failure @ Stop::Fail(_)) => Err(failure),
+    }
 }
 
 /// Adds a pair to a mapping being read. A key written again joins the first

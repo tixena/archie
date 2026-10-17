@@ -1,5 +1,7 @@
-use super::{check, check_spans};
+use super::{check, check_spans, on_two_megabytes};
+use crate::parser::frontmatter::VALUE_CAP;
 use crate::parser::parse;
+use crate::writer::{WriteOptions, write};
 
 /// The outline of a YAML frontmatter that holds no pair, before an empty body.
 const EMPTY_YAML: &str = "Document
@@ -7,6 +9,17 @@ const EMPTY_YAML: &str = "Document
     Mapping
   MarkdownBlock
 ";
+
+/// The outline of a YAML frontmatter that holds no pair, before the heading
+/// `A`.
+const EMPTY_BEFORE_A: &str = r#"Document
+  Frontmatter format=Yaml
+    Mapping
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+"#;
 
 #[test]
 fn a_file_with_no_delimiter_on_its_first_line_has_no_frontmatter() {
@@ -579,5 +592,284 @@ fn an_integer_that_fits_64_bits_stays_an_integer_in_yaml_and_toml() {
     check(
         "+++\nlargest = 9223372036854775807\nsmallest = -9223372036854775808\n+++\n",
         &integers("Toml"),
+    );
+}
+
+/// The outline of a frontmatter in `format` that holds `b: 2` alone, before an
+/// empty body.
+fn only_b(format: &str) -> String {
+    format!(
+        "Document
+  Frontmatter format={format}
+    Mapping
+      Pair key=b
+        Scalar Integer 2
+  MarkdownBlock
+"
+    )
+}
+
+#[test]
+fn a_tag_archie_does_not_read_drops_the_innermost_key_that_holds_it() {
+    for source in [
+        "---\na: !point {x: 1}\nb: 2\n---\n",
+        "---\n!point a: 1\nb: 2\n---\n",
+        "---\ntags: [!point x, y]\nb: 2\n---\n",
+        "---\norigin: !point 3,4\nb: 2\n---\n",
+        "---\ndata: !!binary R0lG\nb: 2\n---\n",
+        "---\norigin: !<tag:example.com,2026:point> 3,4\nb: 2\n---\n",
+        "---\npoints: [!point 3]\nb: 2\n---\n",
+        "---\n!point origin: 3\nb: 2\n---\n",
+        "---\na: !point\n  x: 1\nb: 2\n---\n",
+        "---\na:\n- !point x\n- y\nb: 2\n---\n",
+        "---\n? !point k\n: v\nb: 2\n---\n",
+        "---\n[!point x]: 1\nb: 2\n---\n",
+        "---\na: !point \"x, ]\" # ]\n  [y\nb: 2\n---\n",
+    ] {
+        check(source, &only_b("Yaml"));
+    }
+    check(
+        "---\nowner:\n  pin: !point 1\n  name: Ada\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=owner
+        Mapping
+          Pair key=name
+            Scalar String "Ada"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_tag_archie_does_not_read_inside_a_flow_collection_drops_the_pair_that_holds_it() {
+    let flow_b = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Mapping
+          Pair key=b
+            Scalar Integer 2
+  MarkdownBlock
+";
+    check("---\na: {x: !point 1, b: 2}\n---\n", flow_b);
+    check("---\na: {!point x: 1, b: 2}\n---\n", flow_b);
+    check("---\na: {x: [!point {y: \"}\"}], b: 2}\n---\n", flow_b);
+    check("---\n{x: !point [1, 2],\nb: 2}\n---\n", &only_b("Yaml"));
+    let one_pair = r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Sequence
+          Mapping
+          Scalar String "c"
+  MarkdownBlock
+"#;
+    check("---\na: [!point x: 1, c]\n---\n", one_pair);
+    check("---\na: [x: !point 1, c]\n---\n", one_pair);
+    check("---\na: [[!point x]: 1, c]\n---\n", one_pair);
+    check(
+        "---\nitems:\n- a: !point 1\n  b: 2\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=items
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_tag_that_ends_its_line_over_a_mapping_whose_every_pair_is_dropped_holds_it_empty() {
+    let empty_c = "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=c
+        Mapping
+      Pair key=d
+        Scalar Integer 1
+  MarkdownBlock
+";
+    check("---\nc: !!map\n  a: !point x\nd: 1\n---\n", empty_c);
+    check(
+        "---\nc: !!map\n  [x]: y\n\n  # a comment\nd: 1\n---\n",
+        empty_c,
+    );
+}
+
+#[test]
+fn a_frontmatter_with_a_dropped_tag_is_written_without_its_key() {
+    let document = parse("---\ntitle: Notes\nshape: !point {x: 1, y: 2}\n---\n# Notes\n").unwrap();
+    let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+    assert_eq!(pairs.keys().collect::<Vec<_>>(), ["title"]);
+    assert_eq!(
+        write(&document, &WriteOptions::default()).unwrap(),
+        "---\ntitle: Notes\n---\n# Notes\n"
+    );
+}
+
+/// `deep:` and a YAML list nested `depth` deep in each of its forms, beside
+/// `b: 2`.
+fn deep_yaml_lists(depth: usize) -> [String; 3] {
+    let mut lines = String::new();
+    for level in 0..depth {
+        lines.push_str(&"  ".repeat(level));
+        lines.push_str("-\n");
+    }
+    lines.push_str(&"  ".repeat(depth));
+    lines.push_str("1\n");
+    let flow = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+    [
+        format!("---\ndeep:\n{lines}b: 2\n---\n"),
+        format!("---\ndeep:\n  {}1\nb: 2\n---\n", "- ".repeat(depth)),
+        format!("---\ndeep: {flow}\nb: 2\n---\n"),
+    ]
+}
+
+#[test]
+fn a_yaml_value_nested_past_the_value_cap_drops_the_key_that_holds_it() {
+    on_two_megabytes(|| {
+        for source in deep_yaml_lists(VALUE_CAP + 1) {
+            check(&source, &only_b("Yaml"));
+        }
+        for source in deep_yaml_lists(VALUE_CAP) {
+            let document = parse(&source).unwrap();
+            let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+            assert_eq!(pairs.keys().collect::<Vec<_>>(), ["deep", "b"]);
+        }
+    });
+}
+
+#[test]
+fn a_toml_value_nested_past_the_value_cap_drops_its_pair() {
+    on_two_megabytes(|| {
+        let past = VALUE_CAP + 1;
+        let arrays = format!("{}1{}", "[".repeat(past), "]".repeat(past));
+        let table = format!("{}{{x = 1}}{}", "[".repeat(past - 1), "]".repeat(past - 1));
+        let quoted = format!(
+            "[\n  # ] a comment\n  \"]\", '[', \"\"\"\n]\"\"\", {}1{}]",
+            "[".repeat(past),
+            "]".repeat(past)
+        );
+        for value in [arrays, table, quoted] {
+            check(
+                &format!("+++\ndeep = {value}\nb = 2\n+++\n"),
+                &only_b("Toml"),
+            );
+        }
+        let dotted = "a.".repeat(past);
+        check(
+            &format!("+++\n{dotted}x = 1\nb = 2\n+++\n"),
+            &only_b("Toml"),
+        );
+    });
+}
+
+#[test]
+fn a_toml_header_nested_past_the_value_cap_drops_its_table_and_its_pairs() {
+    let source = format!(
+        "+++\nb = 2\n[{}x]\nc = [\n[1],\n]\nd = \"\"\"\n[e]\n\"\"\"\n[t]\nf = 3\n+++\n",
+        "a.".repeat(VALUE_CAP)
+    );
+    check(
+        &source,
+        "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=b
+        Scalar Integer 2
+      Pair key=t
+        Mapping
+          Pair key=f
+            Scalar Integer 3
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_toml_table_keeps_its_span_to_its_last_pair_that_is_not_dropped() {
+    on_two_megabytes(|| {
+        let source = format!(
+            "+++\n[t]\na = 1\nb = {}1{}\n+++\n",
+            "[".repeat(VALUE_CAP + 1),
+            "]".repeat(VALUE_CAP + 1)
+        );
+        let mapping = parse(&source).unwrap().frontmatter.unwrap().mapping;
+        let pair = &mapping.pairs["t"];
+        assert_eq!(&source[pair.span.clone()], "[t]\na = 1");
+    });
+}
+
+#[test]
+fn a_yaml_frontmatter_that_holds_one_value_or_one_list_is_empty() {
+    for source in ["---\nabc\n---\n# A\n", "---\n- a\n- b\n---\n# A\n"] {
+        check(source, EMPTY_BEFORE_A);
+        let document = parse(source).unwrap();
+        assert_eq!(
+            write(&document, &WriteOptions::default()).unwrap(),
+            "---\n---\n# A\n"
+        );
+    }
+    for content in [
+        "[a, b]",
+        "hello",
+        "\"a\n  b\"",
+        "- a",
+        "99999999999999999999",
+        "- 99999999999999999999",
+        "[99999999999999999999]",
+        "abc # a comment\n\n# another",
+        "  - a\n  - b",
+        "!!seq\n- a",
+    ] {
+        check(&format!("---\n{content}\n---\n# A\n"), EMPTY_BEFORE_A);
+    }
+}
+
+#[test]
+fn a_yaml_frontmatter_that_holds_one_value_or_one_list_with_a_drop_is_empty() {
+    on_two_megabytes(|| {
+        // A list at the root opens no level of its own.
+        let past = VALUE_CAP + 2;
+        for content in [
+            "!point x".to_owned(),
+            "- !point x\n- y".to_owned(),
+            "[!point x, y]".to_owned(),
+            "!!seq\n- !point x".to_owned(),
+            format!("{}1{}", "[".repeat(past), "]".repeat(past)),
+            format!("{}1", "- ".repeat(past)),
+        ] {
+            check(&format!("---\n{content}\n---\n# A\n"), EMPTY_BEFORE_A);
+        }
+    });
+}
+
+#[test]
+fn the_empty_mapping_of_a_frontmatter_that_holds_one_value_spans_the_value() {
+    let list = "---\n- a\n- b\n---\n";
+    check_spans(
+        list,
+        &[
+            ("Document", list),
+            ("Frontmatter format=Yaml", "---\n- a\n- b\n---"),
+            ("Mapping", "- a\n- b"),
+            ("MarkdownBlock", ""),
+        ],
+    );
+    let dropped = "---\n- !point x\n- y\n\n---\n";
+    check_spans(
+        dropped,
+        &[
+            ("Document", dropped),
+            ("Frontmatter format=Yaml", "---\n- !point x\n- y\n\n---"),
+            ("Mapping", "- !point x\n- y"),
+            ("MarkdownBlock", ""),
+        ],
     );
 }

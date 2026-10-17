@@ -476,10 +476,15 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   header through such a key goes on into the last mapping of its list.
 - Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
   dotted keys and of headers count together, and in YAML so do flow and block
-  collections, tags on collections and explicit keys. Past that depth the file fails
-  with `the value nests deeper than 400 levels`, pointing at the value that passes it,
-  so that every operation on the tree stays within a 2 MB stack in a debug build. The
-  same cap holds for a code block's args, which past it stay `Text`.
+  collections, tags on collections and explicit keys. The innermost pair that holds a
+  value past that depth is dropped, and the mapping keeps its other pairs, so that
+  every operation on the tree stays within a 2 MB stack in a debug build: a value or a
+  dotted key past the cap drops its pair, and a header past it drops its table with the
+  pairs under it, up to the next header. `deep =` and arrays nested 401 deep, then
+  `b = 2`, is `{b = 2}`, and inline tables `{a = {a = ...}}` nested 401 deep lose only
+  their innermost pair. What follows the value that passes the cap, up to the end of
+  the pair, is not read. The same cap holds for a code block's args, which past it stay
+  `Text`.
 
 A value's type comes from how it is written:
 
@@ -528,8 +533,11 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
 ```
 
 - The frontmatter is a block mapping, or one flow mapping with nothing but comments
-  after it. A frontmatter that is a list or a scalar fails the file with
-  `the frontmatter must be a mapping`.
+  after it. A frontmatter that holds one list or one scalar, with nothing but comments
+  after it, holds no key, and is an empty mapping: `abc`, `[a, b]`, and `- a` then
+  `- b` are all `{}`. One whose list or scalar does not read fails the file with
+  `the frontmatter must be a mapping`, as `[unclosed` and `!!int abc` do, and so does
+  one with more after its list or its scalar.
 - `INDENT` is a line indented more than the key above it; `DEDENT` is the return to
   an earlier indentation. Every key of one mapping starts at the same column.
 - A `block` may be a sequence written at the same column as its key (the second form
@@ -656,8 +664,8 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
   as `a: [unclosed` does, and `!!str [x]: y` with
   ``a list is not a value of the tag `!!str` ``.
 - A frontmatter whose first line starts with `{` is one flow mapping, and one whose
-  first line starts with `[` is not a mapping, unless the flow collection is a key
-  as above.
+  first line starts with `[` is one list, unless the flow collection is a key as
+  above.
 - Outside a flow collection, a `PLAIN` whose line has no comment goes on over each
   following line that is indented more than its key or `-`, is not a comment and
   holds no `key:`; blank lines may sit between them, and a comment ends the last
@@ -718,8 +726,11 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
 - An anchor (`&name`) or an alias (`*name`), on a value or on a key, fails the file
   with `anchors and aliases are not read`.
 - Values nest at most 400 deep, by the cap stated under
-  [TOML frontmatter](#toml-frontmatter). A tag on a collection and an explicit key
-  each count as a level of their own.
+  [TOML frontmatter](#toml-frontmatter), and the innermost key that holds a value past
+  it is dropped with its value: `deep:` and a list nested 401 deep under it, then
+  `b: 2`, is `{b: 2}`. A tag on a collection and an explicit key each count as a level
+  of their own, and an explicit key whose `?` passes the cap drops its own pair. A
+  frontmatter that holds one list or one scalar nested past the cap is empty.
 
 `BLOCK_SCALAR` is read whole, by YAML 1.2.2 section 8.1:
 
@@ -740,8 +751,14 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY
 
 `TAG` is `!!` followed by `str`, `int`, `float`, `bool`, `null`, `map`, `seq` or
 `timestamp`, or the same type written in full, such as `!<tag:yaml.org,2002:str>`.
-Any other tag, such as `!point`, fails the file with
-``the tag `!point` is not one archie reads``. A value has at most one tag:
+Any other tag, such as `!point`, drops the innermost key that holds it, with its
+value, and the mapping keeps its other pairs. `a: !point {x: 1}` then `b: 2` is
+`{b: 2}`, `!point a: 1` then `b: 2` is `{b: 2}`, `tags: [!point x, y]` then `b: 2` is
+`{b: 2}`, `owner:` then `  pin: !point 1` then `  name: Ada` is
+`{owner: {name: Ada}}`, and `a: [!point x: 1, c]` is `{a: [{}, c]}`. The value after
+such a tag is not read, up to the end of the pair; a key after it is read first. A
+frontmatter that holds one list or one scalar with such a tag is empty. A value has
+at most one tag:
 `a: !!str !!str x` fails the file with `a value has at most one tag`, pointing at the
 second tag, and so does a second tag on a key, inside a flow collection, or on the
 line under a tag that ends its line.
@@ -789,9 +806,10 @@ A `PLAIN` value's type comes from how it is written:
 | `Mapping` written as `{ ... }` | `{` | `}` |
 | `Mapping` whose every pair is dropped | Empty, at the start of its first pair | |
 | `Mapping` with no pairs written, at the root | Empty, on the line after the opening delimiter | |
+| `Mapping` of a YAML frontmatter that holds one list or one scalar | The value | The end of the value, or of the frontmatter's last text when the value is dropped |
 | `Mapping` of a TOML table with no pairs | Empty, right after its header | |
 | Any other `Mapping` | The start of its first pair | The end of the last value written in it |
-| `Pair` | Its key, the `?` of an explicit key, the first part of a dotted key, or the header that makes it | The end of its value, or for a header, the end of the last line of the table it opens, where the key is first written; `repeats` holds the same range for each later place the key is written |
+| `Pair` | Its key, the `?` of an explicit key, the first part of a dotted key, or the header that makes it | The end of its value, or for a header, the end of the last line of the table it opens that is not a dropped pair, where the key is first written; `repeats` holds the same range for each later place the key is written |
 | `Sequence` written as `[ ... ]` | `[` | `]` |
 | `Sequence` written as `-` lines | The first `-` | The end of the last value |
 | `Sequence` written as `[[name]]` headers | The first header | The end of the last line of the last table |
@@ -1073,14 +1091,17 @@ with the text it reads from and the text it writes.
    it. TOML refuses each of them.
 2. An integer that does not fit 64 bits is the String of its text as written. TOML
    refuses it.
+3. A value or a dotted key nested past 400 levels drops its pair, and a header past
+   them drops its table with its pairs. TOML reads them.
 
 ### From YAML
 
 1. Dates and date-times are in the schema: an unquoted date whose day exists in the
    calendar, or a date-time whose date does, is a Date, a DateTime or a LocalDateTime.
    The YAML 1.2.2 core schema has no date type and reads it as a string.
-2. Anchors and aliases are refused, and so is every tag other than the eight above.
-   Each is refused with an error that names it.
+2. Anchors and aliases are refused, with an error that names them. A tag other than
+   the eight above, and a value nested past 400 levels, drop the innermost key that
+   holds them, with its value. YAML reads both.
 3. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
 4. A pair whose key is a list or a mapping is dropped, and the mapping keeps its

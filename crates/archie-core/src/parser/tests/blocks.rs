@@ -1510,20 +1510,27 @@ fn args_whose_inline_table_ends_before_the_last_brace_are_text() {
 fn args_nested_past_the_value_cap_are_text_and_written_back_as_they_were() {
     on_two_megabytes(|| {
         // The table the args are read in opens one value around them.
-        let args = format!("a = {}1{}", "[".repeat(VALUE_CAP), "]".repeat(VALUE_CAP));
-        let source = format!("```md {args}\nx\n```\n");
-        let document = parse(&source).unwrap();
-        let read = match &document.body.sections[0].blocks[0] {
-            Block::CodeBlock(code) => Some(&code.args),
-            Block::BlockQuote(_)
-            | Block::Html(_)
-            | Block::List(_)
-            | Block::Paragraph(_)
-            | Block::Table(_)
-            | Block::ThematicBreak(_) => None,
-        };
-        assert!(matches!(read, Some(Args::Text(text)) if *text == args));
-        assert_eq!(write(&document, &WriteOptions::default()).unwrap(), source);
+        let lists = format!("a = {}1{}", "[".repeat(VALUE_CAP), "]".repeat(VALUE_CAP));
+        let tables = format!(
+            "a = {}1{}, c = 2",
+            "{b = ".repeat(VALUE_CAP),
+            "}".repeat(VALUE_CAP)
+        );
+        for args in [lists, tables] {
+            let source = format!("```md {args}\nx\n```\n");
+            let document = parse(&source).unwrap();
+            let read = match &document.body.sections[0].blocks[0] {
+                Block::CodeBlock(code) => Some(&code.args),
+                Block::BlockQuote(_)
+                | Block::Html(_)
+                | Block::List(_)
+                | Block::Paragraph(_)
+                | Block::Table(_)
+                | Block::ThematicBreak(_) => None,
+            };
+            assert!(matches!(read, Some(Args::Text(text)) if *text == args));
+            assert_eq!(write(&document, &WriteOptions::default()).unwrap(), source);
+        }
     });
 }
 

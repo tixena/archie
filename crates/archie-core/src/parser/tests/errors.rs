@@ -70,29 +70,14 @@ fn failed(source: &str) -> (String, String) {
 }
 
 #[test]
-fn a_tag_archie_does_not_read_is_refused_by_name() {
+fn a_dropped_tag_does_not_hide_text_yaml_does_not_allow_before_its_value() {
     assert_eq!(
-        failed("---\norigin: !point 3,4\n---\n"),
-        named("the tag `!point` is not one archie reads", "!point")
+        failed("---\n!point @x: 1\n---\n"),
+        named("a plain key cannot start with `@`; quote it", "@")
     );
     assert_eq!(
-        failed("---\ndata: !!binary R0lG\n---\n"),
-        named("the tag `!!binary` is not one archie reads", "!!binary")
-    );
-    assert_eq!(
-        failed("---\norigin: !<tag:example.com,2026:point> 3,4\n---\n"),
-        named(
-            "the tag `!<tag:example.com,2026:point>` is not one archie reads",
-            "!<tag:example.com,2026:point>"
-        )
-    );
-    assert_eq!(
-        failed("---\npoints: [!point 3]\n---\n"),
-        named("the tag `!point` is not one archie reads", "!point")
-    );
-    assert_eq!(
-        failed("---\n!point origin: 3\n---\n"),
-        named("the tag `!point` is not one archie reads", "!point")
+        failed("---\na: !point\n  \t- x\n---\n"),
+        named("a tab cannot indent a line; use spaces", "\t")
     );
 }
 
@@ -236,25 +221,20 @@ fn an_empty_entry_of_a_flow_collection_is_refused_at_its_comma() {
 }
 
 #[test]
-fn a_frontmatter_that_is_not_a_mapping_is_refused() {
+fn a_frontmatter_with_more_after_its_one_value_is_refused() {
     let not_a_mapping = |at: &str| named("the frontmatter must be a mapping", at);
-    assert_eq!(failed("---\n[a, b]\n---\n"), not_a_mapping("[a, b]"));
-    assert_eq!(failed("---\nhello\n---\n"), not_a_mapping("hello"));
+    assert_eq!(failed("---\n[a, b]\nc: 1\n---\n"), not_a_mapping("[a, b]"));
+    assert_eq!(failed("---\n[a, b] c\n---\n"), not_a_mapping("[a, b]"));
+    assert_eq!(failed("---\nhello\nc: 1\n---\n"), not_a_mapping("hello"));
+    assert_eq!(failed("---\n- a\nc: 1\n---\n"), not_a_mapping("- a"));
     assert_eq!(
-        failed("---\n\"a\n  b\"\n---\n"),
-        not_a_mapping("\"a\n  b\"")
+        failed("---\n[!point a]\nc: 1\n---\n"),
+        not_a_mapping("[!point a]\nc: 1")
     );
-    assert_eq!(failed("---\n- a\n---\n"), not_a_mapping("- a"));
-    for digits in [
-        "99999999999999999999",
-        "- 99999999999999999999",
-        "[99999999999999999999]",
-    ] {
-        assert_eq!(
-            failed(&format!("---\n{digits}\n---\n")),
-            not_a_mapping(digits)
-        );
-    }
+    assert_eq!(
+        failed("---\n- !point a\nc: 1\n---\n"),
+        not_a_mapping("- !point a\nc: 1")
+    );
     assert_eq!(
         refusal("---\n{a: 1}\nb: 2\n---\n"),
         (
@@ -268,7 +248,7 @@ fn a_frontmatter_that_is_not_a_mapping_is_refused() {
 fn a_frontmatter_that_holds_one_value_or_one_list_that_does_not_read_is_not_a_mapping() {
     let not_a_mapping = |at: &str| named("the frontmatter must be a mapping", at);
     for (source, at) in [
-        ("---\nabc\n---\n", "abc"),
+        ("---\n[unclosed\n---\n", "[unclosed"),
         ("---\n!!int abc\n---\n", "!!int abc"),
         ("---\n- !!int abc\n---\n", "- !!int abc"),
         ("---\n[!!int abc]\n---\n", "[!!int abc]"),
@@ -558,8 +538,8 @@ fn the_key_of_a_pair_inside_a_flow_list_stays_on_one_line() {
 }
 
 /// The frontmatter of each shape of nesting the readers count, its values
-/// `depth` deep, with the character that opens its innermost value.
-fn nested_frontmatter(depth: usize) -> [(String, char); 6] {
+/// `depth` deep.
+fn nested_frontmatter(depth: usize) -> [String; 6] {
     let lists = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
     let tables = format!("{}1{}", "{b = ".repeat(depth), "}".repeat(depth));
     let mut keys = String::new();
@@ -570,15 +550,12 @@ fn nested_frontmatter(depth: usize) -> [(String, char); 6] {
     keys.push_str(&"  ".repeat(depth));
     keys.push_str("b: 1\n");
     [
-        (format!("+++\na = {lists}\n+++\n"), '['),
-        (format!("+++\na = {tables}\n+++\n"), '{'),
-        (format!("+++\n{}b = 1\n+++\n", "a.".repeat(depth)), 'a'),
-        (
-            format!("+++\n[{}b]\nc = 1\n+++\n", "a.".repeat(depth - 1)),
-            'b',
-        ),
-        (format!("---\na: {lists}\n---\n"), '['),
-        (format!("---\n{keys}---\n"), 'b'),
+        format!("+++\na = {lists}\n+++\n"),
+        format!("+++\na = {tables}\n+++\n"),
+        format!("+++\n{}b = 1\n+++\n", "a.".repeat(depth)),
+        format!("+++\n[{}b]\nc = 1\n+++\n", "a.".repeat(depth - 1)),
+        format!("---\na: {lists}\n---\n"),
+        format!("---\n{keys}---\n"),
     ]
 }
 
@@ -618,7 +595,7 @@ fn frontmatter_depth(document: &Document) -> usize {
 #[test]
 fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
     on_two_megabytes(|| {
-        for (source, _) in nested_frontmatter(VALUE_CAP) {
+        for source in nested_frontmatter(VALUE_CAP) {
             let document = parse(&source).unwrap();
             assert_eq!(frontmatter_depth(&document), VALUE_CAP);
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
@@ -642,17 +619,27 @@ fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
     });
 }
 
+/// Reads `source`, checks that its frontmatter nests `depth` deep, and writes
+/// it in YAML and in TOML, each written text reading back to that depth.
+fn reads_and_writes_at_depth(source: &str, depth: usize) {
+    let document = parse(source).unwrap();
+    assert_eq!(frontmatter_depth(&document), depth);
+    for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
+        let options = WriteOptions {
+            frontmatter: format,
+        };
+        let written = write(&document, &options).unwrap();
+        assert_eq!(frontmatter_depth(&parse(&written).unwrap()), depth);
+    }
+}
+
 #[test]
-fn frontmatter_nested_one_level_past_the_value_cap_is_refused_at_its_innermost_value() {
+fn frontmatter_nested_one_level_past_the_value_cap_drops_the_innermost_pair_that_holds_it() {
     on_two_megabytes(|| {
-        for (source, opener) in nested_frontmatter(VALUE_CAP + 1) {
-            let error = parse(&source).unwrap_err();
-            assert_eq!(
-                error.message,
-                format!("the value nests deeper than {VALUE_CAP} levels")
-            );
-            let at = source.rfind(opener).unwrap();
-            assert_eq!(error.span, at..at + 1);
+        // A pair whose value holds a key keeps every level but the dropped one.
+        let kept = [0, VALUE_CAP, 0, 0, 0, VALUE_CAP];
+        for (source, depth) in nested_frontmatter(VALUE_CAP + 1).iter().zip(kept) {
+            reads_and_writes_at_depth(source, depth);
         }
     });
 }
@@ -662,6 +649,8 @@ fn a_second_tag_on_a_value_or_a_key_is_refused_where_it_starts() {
     on_two_megabytes(|| {
         for source in [
             "---\na: !!str !!str x\n---\n",
+            "---\na: !point !!str x\n---\n",
+            "---\n!point !!str a: 1\n---\n",
             "---\n!!str !!str a: 1\n---\n",
             "---\na: [!!str !!str x]\n---\n",
             "---\na: {!!str !!str b: 1}\n---\n",
@@ -676,9 +665,9 @@ fn a_second_tag_on_a_value_or_a_key_is_refused_where_it_starts() {
 }
 
 /// The frontmatter of each shape of nesting whose levels each hold a tag on
-/// a collection or an explicit key, `levels` deep, with the text that opens
-/// its innermost level. Each level counts twice toward the value cap.
-fn tagged_frontmatter(levels: usize) -> [(String, &'static str); 3] {
+/// a collection or an explicit key, `levels` deep. Each level counts twice
+/// toward the value cap.
+fn tagged_frontmatter(levels: usize) -> [String; 3] {
     let mut tags = String::new();
     let mut explicit = String::new();
     for level in 0..levels {
@@ -693,9 +682,9 @@ fn tagged_frontmatter(levels: usize) -> [(String, &'static str); 3] {
     let innermost = "  ".repeat(levels);
     let lists = format!("{}1{}", "!!seq [".repeat(levels), "]".repeat(levels));
     [
-        (format!("---\n{tags}{innermost}b: 1\n---\n"), "!!"),
-        (format!("---\na: {lists}\n---\n"), "!!"),
-        (format!("---\n{explicit}{innermost}b: 1\n---\n"), "?"),
+        format!("---\n{tags}{innermost}b: 1\n---\n"),
+        format!("---\na: {lists}\n---\n"),
+        format!("---\n{explicit}{innermost}b: 1\n---\n"),
     ]
 }
 
@@ -703,7 +692,7 @@ fn tagged_frontmatter(levels: usize) -> [(String, &'static str); 3] {
 fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
     on_two_megabytes(|| {
         let levels = VALUE_CAP / 2;
-        for (source, _) in tagged_frontmatter(levels) {
+        for source in tagged_frontmatter(levels) {
             let document = parse(&source).unwrap();
             assert_eq!(frontmatter_depth(&document), levels);
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
@@ -728,16 +717,12 @@ fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
 }
 
 #[test]
-fn tags_and_explicit_keys_nested_one_level_past_the_value_cap_are_refused_at_the_innermost() {
+fn tags_and_explicit_keys_nested_one_level_past_the_value_cap_drop_the_innermost_pair() {
     on_two_megabytes(|| {
-        for (source, opener) in tagged_frontmatter(VALUE_CAP / 2 + 1) {
-            let error = parse(&source).unwrap_err();
-            assert_eq!(
-                error.message,
-                format!("the value nests deeper than {VALUE_CAP} levels")
-            );
-            let at = source.rfind(opener).unwrap();
-            assert_eq!(error.span, at..at + 1);
+        let levels = VALUE_CAP / 2;
+        let kept = [levels, 0, levels];
+        for (source, depth) in tagged_frontmatter(levels + 1).iter().zip(kept) {
+            reads_and_writes_at_depth(source, depth);
         }
     });
 }

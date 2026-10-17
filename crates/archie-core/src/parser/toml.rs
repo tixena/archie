@@ -11,7 +11,7 @@ use indexmap::map::Entry;
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{append, extent, finish, insert, nest};
+use crate::parser::frontmatter::{Stop, append, caught, extent, finish, insert, nest};
 use crate::parser::scalar;
 
 /// One part of a key, such as `name` in `owner.name`, and where it is
@@ -25,6 +25,12 @@ type Part = (String, Range<usize>);
 struct Made(HashMap<String, Self>);
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
+    read(source, content).map(|(mapping, _)| mapping)
+}
+
+/// The mapping [`parse`] reads, with the error of each pair and table it
+/// dropped.
+pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<ParseError>), ParseError> {
     let empty_at = content.start;
     let mut cursor = Cursor::new(source, content);
     let mut root = IndexMap::new();
@@ -39,22 +45,39 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
         if cursor.at_end() {
             break;
         }
-        if cursor.peek() == Some(b'[') {
-            current = header(&mut cursor, &mut root, &mut implicit, &made)?;
-            make(&mut made, &current);
+        let start = cursor.pos();
+        let kept = if cursor.peek() == Some(b'[') {
+            let read = header(&mut cursor, &mut root, &mut implicit, &made);
+            match caught(&mut cursor, start, read, skip_table)? {
+                Ok(path) => {
+                    current = path;
+                    make(&mut made, &current);
+                    true
+                }
+                Err(dropped) => {
+                    cursor.note_drop(dropped);
+                    false
+                }
+            }
         } else {
             let table = table_at(&mut root, &current);
-            let keys = entry(&mut cursor, table, make(&mut made, &current), current.len())?;
-            // The key written with `=` holds a value of its own, so no table
-            // under it is one only a deeper header made.
-            let full = [current.as_slice(), keys.as_slice()].concat();
-            implicit
-                .retain(|path| !dotted_through(path, &current, &keys) && !path.starts_with(&full));
+            let read = entry(&mut cursor, table, make(&mut made, &current), current.len())?;
+            if let Some(keys) = &read {
+                // The key written with `=` holds a value of its own, so no
+                // table under it is one only a deeper header made.
+                let full = [current.as_slice(), keys.as_slice()].concat();
+                implicit.retain(|path| {
+                    !dotted_through(path, &current, keys) && !path.starts_with(&full)
+                });
+            }
+            read.is_some()
+        };
+        if kept {
+            stretch(&mut root, &current, cursor.pos());
         }
-        stretch(&mut root, &current, cursor.pos());
         end_of_line(&mut cursor)?;
     }
-    Ok(finish(root, empty_at))
+    Ok((finish(root, empty_at), cursor.into_dropped()))
 }
 
 /// Reads a `[a.b]` or `[[a.b]]` header, opens the table it names and returns
@@ -67,7 +90,7 @@ fn header(
     root: &mut IndexMap<String, Pair>,
     implicit: &mut Vec<Vec<String>>,
     made: &Made,
-) -> Result<Vec<String>, ParseError> {
+) -> Result<Vec<String>, Stop> {
     let start = cursor.pos();
     cursor.bump();
     let array = cursor.eat(b'[');
@@ -229,13 +252,34 @@ fn dotted_through(path: &[String], current: &[String], keys: &[String]) -> bool 
 
 /// Reads `key = value` into `pairs`, a table inside `open` values whose
 /// tables a dotted key or a header made are `made`, and returns the parts of
-/// the key.
+/// the key, or `None` when the pair is dropped.
 fn entry(
     cursor: &mut Cursor<'_>,
     pairs: &mut IndexMap<String, Pair>,
     made: &mut Made,
     open: usize,
-) -> Result<Vec<String>, ParseError> {
+) -> Result<Option<Vec<String>>, Stop> {
+    let start = cursor.pos();
+    let read = pair(cursor, open);
+    let (parents, last, value) = match caught(cursor, start, read, skip_pair)? {
+        Ok(parts) => parts,
+        Err(dropped) => {
+            cursor.note_drop(dropped);
+            return Ok(None);
+        }
+    };
+    let keys = parents
+        .iter()
+        .chain(iter::once(&last))
+        .map(|(name, _)| name.clone())
+        .collect();
+    put(pairs, made, &parents, last, value);
+    Ok(Some(keys))
+}
+
+/// The parts before the last of a `key = value` pair inside `open` values,
+/// the last, and the value.
+fn pair(cursor: &mut Cursor<'_>, open: usize) -> Result<(Vec<Part>, Part, Value), Stop> {
     let (parents, last) = key_path(cursor)?;
     let depth = parents
         .iter()
@@ -245,13 +289,48 @@ fn entry(
     }
     cursor.skip_spaces();
     let value = value(cursor, depth)?;
-    let keys = parents
-        .iter()
-        .chain(iter::once(&last))
-        .map(|(name, _)| name.clone())
-        .collect();
-    put(pairs, made, &parents, last, value);
-    Ok(keys)
+    Ok((parents, last, value))
+}
+
+/// Moves the cursor from the start of a pair that is dropped to its end:
+/// the first `,`, `]`, `}` or line ending outside every bracket the pair
+/// opens. Strings and comments are passed over whole.
+fn skip_pair(cursor: &mut Cursor<'_>) {
+    let mut depth = 0_usize;
+    loop {
+        match cursor.peek() {
+            None => return,
+            Some(b',' | b']' | b'}' | b'\n') if depth == 0 => return,
+            Some(b'[' | b'{') => depth += 1,
+            Some(b']' | b'}') => depth -= 1,
+            Some(b'"' | b'\'') => {
+                let _: Result<Value, ParseError> = quoted(cursor);
+                continue;
+            }
+            Some(b'#') => {
+                skip_comment(cursor);
+                continue;
+            }
+            Some(_) => {}
+        }
+        cursor.bump();
+    }
+}
+
+/// Moves the cursor from a header that is dropped past its table and the
+/// pairs in it: to the line ending before the next header, or to the end.
+fn skip_table(cursor: &mut Cursor<'_>) {
+    loop {
+        skip_pair(cursor);
+        let rest = cursor.rest();
+        let header_follows = rest
+            .strip_prefix('\n')
+            .is_some_and(|next| next.trim_start_matches([' ', '\t']).starts_with('['));
+        if rest.is_empty() || header_follows {
+            return;
+        }
+        cursor.bump();
+    }
 }
 
 /// Adds `value` under `last`, inside the tables `parents` name. A part goes
@@ -340,29 +419,28 @@ fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
 }
 
 /// The value at the cursor, inside `open` values.
-fn value(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
-    let start = cursor.pos();
+fn value(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
     match cursor.peek() {
-        Some(b'"') => {
-            let text = if cursor.eat_str("\"\"\"") {
-                multi_line_basic_string(cursor)?
-            } else {
-                basic_string(cursor)?
-            };
-            Ok(string(start..cursor.pos(), text))
-        }
-        Some(b'\'') => {
-            let text = if cursor.eat_str("'''") {
-                multi_line_literal_string(cursor)?
-            } else {
-                literal_string(cursor)?
-            };
-            Ok(string(start..cursor.pos(), text))
-        }
+        Some(b'"' | b'\'') => quoted(cursor).map_err(Stop::Fail),
         Some(b'[') => array(cursor, open),
         Some(b'{') => inline_table(cursor, open),
-        Some(_) | None => bare(cursor),
+        Some(_) | None => bare(cursor).map_err(Stop::Fail),
     }
+}
+
+/// The string at the cursor, written with `"`, `'`, `"""` or `'''`.
+fn quoted(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
+    let start = cursor.pos();
+    let text = if cursor.eat_str("\"\"\"") {
+        multi_line_basic_string(cursor)?
+    } else if cursor.eat_str("'''") {
+        multi_line_literal_string(cursor)?
+    } else if cursor.peek() == Some(b'"') {
+        basic_string(cursor)?
+    } else {
+        literal_string(cursor)?
+    };
+    Ok(string(start..cursor.pos(), text))
 }
 
 const fn string(span: Range<usize>, text: String) -> Value {
@@ -481,7 +559,7 @@ fn literal_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     Ok(text)
 }
 
-fn array(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
+fn array(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
     let start = cursor.pos();
     let depth = nest(open, start..start + 1)?;
     cursor.bump();
@@ -506,7 +584,7 @@ fn array(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
     }))
 }
 
-fn inline_table(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
+fn inline_table(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
     let start = cursor.pos();
     let depth = nest(open, start..start + 1)?;
     cursor.bump();

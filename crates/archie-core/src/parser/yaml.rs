@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{finish, insert, nest};
+use crate::parser::frontmatter::{Stop, caught, finish, insert, nest};
 use crate::parser::scalar;
 
 /// The core-schema tags archie reads, plus `!!timestamp`.
@@ -79,9 +79,10 @@ impl Read {
     }
 }
 
-/// A tag archie reads: the type it names and where it is written.
+/// A tag as written: the type it names, `None` when archie does not read
+/// it, and where it is written.
 struct Tag {
-    name: &'static str,
+    name: Option<&'static str>,
     span: Range<usize>,
 }
 
@@ -107,16 +108,21 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             Ok(mapping)
         }
         Some(b'[') if !starts_mapping(&mut cursor, 0) => {
-            let span = flow_sequence(&mut cursor, None, 0)
-                .map_or_else(|_| to_last_text(&cursor, root), |list| list.span().clone());
-            Err(not_a_mapping(&span))
+            let read = flow_sequence(&mut cursor, None, 0);
+            match caught(&mut cursor, root, read, skip_collection) {
+                Ok(list) => only_value(&mut cursor, root, list.ok()),
+                Err(_) => Err(not_a_mapping(&to_last_text(&cursor, root))),
+            }
         }
         Some(_) | None => {
             cursor.set_pos(line_start);
-            let mapping = block_mapping(&mut cursor, indent, 0).map_err(|error| {
-                cursor.set_pos(root);
-                lone_value(&mut cursor, indent).map_or(error, |span| not_a_mapping(&span))
-            })?;
+            let mapping = match block_mapping(&mut cursor, indent, 0) {
+                Ok(mapping) => mapping,
+                Err(error) => {
+                    cursor.set_pos(root);
+                    return lone_value(&mut cursor, indent).unwrap_or_else(|| Err(error.into()));
+                }
+            };
             if next_line(&mut cursor).is_some() {
                 return cursor.error("this line is indented less than the first key");
             }
@@ -125,23 +131,44 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
     }
 }
 
-/// The span of the value at the cursor when it fills its line, as a scalar
-/// or a list does and a key does not. A list or a line that holds no key
-/// spans to the frontmatter's last text when it does not read.
-fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Range<usize>> {
+/// The frontmatter whose content is the value at the cursor, which fills its
+/// line as a scalar or a list does: see [`only_value`]. `None` when the line
+/// holds a key and does not read or raises a drop.
+fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Result<Mapping, ParseError>> {
     let start = cursor.pos();
     let is_list = is_dash(cursor, 0);
     let is_value = is_list || !holds_key(cursor);
     let read = if is_list {
         block_sequence(cursor, start - indent, indent, 0)
     } else {
-        inline_value(cursor, Context::Key(indent), 0)
-            .and_then(|value| end_of_line(cursor).map(|()| value))
+        inline_value(cursor, Context::Key(indent), 0).and_then(|value| {
+            end_of_line(cursor)?;
+            Ok(value)
+        })
     };
-    read.map_or_else(
-        |_| is_value.then(|| to_last_text(cursor, start)),
-        |value| Some(value.span().clone()),
-    )
+    match caught(cursor, start, read, |inner| skip_block(inner, indent)) {
+        Ok(Ok(value)) => Some(only_value(cursor, start, Some(value))),
+        Ok(Err(_)) => is_value.then(|| only_value(cursor, start, None)),
+        Err(_) => is_value.then(|| Err(not_a_mapping(&to_last_text(cursor, start)))),
+    }
+}
+
+/// The frontmatter whose content is one value, read from `start` up to the
+/// cursor: `value`, or `None` when it raised a drop. With nothing after it,
+/// that is an empty mapping spanning the value, as no key holds it.
+fn only_value(
+    cursor: &mut Cursor<'_>,
+    start: usize,
+    value: Option<Value>,
+) -> Result<Mapping, ParseError> {
+    let span = value.map_or_else(|| to_last_text(cursor, start), |read| read.span().clone());
+    if end_of_line(cursor).is_err() || next_line(cursor).is_some() {
+        return Err(not_a_mapping(&span));
+    }
+    Ok(Mapping {
+        pairs: IndexMap::new(),
+        span,
+    })
 }
 
 /// Whether the line at the cursor holds a key: it starts a mapping, or a
@@ -182,11 +209,7 @@ fn next_line(cursor: &mut Cursor<'_>) -> Option<usize> {
 
 /// The pairs written at exactly `indent`, starting at the cursor's line: a
 /// mapping `depth` values deep.
-fn block_mapping(
-    cursor: &mut Cursor<'_>,
-    indent: usize,
-    depth: usize,
-) -> Result<Mapping, ParseError> {
+fn block_mapping(cursor: &mut Cursor<'_>, indent: usize, depth: usize) -> Result<Mapping, Stop> {
     let empty_at = cursor.pos() + indent;
     let mut pairs = IndexMap::new();
     mapping_lines(cursor, indent, depth, &mut pairs)?;
@@ -200,7 +223,7 @@ fn mapping_lines(
     indent: usize,
     depth: usize,
     pairs: &mut IndexMap<String, Pair>,
-) -> Result<(), ParseError> {
+) -> Result<(), Stop> {
     while let Some(found) = next_line(cursor) {
         if found < indent {
             break;
@@ -210,13 +233,28 @@ fn mapping_lines(
         }
         cursor.set_pos(cursor.pos() + indent);
         if cursor.peek() == Some(b'\t') {
-            return Err(tab_indent(cursor.pos()));
+            return Err(tab_indent(cursor.pos()).into());
         }
         if is_dash(cursor, 0) {
             return cursor.error("expected a key, found a list entry");
         }
-        entry(cursor, indent, depth, pairs)?;
+        let start = cursor.pos();
+        let read = entry(cursor, indent, depth, pairs);
+        skip_dropped(cursor, start, indent, read)?;
     }
+    Ok(())
+}
+
+/// `read`, the pair of a block mapping that starts at `start` with its key
+/// at column `indent`; when it raised a drop, the cursor moves past the pair,
+/// which adds nothing.
+fn skip_dropped(
+    cursor: &mut Cursor<'_>,
+    start: usize,
+    indent: usize,
+    read: Result<(), Stop>,
+) -> Result<(), Stop> {
+    let _: Result<(), ParseError> = caught(cursor, start, read, |inner| skip_block(inner, indent))?;
     Ok(())
 }
 
@@ -230,27 +268,24 @@ fn add(pairs: &mut IndexMap<String, Pair>, read: Read) {
 /// A mapping `depth` values deep whose first key is written on a list
 /// entry's line, at `column`; its other keys follow on lines indented to that
 /// column.
-fn entry_mapping(
-    cursor: &mut Cursor<'_>,
-    column: usize,
-    depth: usize,
-) -> Result<Mapping, ParseError> {
+fn entry_mapping(cursor: &mut Cursor<'_>, column: usize, depth: usize) -> Result<Mapping, Stop> {
     let empty_at = cursor.pos();
     let mut pairs = IndexMap::new();
-    entry(cursor, column, depth, &mut pairs)?;
+    let read = entry(cursor, column, depth, &mut pairs);
+    skip_dropped(cursor, empty_at, column, read)?;
     mapping_lines(cursor, column, depth, &mut pairs)?;
     Ok(finish(pairs, empty_at))
 }
 
 /// One pair of a block mapping whose keys are at column `indent`, inside
 /// `open` values: a `key:` and its value, a `:` and its value with the empty
-/// key, or an explicit key after `?`.
+/// key, or an explicit key after `?`. A drop leaves `pairs` as it was.
 fn entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
     open: usize,
     pairs: &mut IndexMap<String, Pair>,
-) -> Result<(), ParseError> {
+) -> Result<(), Stop> {
     if is_explicit_key(cursor) {
         return explicit_entry(cursor, indent, open, pairs);
     }
@@ -281,7 +316,7 @@ fn explicit_entry(
     indent: usize,
     open: usize,
     pairs: &mut IndexMap<String, Pair>,
-) -> Result<(), ParseError> {
+) -> Result<(), Stop> {
     let start = cursor.pos();
     let depth = nest(open, start..start + 1)?;
     let key = compact_value(cursor, start - indent, indent, Context::Key(indent), depth)?;
@@ -300,6 +335,29 @@ fn explicit_entry(
     Ok(())
 }
 
+/// Moves the cursor from the start of a pair whose key is at column `indent`
+/// past it: the rest of its line, then the lines indented more and the list
+/// entries at that column, and after `?` the line of its `:` value.
+fn skip_block(cursor: &mut Cursor<'_>, indent: usize) {
+    let mut value_line = is_explicit_key(cursor);
+    loop {
+        let _: &str = cursor.take_until(b"\n");
+        cursor.bump();
+        let Some(found) = next_line(cursor) else {
+            return;
+        };
+        let at_key = found == indent;
+        let colon = value_line
+            && at_key
+            && cursor.peek_at(found) == Some(b':')
+            && separated_at(cursor, found + 1);
+        if found < indent || (at_key && !colon && !is_dash(cursor, found)) {
+            return;
+        }
+        value_line &= !colon;
+    }
+}
+
 /// The text of an explicit key, or `None` for a list or a mapping.
 fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Option<String> {
     match key {
@@ -316,9 +374,9 @@ fn key_or_collection<F>(
     context: Context,
     open: usize,
     text: F,
-) -> Result<Option<String>, ParseError>
+) -> Result<Option<String>, Stop>
 where
-    F: FnOnce(&mut Cursor<'_>) -> Result<String, ParseError>,
+    F: FnOnce(&mut Cursor<'_>) -> Result<String, Stop>,
 {
     if !is_collection_key(cursor) {
         return text(cursor).map(Some);
@@ -330,22 +388,25 @@ where
 /// Whether a `[` or a `{` starts the node at the cursor, after a tag or not.
 fn is_collection_key(cursor: &mut Cursor<'_>) -> bool {
     let start = cursor.pos();
-    if cursor.peek() == Some(b'!') && tag(cursor).is_ok() {
-        cursor.skip_spaces();
-    }
+    skip_tag(cursor);
     let is_collection = matches!(cursor.peek(), Some(b'[' | b'{'));
     cursor.set_pos(start);
     is_collection
 }
 
+/// Moves the cursor past the tag at it, whether archie reads it or not, and
+/// the spaces after it.
+fn skip_tag(cursor: &mut Cursor<'_>) {
+    if cursor.peek() == Some(b'!') {
+        pass_tag(cursor);
+        cursor.skip_spaces();
+    }
+}
+
 /// The value after the `:` of a key at column `indent`, with the cursor
 /// right after the `:`: the rest of the line, what the lines under it hold,
 /// or null right after the `:`.
-fn indicated_value(
-    cursor: &mut Cursor<'_>,
-    indent: usize,
-    open: usize,
-) -> Result<Value, ParseError> {
+fn indicated_value(cursor: &mut Cursor<'_>, indent: usize, open: usize) -> Result<Value, Stop> {
     let after = cursor.pos();
     cursor.skip_spaces();
     if at_line_end(cursor) {
@@ -357,10 +418,10 @@ fn indicated_value(
     Ok(value)
 }
 
-fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
+fn key(cursor: &mut Cursor<'_>) -> Result<String, Stop> {
     match cursor.peek() {
-        Some(b'"') => double_quoted(cursor, None),
-        Some(b'\'') => single_quoted(cursor, None),
+        Some(b'"') => double_quoted(cursor, None).map_err(Stop::Fail),
+        Some(b'\'') => single_quoted(cursor, None).map_err(Stop::Fail),
         Some(b'!') => tagged_key(cursor, false, key),
         Some(b'&' | b'*') => anchor(cursor),
         Some(b'[' | b'{') => cursor.error("expected a key"),
@@ -393,9 +454,7 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
         return true;
     }
     let start = cursor.pos();
-    if cursor.peek() == Some(b'!') && tag(cursor).is_ok() {
-        cursor.skip_spaces();
-    }
+    skip_tag(cursor);
     let is_mapping = is_empty_key(cursor, false)
         || match cursor.peek() {
             Some(b'"' | b'\'') => {
@@ -405,7 +464,7 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
             }
             // Reading the key checks the indentation of its lines.
             Some(b'[' | b'{') => {
-                let is_key = inline_value(cursor, Context::Flow(None), open).is_ok();
+                let is_key = passes_collection(cursor, open);
                 cursor.skip_spaces();
                 is_key && cursor.peek() == Some(b':') && separated_at(cursor, 1)
             }
@@ -414,6 +473,22 @@ fn starts_mapping(cursor: &mut Cursor<'_>, open: usize) -> bool {
         };
     cursor.set_pos(start);
     is_mapping
+}
+
+/// Whether the flow collection at the cursor, inside `open` values, reads,
+/// and moves the cursor past it. One that raises a drop is passed over
+/// unread.
+fn passes_collection(cursor: &mut Cursor<'_>, open: usize) -> bool {
+    let start = cursor.pos();
+    match inline_value(cursor, Context::Flow(None), open) {
+        Ok(_) => true,
+        Err(Stop::Drop(_)) => {
+            cursor.set_pos(start);
+            skip_collection(cursor);
+            true
+        }
+        Err(Stop::Fail(_)) => false,
+    }
 }
 
 /// Whether the cursor is on a `?` that starts an explicit key: one followed
@@ -430,7 +505,7 @@ fn nested(
     context: Context,
     null_at: usize,
     open: usize,
-) -> Result<Value, ParseError> {
+) -> Result<Value, Stop> {
     let Some((found, is_list)) = under(cursor, context) else {
         return Ok(null(null_at));
     };
@@ -496,7 +571,7 @@ fn block_sequence(
     line_start: usize,
     indent: usize,
     depth: usize,
-) -> Result<Value, ParseError> {
+) -> Result<Value, Stop> {
     let start = line_start + indent;
     let mut entry_line = line_start;
     let mut items = Vec::new();
@@ -515,7 +590,7 @@ fn block_sequence(
             return cursor.error("this line is indented more than the list above it");
         }
         if found == indent && cursor.peek_at(found) == Some(b'\t') {
-            return Err(tab_indent(cursor.pos() + found));
+            return Err(tab_indent(cursor.pos() + found).into());
         }
         if found < indent || !is_dash(cursor, found) {
             break;
@@ -539,7 +614,7 @@ fn compact_value(
     indent: usize,
     context: Context,
     open: usize,
-) -> Result<Value, ParseError> {
+) -> Result<Value, Stop> {
     cursor.set_pos(line_start + indent + 1);
     let after_indicator = cursor.pos();
     cursor.skip_spaces();
@@ -563,7 +638,7 @@ fn compact_value(
 
 /// The value that starts a line of a block or follows its `-`, `?` or `:`,
 /// inside `open` values, up to the end of that line.
-fn line_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, ParseError> {
+fn line_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, Stop> {
     let value = inline_value(cursor, context, open)?;
     end_of_line(cursor)?;
     Ok(value)
@@ -573,11 +648,7 @@ fn line_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<
 /// own line, except a flow collection, which may run over several, and a
 /// block scalar, which takes the lines under it; either way the cursor stops
 /// after its last text.
-fn inline_value(
-    cursor: &mut Cursor<'_>,
-    context: Context,
-    open: usize,
-) -> Result<Value, ParseError> {
+fn inline_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, Stop> {
     let start = cursor.pos();
     match cursor.peek() {
         Some(b'[') => flow_sequence(cursor, context.column(), nest(open, start..start + 1)?),
@@ -592,12 +663,14 @@ fn inline_value(
             Ok(string(start..cursor.pos(), text))
         }
         Some(b'|' | b'>') => match context {
-            Context::Entry(indent) | Context::Key(indent) => block_scalar(cursor, indent),
-            Context::Flow(_) => plain(cursor, context),
+            Context::Entry(indent) | Context::Key(indent) => {
+                block_scalar(cursor, indent).map_err(Stop::Fail)
+            }
+            Context::Flow(_) => plain(cursor, context).map_err(Stop::Fail),
         },
         Some(b'!') => tagged(cursor, context, open),
         Some(b'&' | b'*') => anchor(cursor),
-        Some(_) | None => plain(cursor, context),
+        Some(_) | None => plain(cursor, context).map_err(Stop::Fail),
     }
 }
 
@@ -607,7 +680,7 @@ fn flow_sequence(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     depth: usize,
-) -> Result<Value, ParseError> {
+) -> Result<Value, Stop> {
     let start = cursor.pos();
     cursor.bump();
     let mut items = Vec::new();
@@ -635,15 +708,20 @@ fn flow_sequence(
 /// One entry of a flow list, inside `open` values: a value, or a pair, which
 /// makes a mapping of one pair. A list or a mapping is read once, and is the
 /// key of a pair when a `:` follows it on its line.
-fn flow_item(
-    cursor: &mut Cursor<'_>,
-    column: Option<usize>,
-    open: usize,
-) -> Result<Value, ParseError> {
+fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>, open: usize) -> Result<Value, Stop> {
     let start = cursor.pos();
     if is_collection_key(cursor) {
-        let item = inline_value(cursor, Context::Flow(column), open);
-        if item.is_err() || !colon_follows(cursor) {
+        let item = match inline_value(cursor, Context::Flow(column), open) {
+            Err(Stop::Drop(error)) => {
+                // Passed over, to see whether a `:` makes it a key.
+                cursor.set_pos(start);
+                skip_tag(cursor);
+                skip_collection(cursor);
+                Err(Stop::Drop(error))
+            }
+            read @ (Ok(_) | Err(Stop::Fail(_))) => read,
+        };
+        if matches!(item, Err(Stop::Fail(_))) || !colon_follows(cursor) {
             return item;
         }
         return one_pair(cursor, column, open, start, false);
@@ -663,15 +741,19 @@ fn one_pair(
     open: usize,
     start: usize,
     read_key: bool,
-) -> Result<Value, ParseError> {
+) -> Result<Value, Stop> {
     let depth = nest(open, start..start + 1)?;
     let name = if read_key {
-        flow_pair_key(cursor, column, true, depth)?
+        flow_pair_key(cursor, column, true, depth)
     } else {
-        None
+        Ok(None)
     };
     let mut pairs = IndexMap::new();
-    flow_pair(cursor, column, depth, start, name, &mut pairs)?;
+    let read = match name {
+        Ok(key) => flow_pair(cursor, column, depth, start, key, &mut pairs),
+        Err(stop) => Err(stop),
+    };
+    let _: Result<(), ParseError> = caught(cursor, start, read, skip_flow_entry)?;
     Ok(Value::Mapping(finish(pairs, start)))
 }
 
@@ -690,7 +772,8 @@ fn is_flow_pair(cursor: &mut Cursor<'_>) -> bool {
         return true;
     }
     let start = cursor.pos();
-    let is_key = flow_key(cursor, None).is_ok();
+    // A key's tag that archie does not read raises a drop after the key.
+    let is_key = !matches!(flow_key(cursor, None), Err(Stop::Fail(_)));
     cursor.skip_spaces();
     let is_pair = is_key && cursor.peek() == Some(b':');
     cursor.set_pos(start);
@@ -707,12 +790,13 @@ fn no_empty_entry(cursor: &Cursor<'_>) -> Result<(), ParseError> {
 }
 
 /// A flow mapping `depth` values deep whose lines are indented more than
-/// `column`, the column of its key or `-`; none at the root.
+/// `column`, the column of its key or `-`; none at the root. A drop inside a
+/// pair drops that pair.
 fn flow_mapping(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     depth: usize,
-) -> Result<Mapping, ParseError> {
+) -> Result<Mapping, Stop> {
     let start = cursor.pos();
     cursor.bump();
     let mut pairs = IndexMap::new();
@@ -723,8 +807,11 @@ fn flow_mapping(
         }
         no_empty_entry(cursor)?;
         let entry = cursor.pos();
-        let name = flow_pair_key(cursor, column, false, depth)?;
-        flow_pair(cursor, column, depth, entry, name, &mut pairs)?;
+        let read = match flow_pair_key(cursor, column, false, depth) {
+            Ok(name) => flow_pair(cursor, column, depth, entry, name, &mut pairs),
+            Err(stop) => Err(stop),
+        };
+        let _: Result<(), ParseError> = caught(cursor, entry, read, skip_flow_entry)?;
         skip_flow_space(cursor, column)?;
         if cursor.eat(b'}') {
             break;
@@ -749,7 +836,7 @@ fn flow_pair(
     start: usize,
     name: Option<String>,
     pairs: &mut IndexMap<String, Pair>,
-) -> Result<(), ParseError> {
+) -> Result<(), Stop> {
     let key_end = cursor.pos();
     skip_flow_space(cursor, column)?;
     let value = if cursor.eat(b':') {
@@ -767,6 +854,70 @@ fn flow_pair(
     Ok(())
 }
 
+/// Moves the cursor from the start of a flow entry that is dropped to its
+/// end: the first `,`, `]` or `}` outside every bracket the entry opens.
+/// Quoted scalars, tags and comments are passed over whole.
+fn skip_flow_entry(cursor: &mut Cursor<'_>) {
+    let mut depth = 0_usize;
+    // Whether a node may start here, as a quoted scalar or a tag may.
+    let mut node_start = true;
+    let mut spaced = true;
+    loop {
+        let Some(byte) = cursor.peek() else {
+            return;
+        };
+        match byte {
+            b',' | b']' | b'}' if depth == 0 => return,
+            b'"' | b'\'' if node_start => {
+                let context = Some(Context::Flow(None));
+                let _: Result<String, ParseError> = if byte == b'"' {
+                    double_quoted(cursor, context)
+                } else {
+                    single_quoted(cursor, context)
+                };
+                node_start = false;
+                spaced = false;
+                continue;
+            }
+            b'!' if node_start => {
+                pass_tag(cursor);
+                spaced = false;
+                continue;
+            }
+            b'#' if spaced => {
+                let _: &str = cursor.take_until(b"\n");
+                continue;
+            }
+            b'[' | b'{' | b',' => node_start = true,
+            b']' | b'}' => {
+                depth -= 1;
+                node_start = false;
+            }
+            b':' | b'?' if is_indicator(cursor, true) => node_start = true,
+            b' ' | b'\t' | b'\r' | b'\n' => {}
+            _ => node_start = false,
+        }
+        if matches!(byte, b'[' | b'{') {
+            depth += 1;
+        }
+        spaced = matches!(byte, b' ' | b'\t' | b'\r' | b'\n');
+        cursor.bump();
+    }
+}
+
+/// Moves the cursor past the flow collection at it, entry by entry as
+/// [`skip_flow_entry`] passes over one.
+fn skip_collection(cursor: &mut Cursor<'_>) {
+    cursor.bump();
+    loop {
+        skip_flow_entry(cursor);
+        if !cursor.eat(b',') {
+            cursor.bump();
+            return;
+        }
+    }
+}
+
 /// The key of a flow pair inside `open` values, or `None` for a list or a
 /// mapping; empty after a `?` with none or before a `:` that starts the pair.
 /// It goes on over lines in a flow mapping or after a `?`, else stays on one.
@@ -775,7 +926,7 @@ fn flow_pair_key(
     column: Option<usize>,
     in_list: bool,
     open: usize,
-) -> Result<Option<String>, ParseError> {
+) -> Result<Option<String>, Stop> {
     let explicit = is_flow_explicit_key(cursor);
     if explicit {
         cursor.bump();
@@ -811,10 +962,10 @@ fn is_empty_key(cursor: &Cursor<'_>, in_flow: bool) -> bool {
 /// `context`, as inside a flow mapping, a quoted key may go on over several
 /// lines as a quoted value does, and a plain key that runs to the end of its
 /// line goes on over the lines below as a `PLAIN` does, up to that end.
-fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, ParseError> {
+fn flow_key(cursor: &mut Cursor<'_>, context: Option<Context>) -> Result<String, Stop> {
     match cursor.peek() {
-        Some(b'"') => double_quoted(cursor, context),
-        Some(b'\'') => single_quoted(cursor, context),
+        Some(b'"') => double_quoted(cursor, context).map_err(Stop::Fail),
+        Some(b'\'') => single_quoted(cursor, context).map_err(Stop::Fail),
         Some(b'!') => tagged_key(cursor, true, |inner| flow_key(inner, context)),
         Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => {
@@ -1210,37 +1361,51 @@ fn is_spaced(line: &str) -> bool {
 /// under it hold, as for a key or a list entry with nothing after it; with
 /// none, it is empty. A collection counts its tag as a level of its own, and
 /// a value has at most one tag.
-fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, ParseError> {
-    let tag = tag(cursor)?;
-    let value = match context {
+fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, Stop> {
+    let tag = tag(cursor);
+    let under = match context {
         Context::Entry(_) | Context::Key(_) => {
             cursor.skip_spaces();
-            if at_line_end(cursor) {
-                end_of_line(cursor)?;
-                let depth = depth_under(cursor, context, &tag, open)?;
-                let block = nested(cursor, context, tag.span.end, depth)?;
-                cursor.set_pos(block.span().end);
-                block
-            } else {
-                let depth = tagged_depth(cursor, &tag, open)?;
-                inline_value(cursor, context, depth)?
-            }
+            at_line_end(cursor)
         }
         Context::Flow(column) => {
             skip_flow_space(cursor, column)?;
-            let depth = tagged_depth(cursor, &tag, open)?;
-            inline_value(cursor, context, depth)?
+            false
         }
     };
-    retag(cursor, &tag, value)
+    let depth = if under {
+        end_of_line(cursor)?;
+        depth_under(cursor, context, &tag, open)?
+    } else {
+        tagged_depth(cursor, &tag, open)?
+    };
+    let name = known(cursor, &tag)?;
+    let value = if under {
+        let block = nested(cursor, context, tag.span.end, depth)?;
+        to_line_end(cursor);
+        block
+    } else {
+        inline_value(cursor, context, depth)?
+    };
+    retag(cursor, name, &tag.span, value).map_err(Stop::Fail)
+}
+
+/// Moves the cursor from the start of a line back onto the line ending
+/// before it, where the block read over the lines above ends; the span of a
+/// mapping whose every pair is dropped does not reach that far.
+fn to_line_end(cursor: &mut Cursor<'_>) {
+    let at = cursor.pos();
+    if at > 0 && cursor.slice(at - 1..at) == "\n" {
+        cursor.set_pos(at - 1);
+    }
 }
 
 /// The depth inside `open` values that the node after `tag`, at the cursor,
 /// is read at: a flow collection counts the tag as a level of its own. A
 /// second tag on the node is refused.
-fn tagged_depth(cursor: &Cursor<'_>, tag: &Tag, open: usize) -> Result<usize, ParseError> {
+fn tagged_depth(cursor: &Cursor<'_>, tag: &Tag, open: usize) -> Result<usize, Stop> {
     match cursor.peek() {
-        Some(b'!') => Err(second_tag(cursor.pos())),
+        Some(b'!') => Err(second_tag(cursor.pos()).into()),
         Some(b'[' | b'{') => tag_level(tag, open),
         Some(_) | None => Ok(open),
     }
@@ -1254,7 +1419,7 @@ fn depth_under(
     context: Context,
     tag: &Tag,
     open: usize,
-) -> Result<usize, ParseError> {
+) -> Result<usize, Stop> {
     let start = cursor.pos();
     let depth = match under(cursor, context) {
         None => Ok(open),
@@ -1276,7 +1441,7 @@ fn depth_under(
 
 /// The depth inside `open` values that a collection after `tag` opens in:
 /// the tag counts as a level of its own.
-fn tag_level(tag: &Tag, open: usize) -> Result<usize, ParseError> {
+fn tag_level(tag: &Tag, open: usize) -> Result<usize, Stop> {
     let at = tag.span.start;
     nest(open, at..at + 1)
 }
@@ -1289,55 +1454,77 @@ fn second_tag(at: usize) -> ParseError {
 /// A key written after a tag, read by `read` and checked against the tag. A
 /// `:` right after the tag leaves the key empty, as `is_empty_key` reads it
 /// inside a flow collection or not, and a second tag is refused.
-fn tagged_key<F>(cursor: &mut Cursor<'_>, in_flow: bool, read: F) -> Result<String, ParseError>
+fn tagged_key<F>(cursor: &mut Cursor<'_>, in_flow: bool, read: F) -> Result<String, Stop>
 where
-    F: FnOnce(&mut Cursor<'_>) -> Result<String, ParseError>,
+    F: FnOnce(&mut Cursor<'_>) -> Result<String, Stop>,
 {
-    let tag = tag(cursor)?;
+    let tag = tag(cursor);
     cursor.skip_spaces();
     let start = cursor.pos();
     if cursor.peek() == Some(b'!') {
-        return Err(second_tag(start));
+        return Err(second_tag(start).into());
     }
     let text = if is_empty_key(cursor, in_flow) {
         String::new()
     } else {
         read(cursor)?
     };
-    let _: Value = retag(cursor, &tag, string(start..cursor.pos(), text.clone()))?;
+    let name = known(cursor, &tag)?;
+    let _: Value = retag(
+        cursor,
+        name,
+        &tag.span,
+        string(start..cursor.pos(), text.clone()),
+    )?;
     Ok(text)
 }
 
 /// Reads the tag at the cursor and the type it names: `!!int` and
-/// `!<tag:yaml.org,2002:int>` both name `int`.
-fn tag(cursor: &mut Cursor<'_>) -> Result<Tag, ParseError> {
+/// `!<tag:yaml.org,2002:int>` both name `int`, and `!point` none.
+fn tag(cursor: &mut Cursor<'_>) -> Tag {
     let start = cursor.pos();
-    if cursor.rest().starts_with("!<") {
-        let _: &str = cursor.take_until(b" \t\r\n>");
-        let _: bool = cursor.eat(b'>');
-    } else {
-        let _: &str = cursor.take_until(b" \t\r\n,[]{}");
-    }
+    pass_tag(cursor);
     let written = cursor.slice(start..cursor.pos());
     let named = written.strip_prefix("!!").or_else(|| {
         written
             .strip_prefix("!<tag:yaml.org,2002:")?
             .strip_suffix('>')
     });
-    let span = start..cursor.pos();
-    let Some(name) = named.and_then(|suffix| TAGS.into_iter().find(|known| *known == suffix))
-    else {
-        let message = format!("the tag `{written}` is not one archie reads");
-        return Err(ParseError::new(&message, span));
-    };
-    Ok(Tag { name, span })
+    Tag {
+        name: named.and_then(|suffix| TAGS.into_iter().find(|known| *known == suffix)),
+        span: start..cursor.pos(),
+    }
 }
 
-/// `value` read again under `tag`: a scalar's text gets the tag's type, and
-/// a mapping or a list must be what the tag names. An empty value is read
-/// as empty text, and an error about it points at the tag.
-fn retag(cursor: &Cursor<'_>, tag: &Tag, value: Value) -> Result<Value, ParseError> {
-    let name = tag.name;
+/// Moves the cursor past the tag at it: a tag written in full ends at its
+/// `>`, any other at a space, a tab, a line ending or a flow indicator.
+fn pass_tag(cursor: &mut Cursor<'_>) {
+    if cursor.rest().starts_with("!<") {
+        let _: &str = cursor.take_until(b" \t\r\n>");
+        let _: bool = cursor.eat(b'>');
+    } else {
+        let _: &str = cursor.take_until(b" \t\r\n,[]{}");
+    }
+}
+
+/// The type `tag` names, or a drop when archie does not read it.
+fn known(cursor: &Cursor<'_>, tag: &Tag) -> Result<&'static str, Stop> {
+    tag.name.ok_or_else(|| {
+        let written = cursor.slice(tag.span.clone());
+        let message = format!("the tag `{written}` is not one archie reads");
+        Stop::Drop(ParseError::new(&message, tag.span.clone()))
+    })
+}
+
+/// `value` read again under the tag `!!name` at `at`: a scalar's text gets
+/// the tag's type, and a mapping or a list must be what the tag names. An
+/// empty value is read as empty text, and an error about it points at `at`.
+fn retag(
+    cursor: &Cursor<'_>,
+    name: &str,
+    at: &Range<usize>,
+    value: Value,
+) -> Result<Value, ParseError> {
     let scalar = match value {
         Value::Mapping(_) if name == "map" => return Ok(value),
         Value::Sequence(_) if name == "seq" => return Ok(value),
@@ -1348,7 +1535,7 @@ fn retag(cursor: &Cursor<'_>, tag: &Tag, value: Value) -> Result<Value, ParseErr
     let text = scalar_text(cursor, scalar.value, &scalar.span);
     let Some(typed) = typed(name, &text) else {
         if scalar.span.is_empty() {
-            return Err(misfit("an empty value", name, tag.span.clone()));
+            return Err(misfit("an empty value", name, at.clone()));
         }
         return Err(misfit(&format!("`{text}`"), name, scalar.span));
     };
@@ -1404,12 +1591,9 @@ fn misfit(written: &str, name: &str, span: Range<usize>) -> ParseError {
 }
 
 /// Anchors and aliases are refused: reading one means copying a value.
-fn anchor<T>(cursor: &Cursor<'_>) -> Result<T, ParseError> {
+fn anchor<T>(cursor: &Cursor<'_>) -> Result<T, Stop> {
     let at = cursor.pos();
-    Err(ParseError::new(
-        "anchors and aliases are not read",
-        at..at + 1,
-    ))
+    Err(ParseError::new("anchors and aliases are not read", at..at + 1).into())
 }
 
 /// A double-quoted string. With no `context`, as for a key held to its line,
