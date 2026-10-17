@@ -344,7 +344,8 @@ impl Writer {
     /// Writes `content`, the lines of an item, after `marker`, every line
     /// after the first indented to the item's text. A first line that starts
     /// with a space goes under the marker, so the item's text column stays
-    /// where it is.
+    /// where it is. After `*`, a first line `***` is written `___`, since
+    /// `* ***` reads as a thematic break.
     fn marked(&mut self, marker: &str, content: &str) {
         let indent = " ".repeat(marker.len() + 1);
         let mut lines = content.strip_suffix('\n').unwrap_or(content).split('\n');
@@ -356,7 +357,11 @@ impl Writer {
             } else {
                 self.put(" ");
             }
-            self.put(first);
+            self.put(if marker == "*" && first == "***" {
+                "___"
+            } else {
+                first
+            });
         }
         self.put("\n");
         for line in lines {

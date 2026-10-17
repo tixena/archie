@@ -701,6 +701,18 @@ fn an_underlined_heading_takes_the_guards_of_a_paragraph() {
 }
 
 #[test]
+fn a_star_item_opening_with_a_thematic_break_and_a_destination_with_a_line_ending_keep_their_tree()
+{
+    for (source, text) in [
+        ("- a\n+ ***\n", "- a\n\n* ___\n"),
+        ("[a](<u&#10;x>)\n", "[a](<u&#10;x>)\n"),
+        ("[a](u&#10;x)\n", "[a](<u&#10;x>)\n"),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
 fn a_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line() {
     let mut built = parse("- p\n  # h\n- q\n").unwrap();
     if let Some(Block::List(list)) = built.body.sections[0].blocks.first_mut()

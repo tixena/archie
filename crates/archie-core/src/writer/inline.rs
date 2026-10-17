@@ -726,10 +726,10 @@ fn target(destination: &str, title: Option<&str>) -> String {
         || !paired(destination)
     {
         written.push('<');
-        escape_marks(&mut written, destination, &['<', '>'], false);
+        escape_marks(&mut written, destination, &['<', '>'], true);
         written.push('>');
     } else {
-        escape_marks(&mut written, destination, &[], false);
+        escape_marks(&mut written, destination, &[], true);
     }
     if let Some(text) = title {
         written.push_str(" \"");
@@ -742,19 +742,19 @@ fn target(destination: &str, title: Option<&str>) -> String {
 
 /// Writes `text`, a destination or a title, with a backslash before each of
 /// `marks`, each `&` that starts a reference, and each backslash before
-/// punctuation or the end. In a title, `title`, a line ending is written
+/// punctuation or the end. With `line_endings`, a line ending is written
 /// `&#10;`.
-fn escape_marks(out: &mut String, text: &str, marks: &[char], title: bool) {
+fn escape_marks(out: &mut String, text: &str, marks: &[char], line_endings: bool) {
     let mut chars = text.char_indices().peekable();
     while let Some((at, character)) = chars.next() {
-        if title && character == '\n' {
+        if line_endings && character == '\n' {
             out.push_str("&#10;");
             continue;
         }
         let escaped = match character {
-            '\\' => chars
-                .peek()
-                .is_none_or(|&(_, next)| next.is_ascii_punctuation() || (title && next == '\n')),
+            '\\' => chars.peek().is_none_or(|&(_, next)| {
+                next.is_ascii_punctuation() || (line_endings && next == '\n')
+            }),
             '&' => entity::reference(&text[at..]).is_some(),
             _ => marks.contains(&character),
         };
