@@ -711,6 +711,32 @@ fn text_that_would_read_as_markup_is_escaped() {
 }
 
 #[test]
+fn blocks_that_tabs_indent_or_separate_are_written_in_archies_form() {
+    for (source, text) in [
+        ("\tcode\n", "```\ncode\n```\n"),
+        ("#\tTitle\n", "# Title\n"),
+        ("-\titem\n", "- item\n"),
+        ("*\t*\t*\n", "***\n"),
+        ("- foo\n\n\tbar\n", "- foo\n\n  bar\n"),
+        ("- foo\n\n\t\tbar\n", "- foo\n\n  ```\n    bar\n  ```\n"),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
+fn a_text_line_that_a_tab_would_make_a_block_is_escaped() {
+    for text in ["\\-\tx\n", "\\#\tx\n", "1\\.\tx\n", "\\*\t*\t*\n"] {
+        assert_eq!(round_trip(text), text);
+    }
+}
+
+#[test]
+fn an_item_whose_first_line_starts_with_a_tab_writes_it_under_the_marker() {
+    assert_eq!(round_trip("-\n  \t<div>\n"), "-\n  \t<div>\n");
+}
+
+#[test]
 fn a_text_line_that_would_open_a_tilde_fence_is_escaped() {
     assert_eq!(round_trip("\\~~~\n"), "\\~~~\n");
     assert_eq!(round_trip("a\n\\~~~ b\n"), "a\n\\~~~ b\n");

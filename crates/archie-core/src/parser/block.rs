@@ -455,9 +455,9 @@ where
 }
 
 /// The markdown block that starts at byte `start` of `source`, each line read
-/// with at most `base` of its leading spaces left out, its link definitions,
-/// each destination by its label, folded, and its grid cells' lines. `outer`
-/// containers hold it.
+/// with at most `base` columns of its leading white space left out, its link
+/// definitions, each destination by its label, folded, and its grid cells'
+/// lines. `outer` containers hold it.
 pub fn parse_from<E>(
     source: &str,
     start: usize,
@@ -475,8 +475,8 @@ where
 }
 
 /// The markdown block written on `lines`, ranges of `source` read as
-/// consecutive lines, each with at most `base` of its leading spaces left
-/// out, with its link definitions and its grid cells' lines. It spans `span`,
+/// consecutive lines, each with at most `base` columns of its leading white
+/// space left out, with its link definitions and its grid cells' lines. It spans `span`,
 /// and `outer` containers hold it.
 pub fn parse_lines<E>(
     source: &str,

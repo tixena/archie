@@ -3,11 +3,12 @@
 //! quote, an HTML block and a link definition are each read whole, so the
 //! grammar over the tokens is context-free.
 
+use core::iter;
 use core::ops::Range;
 
 use crate::parser::definition::{self, Target};
 use crate::parser::html::{self, End};
-use crate::parser::line::{line_at, line_from};
+use crate::parser::line::{Line, line_at, line_from, space, space_to};
 use crate::parser::table::{self, TableToken};
 
 /// How deep list items, markdown blocks and table cells nest, counted
@@ -135,8 +136,74 @@ enum Start {
     Underline(u8),
 }
 
+/// A line's text cut at a column: the spaces left of a tab that the column
+/// falls inside, then the text after that tab.
+#[derive(Clone, Copy)]
+struct Cut<'src> {
+    spaces: usize,
+    text: &'src str,
+}
+
+/// A place on a line read: its byte, and its column, counted from column
+/// `origin` of the source line.
+#[derive(Clone, Copy)]
+struct Spot {
+    at: usize,
+    column: usize,
+    origin: usize,
+}
+
+impl Spot {
+    /// The spot `width` bytes on, past marks of one column each.
+    const fn after(self, width: usize) -> Self {
+        Self {
+            at: self.at + width,
+            column: self.column + width,
+            ..self
+        }
+    }
+
+    /// The byte that holds column `limit`, the tab it falls inside or where
+    /// the text after it starts, and what is written from this spot to
+    /// `end` past its white space up to that column.
+    fn cut(self, source: &str, end: usize, limit: usize) -> (usize, Cut<'_>) {
+        let passed = space_to(
+            &source[self.at..end],
+            self.origin + self.column,
+            self.origin + limit,
+        );
+        let spaces = (self.column + passed.columns).saturating_sub(limit);
+        let rest = self.at + passed.bytes;
+        let cut = Cut {
+            spaces,
+            text: &source[rest..end],
+        };
+        (rest - usize::from(spaces > 0), cut)
+    }
+
+    const fn start(line: &Line) -> Self {
+        Self {
+            at: line.start,
+            column: line.column,
+            origin: line.origin,
+        }
+    }
+
+    /// Where the text starts past the spaces and tabs at this spot, up to
+    /// `end`.
+    fn text(self, source: &str, end: usize) -> Self {
+        let passed = space(&source[self.at..end], self.origin + self.column);
+        Self {
+            at: self.at + passed.bytes,
+            column: self.column + passed.columns,
+            ..self
+        }
+    }
+}
+
 struct Lexer<'src> {
-    /// How many leading spaces of each line are left out, at most.
+    /// How many columns of the white space that starts each line are left
+    /// out, at most.
     base: usize,
     /// The content column of each open list item, outermost first.
     levels: Vec<usize>,
@@ -149,29 +216,31 @@ struct Lexer<'src> {
 }
 
 impl Lexer<'_> {
-    /// Reads a block quote whose first `>` is at `at`: that line, then each
-    /// line whose text starts with `>` within three columns of the
-    /// enclosing item's text. Each line loses its `>` and one space after it.
-    fn block_quote(&mut self, at: usize) {
+    /// Reads a block quote whose first `>` is at `quote`: that line, then
+    /// each line whose text starts with `>` within three columns of the
+    /// enclosing item's text. Each line loses its `>` and one column of the
+    /// space or tab after it.
+    fn block_quote(&mut self, quote: Spot) {
         let source = self.source;
         let level = self.level();
-        let first = line_at(source, at);
-        let mut lines = vec![unquote(&source[at..first.end])];
+        let first = line_at(source, quote.at);
+        let mut lines = vec![unquote(source, quote, first.end)];
         let mut end = first.end;
         while self.pos < source.len() {
             let line = line_from(source, self.pos, self.base);
-            let text = &source[line.start..line.end];
-            let content = text.trim_start_matches(' ');
-            let indent = text.len() - content.len();
-            if indent < level || indent >= level + 4 || !content.starts_with('>') {
+            let text = Spot::start(&line).text(source, line.end);
+            if text.column < level
+                || text.column >= level + 4
+                || !source[text.at..line.end].starts_with('>')
+            {
                 break;
             }
-            lines.push(unquote(content));
+            lines.push(unquote(source, text, line.end));
             end = line.end;
             self.pos = line.next;
         }
-        let value = lines.join("\n");
-        self.push(TokenKind::BlockQuote { value }, at..end);
+        let value = join(&lines);
+        self.push(TokenKind::BlockQuote { value }, quote.at..end);
     }
 
     /// Ends every open item whose content column is to the right of `column`.
@@ -182,42 +251,43 @@ impl Lexer<'_> {
         }
     }
 
-    /// Reads the lines after an opening fence of `length` `mark`s, up to the
-    /// closing fence, indented at most three columns past the enclosing
-    /// item's text, the end of the enclosing list item, or the end of the
-    /// file.
-    fn code_block(&mut self, column: usize, at: usize, end: usize, length: usize, mark: char) {
+    /// Reads the lines after the opening fence of `length` `mark`s at
+    /// `fence`, whose line's text ends at `end`, up to the closing fence,
+    /// indented at most three columns past the enclosing item's text, the end
+    /// of the enclosing list item, or the end of the file. Each line loses
+    /// its white space up to the fence's column.
+    fn code_block(&mut self, fence: Spot, end: usize, length: usize, mark: char) {
         let source = self.source;
+        let at = fence.at;
         let after = &source[at + length..end];
         let from = at + length + (after.len() - after.trim_start().len());
         let info = from..from + after.trim().len();
         let level = self.level();
-        let mut lines: Vec<&str> = Vec::new();
+        let mut lines = Vec::new();
         let mut block_end = end;
         let content_start = self.pos;
         let mut content_end = content_start;
         while self.pos < source.len() {
             let line = line_from(source, self.pos, self.base);
-            let text = &source[line.start..line.end];
-            let content = text.trim_start_matches(' ');
-            let indent = text.len() - content.len();
-            let trimmed = trim_end_spaces(content);
-            if !trimmed.is_empty() && indent < level {
+            let leading = Spot::start(&line);
+            let text = leading.text(source, line.end);
+            let trimmed = trim_end_spaces(&source[text.at..line.end]);
+            if !trimmed.is_empty() && text.column < level {
                 break;
             }
             self.pos = line.next;
-            if indent < level + 4
+            if text.column < level + 4
                 && trimmed.len() >= length
                 && trimmed.chars().all(|character| character == mark)
             {
-                block_end = line.start + indent + trimmed.len();
+                block_end = text.at + trimmed.len();
                 break;
             }
-            lines.push(&text[indent.min(column)..]);
+            lines.push(leading.cut(source, line.end, fence.column).1);
             block_end = line.end;
             content_end = line.end;
         }
-        let value = lines.join("\n");
+        let value = join(&lines);
         let content = content_start..content_end;
         self.push(
             TokenKind::CodeBlock {
@@ -229,59 +299,60 @@ impl Lexer<'_> {
         );
     }
 
-    /// Classifies what is written from `at` to `end` on the line starting at
-    /// `line_start`. `continues` is set when the line would continue a
-    /// paragraph.
-    fn content(&mut self, line_start: usize, at: usize, end: usize, continues: bool) {
-        let column = at - line_start;
+    /// Classifies what is written on the line starting at `line_start`, from
+    /// `white`, where the white space before its text starts, to `end`.
+    /// `continues` is set when the line would continue a paragraph.
+    fn content(&mut self, line_start: usize, white: Spot, end: usize, continues: bool) {
+        let source = self.source;
+        let text = white.text(source, end);
         let level = self.level();
-        if column >= level + 4 {
+        if text.column >= level + 4 {
             if continues {
-                self.push(TokenKind::Text, at..end);
+                self.push(TokenKind::Text, text.at..end);
             } else {
-                self.indented_code(line_start, level + 4);
+                self.indented_code(white, level + 4);
             }
             return;
         }
-        match self.start(line_start, at..end, self.pos, continues) {
-            Some(Start::Break) => self.push(TokenKind::ThematicBreak, at..end),
-            Some(Start::Fence { length, mark }) => self.code_block(column, at, end, length, mark),
+        match self.start(line_start, text, end, self.pos, continues) {
+            Some(Start::Break) => self.push(TokenKind::ThematicBreak, text.at..end),
+            Some(Start::Fence { length, mark }) => self.code_block(text, end, length, mark),
             Some(Start::Heading {
                 level: heading_level,
-                text,
+                text: title,
             }) => {
                 let kind = TokenKind::Heading {
                     level: heading_level,
-                    text: at + text.start..at + text.end,
+                    text: text.at + title.start..text.at + title.end,
                 };
-                self.push(kind, at..end);
+                self.push(kind, text.at..end);
             }
-            Some(Start::Html(start)) => self.html(line_start, at, start),
+            Some(Start::Html(start)) => self.html(white, text.at, start),
             Some(Start::Item { marker, width }) => {
-                let after = &self.source[at + width..end];
-                let inner = after.trim_start_matches(' ');
-                let spaces = after.len() - inner.len();
-                // One to four spaces set the content column; none, or five or
-                // more, put it one space past the marker.
+                let after = text.after(width);
+                let inner = after.text(source, end);
+                let spaces = inner.column - after.column;
+                // One to four columns of white space set the content column;
+                // none, or five or more, put it one column past the marker.
                 let gap = if spaces == 0 || spaces > 4 { 1 } else { spaces };
-                self.push(TokenKind::ItemStart(marker), at..at + width);
-                self.levels.push(column + width + gap);
-                if !inner.is_empty() {
-                    self.content(line_start, end - inner.len(), end, false);
+                self.push(TokenKind::ItemStart(marker), text.at..after.at);
+                self.levels.push(after.column + gap);
+                if inner.at < end {
+                    self.content(line_start, after, end, false);
                 }
             }
-            Some(Start::Quote) => self.block_quote(at),
+            Some(Start::Quote) => self.block_quote(text),
             Some(Start::Table { next, span, table }) => {
                 self.pos = next;
                 let depth = self.depth();
                 self.push(TokenKind::Table { depth, table }, span);
             }
             Some(Start::Underline(heading_level)) => {
-                self.push(TokenKind::Underline(heading_level), at..end);
+                self.push(TokenKind::Underline(heading_level), text.at..end);
             }
             None => {
-                if continues || !self.definition(at, end) {
-                    self.push(TokenKind::Text, at..end);
+                if continues || !self.definition(text.at, end) {
+                    self.push(TokenKind::Text, text.at..end);
                 }
             }
         }
@@ -293,17 +364,13 @@ impl Lexer<'_> {
         let source = self.source;
         let level = self.level();
         let line = line_from(source, at, self.base);
-        let content = source[line.start..line.end].trim_start_matches(' ');
-        let from = line.end - content.len();
-        let text = from..from + trim_end_spaces(content).len();
-        let indent = from - line.start;
-        let continues = !text.is_empty()
-            && (indent >= level + 4
-                || (indent >= level
-                    && self
-                        .start(line.start, text.clone(), line.next, true)
-                        .is_none()));
-        continues.then_some((text, line.next))
+        let text = Spot::start(&line).text(source, line.end);
+        let end = text.at + trim_end_spaces(&source[text.at..line.end]).len();
+        let continues = end > text.at
+            && (text.column >= level + 4
+                || (text.column >= level
+                    && self.start(line.start, text, end, line.next, true).is_none()));
+        continues.then_some((text.at..end, line.next))
     }
 
     /// Reads a link reference definition that starts at `at`, over its line
@@ -351,66 +418,66 @@ impl Lexer<'_> {
         self.outer + self.levels.len()
     }
 
-    /// Reads an HTML block whose first line starts at `line_start` and whose
-    /// text starts at `at`, up to the line that ends it by `start`, the end
-    /// of the enclosing list item, or the end of the file. Its lines are kept
-    /// as written, past the item's text column.
-    fn html(&mut self, line_start: usize, at: usize, start: html::Start) {
+    /// Reads an HTML block whose first line's white space starts at `white`
+    /// and whose text starts at `at`, up to the line that ends it by `start`,
+    /// the end of the enclosing list item, or the end of the file. Its lines
+    /// are kept as written, past the item's text column.
+    fn html(&mut self, white: Spot, at: usize, start: html::Start) {
         let source = self.source;
         let level = self.level();
         let first = line_at(source, at);
-        let from = line_start + level;
-        let mut lines = vec![&source[from..first.end]];
+        let (from, first_cut) = white.cut(source, first.end, level);
+        let mut lines = vec![first_cut];
         let mut block_end = first.end;
         let mut blanks = Vec::new();
         let mut scan = self.pos;
         let mut open = !start.end.closes(&source[at + start.opening..first.end]);
         while open && scan < source.len() {
             let line = line_from(source, scan, self.base);
-            let text = &source[line.start..line.end];
-            let content = text.trim_start_matches(' ');
-            let indent = text.len() - content.len();
-            if trim_end_spaces(content).is_empty() {
+            let leading = Spot::start(&line);
+            let text = leading.text(source, line.end);
+            let cut = leading.cut(source, line.end, level).1;
+            if trim_end_spaces(&source[text.at..line.end]).is_empty() {
                 if matches!(start.end, End::Blank) {
                     break;
                 }
-                blanks.push(&text[indent.min(level)..]);
-            } else if indent < level {
+                blanks.push(cut);
+            } else if text.column < level {
                 break;
             } else {
                 lines.append(&mut blanks);
-                lines.push(&text[level..]);
+                lines.push(cut);
                 block_end = line.end;
                 self.pos = line.next;
-                open = !start.end.closes(text);
+                open = !start.end.closes(&source[line.start..line.end]);
             }
             scan = line.next;
         }
-        let value = lines.join("\n");
+        let value = join(&lines);
         self.push(TokenKind::Html { value }, from..block_end);
     }
 
-    /// Reads an indented code block whose first line starts at `line_start`
-    /// and whose text starts at `column`: that line, then every line
+    /// Reads an indented code block whose first line's white space starts at
+    /// `white`, from its code column `column`: that line, then every line
     /// indented at least as far, with the blank lines between them.
-    fn indented_code(&mut self, line_start: usize, column: usize) {
+    fn indented_code(&mut self, white: Spot, column: usize) {
         let source = self.source;
-        let first = line_at(source, line_start);
-        let start = line_start + column;
-        let mut lines = vec![&source[start..first.end]];
+        let first = line_at(source, white.at);
+        let (start, first_cut) = white.cut(source, first.end, column);
+        let mut lines = vec![first_cut];
         let mut block_end = first.end;
         let mut blanks = Vec::new();
         let mut scan = self.pos;
         while scan < source.len() {
             let line = line_from(source, scan, self.base);
-            let text = &source[line.start..line.end];
-            let content = text.trim_start_matches(' ');
-            let indent = text.len() - content.len();
-            if trim_end_spaces(content).is_empty() {
-                blanks.push(&text[indent.min(column)..]);
-            } else if indent >= column {
+            let leading = Spot::start(&line);
+            let text = leading.text(source, line.end);
+            let cut = leading.cut(source, line.end, column).1;
+            if trim_end_spaces(&source[text.at..line.end]).is_empty() {
+                blanks.push(cut);
+            } else if text.column >= column {
                 lines.append(&mut blanks);
-                lines.push(&text[column..]);
+                lines.push(cut);
                 block_end = line.end;
                 self.pos = line.next;
             } else {
@@ -421,7 +488,7 @@ impl Lexer<'_> {
         let kind = TokenKind::CodeBlock {
             content: start..block_end,
             info: start..start,
-            value: lines.join("\n"),
+            value: join(&lines),
         };
         self.push(kind, start..block_end);
     }
@@ -432,11 +499,12 @@ impl Lexer<'_> {
     }
 
     fn line(&mut self) {
-        let line = line_from(self.source, self.pos, self.base);
+        let source = self.source;
+        let line = line_from(source, self.pos, self.base);
         self.pos = line.next;
-        let text = &self.source[line.start..line.end];
-        let content = text.trim_start_matches(' ');
-        let trimmed = trim_end_spaces(content);
+        let white = Spot::start(&line);
+        let text = white.text(source, line.end);
+        let trimmed = trim_end_spaces(&source[text.at..line.end]);
         if trimmed.is_empty() {
             // An item whose marker line is empty ends at a blank line after it.
             if self
@@ -450,23 +518,22 @@ impl Lexer<'_> {
             self.push(TokenKind::Blank, line.start..line.start);
             return;
         }
-        let at = line.start + (text.len() - content.len());
         let open = self.levels.len();
         let after_text = self
             .tokens
             .last()
             .is_some_and(|token| matches!(token.kind, TokenKind::Text));
-        self.close_items(at - line.start, line.start);
+        self.close_items(text.column, line.start);
         let continues = after_text && self.levels.len() == open;
-        self.content(line.start, at, at + trimmed.len(), continues);
+        self.content(line.start, white, text.at + trimmed.len(), continues);
     }
 
     fn push(&mut self, kind: TokenKind, span: Range<usize>) {
         self.tokens.push(Token { kind, span });
     }
 
-    /// The block that the text at `text`, on the line starting at
-    /// `line_start`, starts, read on from `next`, tried in the order of
+    /// The block that the text at `text`, up to `end`, on the line starting
+    /// at `line_start`, starts, read on from `next`, tried in the order of
     /// precedence `CommonMark` gives them. `continues` is set when the line
     /// would continue a paragraph, which only some blocks may interrupt. An
     /// item or a table whose content would lie deeper than `BLOCK_CAP` is
@@ -474,11 +541,12 @@ impl Lexer<'_> {
     fn start(
         &self,
         line_start: usize,
-        text: Range<usize>,
+        text: Spot,
+        end: usize,
         next: usize,
         continues: bool,
     ) -> Option<Start> {
-        let rest = &self.source[text.clone()];
+        let rest = &self.source[text.at..end];
         if continues && let Some(level) = underline(rest) {
             return Some(Start::Underline(level));
         }
@@ -500,26 +568,35 @@ impl Lexer<'_> {
         let opens = self.depth() < BLOCK_CAP;
         if let Some((marker, width)) = list_marker(rest).filter(|&(marker, width)| {
             // An empty item never interrupts a paragraph.
-            !continues || (marker.interrupts() && !rest[width..].trim_start_matches(' ').is_empty())
+            !continues
+                || (marker.interrupts()
+                    && !rest[width..].trim_start_matches([' ', '\t']).is_empty())
         }) {
             return opens.then_some(Start::Item { marker, width });
         }
         if !opens {
             return None;
         }
-        table::read(self.source, line_start, text, next, self.level(), self.base).map(
-            |(table, span, after)| Start::Table {
-                next: after,
-                span,
-                table,
-            },
+        table::read(
+            self.source,
+            line_start,
+            text.column,
+            text.at..end,
+            next,
+            self.level(),
+            self.base,
         )
+        .map(|(table, span, after)| Start::Table {
+            next: after,
+            span,
+            table,
+        })
     }
 }
 
 /// The tokens of `source` from byte `start`, each line read with at most
-/// `base` of its leading spaces left out, so its columns count from `base`.
-/// `outer` containers hold the text.
+/// `base` columns of its leading white space left out, so its columns count
+/// from `base`. `outer` containers hold the text.
 pub fn lex_from(source: &str, start: usize, base: usize, outer: usize) -> Vec<Token> {
     let mut lexer = Lexer {
         base,
@@ -537,18 +614,18 @@ pub fn lex_from(source: &str, start: usize, base: usize, outer: usize) -> Vec<To
 }
 
 /// The level of an ATX heading and the range of its text: from the first
-/// character after the spaces that follow the `#`s, up to the spaces and
-/// tabs before the closing sequence, a final run of `#`s that a space or a
-/// tab precedes or that is the whole text.
+/// character after the spaces and tabs that follow the `#`s, up to the
+/// spaces and tabs before the closing sequence, a final run of `#`s that a
+/// space or a tab precedes or that is the whole text.
 fn heading(rest: &str) -> Option<(u8, Range<usize>)> {
     let text = rest.trim_start_matches('#');
     let level = u8::try_from(rest.len() - text.len())
         .ok()
         .filter(|level| (1..=6).contains(level))?;
-    if !text.is_empty() && !text.starts_with(' ') {
+    if !text.is_empty() && !text.starts_with([' ', '\t']) {
         return None;
     }
-    let title = text.trim_start_matches(' ');
+    let title = text.trim_start_matches([' ', '\t']);
     let start = rest.len() - title.len();
     let before_run = title.trim_end_matches('#');
     let end = if before_run.is_empty() || before_run.ends_with([' ', '\t']) {
@@ -572,8 +649,8 @@ fn fence(rest: &str) -> Option<(char, usize)> {
 }
 
 /// The list marker `rest` starts with, and its width: a bullet, or one to
-/// nine digits and a `.` or `)`, followed by a space or by the end of the
-/// line.
+/// nine digits and a `.` or `)`, followed by a space, a tab or the end of
+/// the line.
 fn list_marker(rest: &str) -> Option<(Marker, usize)> {
     let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
     let (marker, width) = match digits {
@@ -594,17 +671,17 @@ fn list_marker(rest: &str) -> Option<(Marker, usize)> {
         }
         _ => return None,
     };
-    matches!(rest[width..].chars().next(), None | Some(' ')).then_some((marker, width))
+    matches!(rest[width..].chars().next(), None | Some(' ' | '\t')).then_some((marker, width))
 }
 
-/// Three or more of the same `-`, `*` or `_`, with nothing but spaces
-/// between them.
+/// Three or more of the same `-`, `*` or `_`, with nothing but spaces and
+/// tabs between them.
 fn is_thematic_break(rest: &str) -> bool {
     let Some(mark) = rest.chars().next().filter(|mark| "-*_".contains(*mark)) else {
         return false;
     };
     rest.chars()
-        .all(|character| character == mark || character == ' ')
+        .all(|character| character == mark || matches!(character, ' ' | '\t'))
         && rest.chars().filter(|character| *character == mark).count() >= 3
 }
 
@@ -628,15 +705,30 @@ pub fn trim_end_spaces(text: &str) -> &str {
     text.trim_end_matches([' ', '\t'])
 }
 
-/// A quoted line without its `>` and one space after it.
-fn unquote(line: &str) -> &str {
-    let rest = line.strip_prefix('>').unwrap_or(line);
-    rest.strip_prefix(' ').unwrap_or(rest)
+/// The quoted line whose `>` is at `quote`, up to `end`, without its `>`
+/// and one column of the space or tab after it: a tab there leaves its
+/// other columns as spaces.
+fn unquote(source: &str, quote: Spot, end: usize) -> Cut<'_> {
+    let after = quote.after(1);
+    after.cut(source, end, after.column + 1).1
+}
+
+/// `lines` joined by `\n`, each with its spaces before its text.
+fn join(lines: &[Cut<'_>]) -> String {
+    let mut value = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            value.push('\n');
+        }
+        value.extend(iter::repeat_n(' ', line.spaces));
+        value.push_str(line.text);
+    }
+    value
 }
 
 /// Reads `lines`, ranges of `source`, as consecutive lines of one text, each
-/// with at most `base` of its leading spaces left out, the way `lex_from`
-/// reads a file, held by `outer` containers. Spans count from the start of
+/// with at most `base` columns of its leading white space left out, the way
+/// `lex_from` reads a file, held by `outer` containers. Spans count from the start of
 /// `source`.
 pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize, outer: usize) -> Vec<Token> {
     let mut starts = Vec::with_capacity(lines.len());

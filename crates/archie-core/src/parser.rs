@@ -14,7 +14,7 @@ mod frontmatter;
 mod html;
 pub(crate) mod inline;
 mod lexer;
-mod line;
+pub(crate) mod line;
 pub(crate) mod scalar;
 pub(crate) mod table;
 mod toml;

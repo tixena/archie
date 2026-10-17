@@ -92,22 +92,30 @@ or `md`.
 ### Tokens
 
 The lexer reads a markdown block one line at a time. It keeps a stack with one number
-per open list item: the column where that item's text starts. Columns count spaces
-only: a tab is a character of text.
+per open list item: the column where that item's text starts. Columns count from the
+start of the source line, or of a grid cell's line. In the white space that builds the
+blocks, a line's indentation, the white space after a list marker, after a heading's
+`#`s and after a block quote's `>`, and between the marks of a thematic break, a space
+is one column and a tab moves to the next multiple of 4. Where a column limit falls
+inside a tab, as when a line loses its columns up to an item's text, a code column or
+a fence's column, the tab's columns past the limit are kept as that many spaces:
+`- foo`, a blank line, then two tabs and `bar` is an item holding the code `  bar`. A
+tab anywhere else is a character of text, kept as written: in a paragraph's text, and
+in a code block's content past its code column or its fence's column.
 
 | Token | What it covers |
 |---|---|
 | `BLANK` | A line holding only spaces and tabs. |
-| `BLOCK_QUOTE` | A line whose text starts with `>`, and each line after it whose text starts with `>` within three columns of the enclosing item's text. It holds their text, each line without its `>` and one space after it, joined by `\n`. |
+| `BLOCK_QUOTE` | A line whose text starts with `>`, and each line after it whose text starts with `>` within three columns of the enclosing item's text. It holds their text, each line without its `>` and one column of the space or tab after it, joined by `\n`. |
 | `CODE_BLOCK` | A fenced code block, from its opening fence to its closing fence, or an indented code block. It holds the lines between the fences, their range in the source, and the info string, the text after the opening fence with the white space around it trimmed, as a range of the source. An indented block has an empty info string. |
 | `DEFINITION` | A link reference definition: `[label]:`, a destination and an optional title, with nothing after them on their line, over as many lines as it needs. It holds the label as written and the target. |
-| `HEADING_n` | One to six `#`, `n` of them, followed by a space or by the end of the line. Its text runs from the first character after those spaces to the end of the line's text. A closing sequence, a final run of `#`s that a space or a tab precedes or that is the whole text, ends the text before the spaces and tabs in front of it: `# Title ##` holds `Title`, and `# #` no text. A final run that touches the text before it, a backslash included, is text: `# Title#` holds `Title#`, and `# Title \#` holds `Title #`. |
+| `HEADING_n` | One to six `#`, `n` of them, followed by a space, a tab or the end of the line. Its text runs from the first character after the spaces and tabs that follow them to the end of the line's text. A closing sequence, a final run of `#`s that a space or a tab precedes or that is the whole text, ends the text before the spaces and tabs in front of it: `# Title ##` holds `Title`, and `# #` no text. A final run that touches the text before it, a backslash included, is text: `# Title#` holds `Title#`, and `# Title \#` holds `Title #`. |
 | `HTML` | An HTML block, by the seven kinds of CommonMark's HTML blocks, from its first line to the line that ends it by its kind. It holds the lines as written, from the column of the enclosing item's text. |
 | `ITEM_END` | The end of a list item. |
-| `ITEM_START` | A list marker: `-`, `*` or `+`, or one to nine digits and `.` or `)`, followed by a space or by the end of the line. It holds the marker, so the block grammar knows the bullet character or the delimiter: an item whose bullet character or delimiter differs from the item's before it starts a new list. |
+| `ITEM_START` | A list marker: `-`, `*` or `+`, or one to nine digits and `.` or `)`, followed by a space, a tab or the end of the line. It holds the marker, so the block grammar knows the bullet character or the delimiter: an item whose bullet character or delimiter differs from the item's before it starts a new list. |
 | `TABLE` | A whole table (see [Tables](#tables)), and the depth of the containers that hold it. |
 | `TEXT` | A line of paragraph text, from its first character to the end of its text. |
-| `THEMATIC_BREAK` | Three or more of the same `-`, `*` or `_`, with nothing but spaces between them. |
+| `THEMATIC_BREAK` | Three or more of the same `-`, `*` or `_`, with nothing but spaces and tabs between them. |
 | `UNDERLINE_n` | A line of only `=` (`n` is 1) or only `-` (`n` is 2), right after paragraph text. |
 
 A line's text ends before the spaces and tabs at its end, and only those: a no-break
@@ -117,9 +125,9 @@ Each line is read as follows.
 
 1. A `BLANK` line is `BLANK`. When the token before it opened an item whose marker
    line holds nothing else, that item ends first, with `ITEM_END`.
-2. Otherwise the spaces that start the line are counted: that count is the line's
-   column. Every open item whose text column is greater than the line's column is
-   closed, innermost first, with one `ITEM_END` each.
+2. Otherwise the spaces and tabs that start the line are counted in columns: that
+   count is the line's column. Every open item whose text column is greater than the
+   line's column is closed, innermost first, with one `ITEM_END` each.
 3. The line continues a paragraph when the token before it is `TEXT` and it closed no
    item.
 4. A line whose column is four or more past the text column of the innermost open
@@ -136,8 +144,8 @@ Each line is read as follows.
       of it as opened the block, indented at most three columns past the enclosing
       item's text: a line of them indented further is content. With no closing fence,
       the block ends before the first line of text indented less than the enclosing
-      item's text, or at the end of the text. Each line inside loses at most as many
-      leading spaces as the column of the opening fence.
+      item's text, or at the end of the text. Each line inside loses its spaces and
+      tabs up to the column of the opening fence.
    3. `THEMATIC_BREAK`.
    4. `HEADING_n`. A list item may hold one.
    5. `BLOCK_QUOTE`.
@@ -148,11 +156,11 @@ Each line is read as follows.
       two kinds, or at the end of the enclosing item or of the text.
    7. `ITEM_START`. On a line that continues a paragraph, only a bullet, or the number
       1, with text after it starts an item. The item's text column is the column of
-      its first word, when one to four spaces follow the marker; with none, or with
-      five or more, it is the column one space past the marker. Whatever follows the
-      marker on its line is classified again by these same rules. At the block cap
-      (see [Blocks](#blocks)), a marker opens no item, and it and the text after it
-      are `TEXT`.
+      its first word, when one to four columns of spaces and tabs follow the marker;
+      with none, or with five or more, it is the column one past the marker. Whatever
+      follows the marker on its line is classified again by these same rules. At the
+      block cap (see [Blocks](#blocks)), a marker opens no item, and it and the text
+      after it are `TEXT`.
    8. `TABLE`, also on a line that continues a paragraph, which then ends before the
       table. The lexer goes on after the table's last line. At the block cap no table
       is read, and its lines are read as they would be without it.
@@ -788,9 +796,9 @@ A `PLAIN` value's type comes from how it is written:
 | `List` | The first marker | The end of the last item |
 | `Item` | Its marker | The end of its last section, or of the marker when the item is empty |
 | `CodeBlock` written fenced | The opening fence | The end of the closing fence, or of its last line when no fence closes it |
-| `CodeBlock` written indented | The code column of its first line | The end of its last line |
+| `CodeBlock` written indented | The code column of its first line, or the tab it falls inside | The end of its last line |
 | `BlockQuote` | Its first `>` | The end of its last line |
-| `Html` block | Its first line, from the column of the enclosing item's text | The end of its last line |
+| `Html` block | Its first line, from the column of the enclosing item's text, or the tab it falls inside | The end of its last line |
 | `ThematicBreak` | Its first mark | Its last mark |
 | `Table` | Its first line's text | Its last line's text |
 | `TableRow` | The row line's text, or the first line's text of a grid row | The end of that line, or of the grid row's last line |
@@ -856,8 +864,8 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   construct, and the `lines` of the grid cell it lies in, or `None` outside grid
   cells. `context.markdown::<T>(range)` reads a range of the source as a markdown
   block with the extensions `T`, one container deeper, each line with at most `column`
-  of its leading spaces left out; in a grid cell it reads only the parts of the range
-  on the cell's lines. Its spans count from the start of the source.
+  columns of its leading white space left out; in a grid cell it reads only the parts
+  of the range on the cell's lines. Its spans count from the start of the source.
 - No node that the block cap of list items, markdown blocks and table cells holds is
   offered, so a markdown block an extension reads with `context.markdown` nests under
   the same cap as the file's own.
@@ -910,7 +918,7 @@ then read and written again, gives the same text the second time.
 | Paragraph | Each line on a line of its own. |
 | Bullet list | `-` and one space before each item. A bullet list right after another bullet list in the same section uses `*`, and the next one `-` again, in turn; a list an extension claimed, or any other block between them, ends the turn. An item of a `*` list whose first line is the thematic break `***` writes it `___`, because `* ***` reads as a thematic break. |
 | Ordered list | The number, `.` and one space before each item, numbered up from the list's first number. An ordered list right after another ordered list in the same section uses `)`, as in `1)`, and the next one `.` again, in turn. |
-| Item | Its lines after the first indented to its text. An empty item is its marker alone. A first line that starts with a space goes on the line after the marker, indented to the item's text. |
+| Item | Its lines after the first indented to its text. An empty item is its marker alone. A first line that starts with a space or a tab goes on the line after the marker, indented to the item's text. |
 | Loose list | A blank line between its items. |
 | Code block | Fenced, also when it was indented: a fence of backticks one longer than the longest run of backticks in its content, and at least three, or of tildes, measured on the tildes, when its info string holds a backtick, because a backtick fence's info string cannot hold one. The info string is the language, then one space and the args: `Text` args as written, and `Toml` args as one line of `key = value` pairs separated by `, `, each value in the TOML form below, with a mapping as an inline table, such as `site = { lang = "en" }`. Empty `Toml` args write nothing. A pair holding a null is left out, and the write fails with an error that names its key. |
 | Block quote | `> ` before each line of its text, and `>` alone on an empty line. |
@@ -995,15 +1003,11 @@ with the text it reads from and the text it writes.
    these same rules. CommonMark reads it as code.
 4. A line further left than a list item's text ends the list and starts a new
    paragraph. CommonMark would continue the item's paragraph with it.
-5. A tab is a character of text. It does not indent a line, and it does not separate a
-   heading's `#`s, a list marker or the marks of a thematic break from what follows, so
-   a tab and `code`, `#`, a tab and `Title`, and `-`, a tab and `item` are paragraph
-   text.
-6. An image's `alt` is the text between its brackets as written. CommonMark reads
+5. An image's `alt` is the text between its brackets as written. CommonMark reads
    inline nodes there.
-7. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
+6. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
    reads both as text.
-8. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
+7. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
    cells at most 40 deep together. Past either cap, the marks stay text.
 
 ### From GitHub's tables

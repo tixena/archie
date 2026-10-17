@@ -7,7 +7,7 @@ use core::ops::Range;
 
 use crate::parser::ast::{Alignment, TableFormat};
 use crate::parser::lexer::trim_end_spaces;
-use crate::parser::line::line_from;
+use crate::parser::line::{line_from, space};
 
 pub struct TableToken {
     pub alignments: Vec<Alignment>,
@@ -63,36 +63,33 @@ impl Cell {
     }
 }
 
-/// One line of a table: its text from `start` to `end`, the start of the
-/// line it is on, and where the next line starts.
+/// One line of a table: its text from `start` to `end`, the column the text
+/// starts at, the start of the line it is on, and where the next line
+/// starts.
 #[derive(Clone)]
 struct TableLine {
+    column: usize,
     end: usize,
     line_start: usize,
     next: usize,
     start: usize,
 }
 
-impl TableLine {
-    /// The column the line's text starts at.
-    const fn indent(&self) -> usize {
-        self.start - self.line_start
-    }
-}
-
-/// The table whose first line holds `first`, read on from `next`. Every
-/// later line is indented at least `level` columns, counted past at most
-/// `base` of its leading spaces. Returns the table, its span, and where the
-/// line after it starts.
+/// The table whose first line holds `first`, at `column`, read on from
+/// `next`. Every later line is indented at least `level` columns, counted
+/// past at most `base` columns of its leading white space. Returns the
+/// table, its span, and where the line after it starts.
 pub fn read(
     source: &str,
     line_start: usize,
+    column: usize,
     first: Range<usize>,
     next: usize,
     level: usize,
     base: usize,
 ) -> Option<(TableToken, Range<usize>, usize)> {
     let head = TableLine {
+        column,
         end: first.end,
         line_start,
         next,
@@ -104,21 +101,22 @@ pub fn read(
 }
 
 /// The line starting at `at`, when it holds text and is indented at least
-/// `level` columns past at most `base` of its leading spaces.
+/// `level` columns past at most `base` columns of its leading white space.
 fn line_after(source: &str, at: usize, level: usize, base: usize) -> Option<TableLine> {
     if at >= source.len() {
         return None;
     }
     let line = line_from(source, at, base);
     let text = &source[line.start..line.end];
-    let content = text.trim_start_matches(' ');
-    let indent = text.len() - content.len();
-    let trimmed = trim_end_spaces(content);
-    (!trimmed.is_empty() && indent >= level).then(|| TableLine {
-        end: line.start + indent + trimmed.len(),
+    let indent = space(text, line.origin + line.column);
+    let column = line.column + indent.columns;
+    let trimmed = trim_end_spaces(&text[indent.bytes..]);
+    (!trimmed.is_empty() && column >= level).then(|| TableLine {
+        column,
+        end: line.start + indent.bytes + trimmed.len(),
         line_start: line.start,
         next: line.next,
-        start: line.start + indent,
+        start: line.start + indent.bytes,
     })
 }
 
@@ -224,7 +222,7 @@ fn grid(
         let mut lines: Vec<TableLine> = Vec::new();
         let mut next = last.next;
         while let Some(line) = line_after(source, next, level, base).filter(|line| {
-            line.indent() == head.indent() && source[line.start..line.end].starts_with('|')
+            line.column == head.column && source[line.start..line.end].starts_with('|')
         }) {
             next = line.next;
             lines.push(line);
@@ -237,7 +235,7 @@ fn grid(
             span: first.start..final_line.end,
         });
         let closing = line_after(source, next, level, base)
-            .filter(|closing| closing.indent() == head.indent())?;
+            .filter(|closing| closing.column == head.column)?;
         let closing_chars: Vec<char> = source[closing.start..closing.end].chars().collect();
         if let Some((found, header)) = border(&closing_chars, '=') {
             if found != corners || !head_rows.is_empty() {

@@ -729,16 +729,120 @@ fn the_item_text_starts_at_its_first_word() {
 }
 
 #[test]
-fn four_spaces_of_indentation_are_a_code_block_and_a_tab_is_text() {
+fn four_spaces_or_a_tab_of_indentation_are_one_code_block() {
     check(
         "    four spaces\n\n\t- tab\n",
         r#"Document
   MarkdownBlock
     Section
-      CodeBlock value="four spaces"
-      Paragraph
-        Line
-          Text "\t- tab"
+      CodeBlock value="four spaces\n\n- tab"
+"#,
+    );
+}
+
+#[test]
+fn a_tab_that_starts_a_line_reaches_column_four_and_starts_a_code_block() {
+    check(
+        "\tcode\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock value="code"
+"#,
+    );
+}
+
+#[test]
+fn a_tab_past_the_code_column_stays_in_the_code() {
+    check(
+        "\tfoo\tbar\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock value="foo\tbar"
+"#,
+    );
+}
+
+#[test]
+fn a_tab_after_the_hashes_starts_a_heading() {
+    check(
+        "#\tTitle\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "Title"
+"#,
+    );
+}
+
+#[test]
+fn a_tab_after_a_list_marker_starts_an_item() {
+    check(
+        "-\titem\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      List
+        Item
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "item"
+"#,
+    );
+}
+
+#[test]
+fn tabs_between_the_marks_of_a_thematic_break_keep_it_a_break() {
+    check(
+        "*\t*\t*\n",
+        "Document
+  MarkdownBlock
+    Section
+      ThematicBreak
+",
+    );
+}
+
+#[test]
+fn a_line_a_tab_indents_to_the_item_text_continues_the_item() {
+    check(
+        "- foo\n\n\tbar\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "foo"
+              Paragraph
+                Line
+                  Text "bar"
+"#,
+    );
+}
+
+#[test]
+fn a_tab_that_the_code_column_falls_inside_leaves_its_columns_past_it_as_spaces() {
+    check(
+        "- foo\n\n\t\tbar\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      List loose
+        Item
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "foo"
+              CodeBlock value="  bar"
 "#,
     );
 }

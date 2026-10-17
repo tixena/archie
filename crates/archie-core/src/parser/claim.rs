@@ -14,6 +14,7 @@ use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension};
 use crate::parser::inline::children_mut;
 use crate::parser::lexer::BLOCK_CAP;
+use crate::parser::line::width;
 
 /// What the pass carries down the tree: the context of the nodes it offers,
 /// each grid cell's lines, by the cell's span, and where each line of the
@@ -27,8 +28,8 @@ struct Pass<'text> {
 
 impl<'text> Pass<'text> {
     /// The context of a node whose span starts at `start`: its `column` is
-    /// how far `start` is from the start of its line, or of its cell's line
-    /// in a grid cell.
+    /// the column `start` is at, counted from the start of its line, or of
+    /// its cell's line in a grid cell.
     fn at(&self, start: usize) -> Context<'text> {
         let line_start = self
             .context
@@ -42,7 +43,7 @@ impl<'text> Pass<'text> {
                 |line| line.start,
             );
         Context {
-            column: start - line_start,
+            column: width(&self.context.source[line_start..start]),
             ..self.context
         }
     }

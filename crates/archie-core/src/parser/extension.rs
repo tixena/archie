@@ -95,7 +95,8 @@ pub struct Context<'text> {
 
 impl Context<'_> {
     /// Reads `range` of the source as a markdown block, with the extensions
-    /// `T`, each line with at most `column` of its leading spaces left out.
+    /// `T`, each line with at most `column` columns of its leading white
+    /// space left out.
     /// In a grid cell, only the parts of `range` on the cell's lines are
     /// read, one after another. The block is one container deeper than the
     /// construct. Spans count from the start of the source.

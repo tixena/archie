@@ -9,6 +9,7 @@ use crate::parser::definition;
 use crate::parser::entity;
 use crate::parser::extension::{Construct, Extension};
 use crate::parser::inline::{is_punctuation, is_whitespace};
+use crate::parser::line::space;
 use crate::parser::table;
 use crate::writer::Writer;
 
@@ -544,11 +545,11 @@ pub fn reads_as_table(lines: &[String]) -> bool {
     let source = lines.join("\n");
     let mut line_start = 0;
     for line in lines {
-        let content = line.trim_start_matches(' ');
-        let start = line_start + (line.len() - content.len());
-        let end = start + content.trim_end_matches([' ', '\t']).len();
+        let indent = space(line, 0);
+        let start = line_start + indent.bytes;
+        let end = start + line[indent.bytes..].trim_end_matches([' ', '\t']).len();
         let next = (line_start + line.len() + 1).min(source.len());
-        if table::read(&source, line_start, start..end, next, 0, 0).is_some() {
+        if table::read(&source, line_start, indent.columns, start..end, next, 0, 0).is_some() {
             return true;
         }
         line_start = next;
@@ -564,9 +565,9 @@ pub fn reads_as_table(lines: &[String]) -> bool {
 fn block_start(text: &str, first: bool) -> Option<usize> {
     let bytes = text.as_bytes();
     let marks = bytes.iter().take_while(|&&byte| byte == b'#').count();
-    let heading = (1..=6).contains(&marks) && matches!(bytes.get(marks), None | Some(b' '));
+    let heading = (1..=6).contains(&marks) && matches!(bytes.get(marks), None | Some(b' ' | b'\t'));
     let bullet = matches!(bytes.first(), Some(b'-' | b'+' | b'*'))
-        && matches!(bytes.get(1), None | Some(b' '));
+        && matches!(bytes.get(1), None | Some(b' ' | b'\t'));
     let underline = !first
         && bytes.first().is_some_and(|&mark| {
             matches!(mark, b'=' | b'-') && bytes.iter().all(|&byte| byte == mark)
@@ -581,7 +582,7 @@ fn block_start(text: &str, first: bool) -> Option<usize> {
         .count();
     ((1..=9).contains(&digits)
         && matches!(bytes.get(digits), Some(b'.' | b')'))
-        && matches!(bytes.get(digits + 1), None | Some(b' ')))
+        && matches!(bytes.get(digits + 1), None | Some(b' ' | b'\t')))
     .then_some(digits)
 }
 
@@ -694,15 +695,15 @@ fn inert(character: char, before: Near, after: Near) -> bool {
     !can_open && !can_close
 }
 
-/// Three or more of the same `-`, `*` or `_`, with nothing but spaces
-/// between them.
+/// Three or more of the same `-`, `*` or `_`, with nothing but spaces and
+/// tabs between them.
 fn is_thematic_break(text: &str) -> bool {
     text.chars()
         .next()
         .filter(|mark| matches!(mark, '-' | '*' | '_'))
         .is_some_and(|mark| {
             text.chars()
-                .all(|character| character == mark || character == ' ')
+                .all(|character| character == mark || matches!(character, ' ' | '\t'))
                 && text.chars().filter(|&character| character == mark).count() >= 3
         })
 }
