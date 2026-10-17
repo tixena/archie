@@ -226,9 +226,10 @@ fn entry(
     Ok(())
 }
 
-/// A pair whose key follows a `?` at column `indent`. Its value follows a
-/// `:` at that column on the next line with content; with none, it is null
-/// at the end of the key. Both lines are read as a list entry's `-` line is.
+/// A pair whose key follows a `?` at column `indent`, inside `open` values;
+/// the `?` counts as a level of its own. Its value follows a `:` at that
+/// column on the next line with content; with none, it is null at the end of
+/// the key. Both lines are read as a list entry's `-` line is.
 fn explicit_entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
@@ -236,7 +237,8 @@ fn explicit_entry(
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
-    let key = compact_value(cursor, start - indent, indent, Context::Key(indent), open)?;
+    let depth = nest(open, start..start + 1)?;
+    let key = compact_value(cursor, start - indent, indent, Context::Key(indent), depth)?;
     let key_end = key.span().end;
     let name = explicit_key(cursor, key)?;
     let value = if next_line(cursor) == Some(indent)
@@ -244,7 +246,7 @@ fn explicit_entry(
         && separated_at(cursor, indent + 1)
     {
         let line_start = cursor.pos();
-        compact_value(cursor, line_start, indent, Context::Key(indent), open)?
+        compact_value(cursor, line_start, indent, Context::Key(indent), depth)?
     } else {
         null(key_end)
     };
@@ -345,23 +347,18 @@ fn is_explicit_key(cursor: &Cursor<'_>) -> bool {
     cursor.peek() == Some(b'?') && separated_at(cursor, 1)
 }
 
-/// The value of a key or a list entry with nothing after it on its line,
-/// inside `open` values: what the lines indented more than it hold, a list
-/// at a key's own column, or null.
+/// The value of a key, a list entry or a tag with nothing after it on its
+/// line, inside `open` values: what the lines indented more than it hold, a
+/// list at a key's own column, or null.
 fn nested(
     cursor: &mut Cursor<'_>,
     context: Context,
     null_at: usize,
     open: usize,
 ) -> Result<Value, ParseError> {
-    let Some(found) = next_line(cursor) else {
+    let Some((found, is_list)) = under(cursor, context) else {
         return Ok(null(null_at));
     };
-    let is_list = is_dash(cursor, found);
-    let compact = is_list && matches!(context, Context::Key(column) if column == found);
-    if !compact && context.column().is_some_and(|column| found <= column) {
-        return Ok(null(null_at));
-    }
     let line_start = cursor.pos();
     let at = line_start + found;
     if is_list {
@@ -378,6 +375,20 @@ fn nested(
     // A tab after the indentation separates a flow node from it.
     cursor.skip_spaces();
     line_value(cursor, context, open)
+}
+
+/// The indentation of the line that holds the value of a key, a list entry
+/// or a tag with nothing after it on its line, and whether a list entry
+/// starts that line, with the cursor at its start; `None` when the value is
+/// null.
+fn under(cursor: &mut Cursor<'_>, context: Context) -> Option<(usize, bool)> {
+    let found = next_line(cursor)?;
+    let is_list = is_dash(cursor, found);
+    let compact = is_list && matches!(context, Context::Key(column) if column == found);
+    if !compact && context.column().is_some_and(|column| found <= column) {
+        return None;
+    }
+    Some((found, is_list))
 }
 
 /// Refuses the tab at the cursor, after the indentation of a line, when a
@@ -1100,7 +1111,8 @@ fn is_spaced(line: &str) -> bool {
 /// A value written after a tag, inside `open` values, read again under it.
 /// In block context a tag may end its line, and the value is what the lines
 /// under it hold, as for a key or a list entry with nothing after it; with
-/// none, it is empty.
+/// none, it is empty. A collection counts its tag as a level of its own, and
+/// a value has at most one tag.
 fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, ParseError> {
     let tag = tag(cursor)?;
     let value = match context {
@@ -1108,24 +1120,78 @@ fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Valu
             cursor.skip_spaces();
             if at_line_end(cursor) {
                 end_of_line(cursor)?;
-                let block = nested(cursor, context, tag.span.end, open)?;
+                let depth = depth_under(cursor, context, &tag, open)?;
+                let block = nested(cursor, context, tag.span.end, depth)?;
                 cursor.set_pos(block.span().end);
                 block
             } else {
-                inline_value(cursor, context, open)?
+                let depth = tagged_depth(cursor, &tag, open)?;
+                inline_value(cursor, context, depth)?
             }
         }
         Context::Flow(column) => {
             skip_flow_space(cursor, column)?;
-            inline_value(cursor, context, open)?
+            let depth = tagged_depth(cursor, &tag, open)?;
+            inline_value(cursor, context, depth)?
         }
     };
     retag(cursor, &tag, value)
 }
 
+/// The depth inside `open` values that the node after `tag`, at the cursor,
+/// is read at: a flow collection counts the tag as a level of its own. A
+/// second tag on the node is refused.
+fn tagged_depth(cursor: &Cursor<'_>, tag: &Tag, open: usize) -> Result<usize, ParseError> {
+    match cursor.peek() {
+        Some(b'!') => Err(second_tag(cursor.pos())),
+        Some(b'[' | b'{') => tag_level(tag, open),
+        Some(_) | None => Ok(open),
+    }
+}
+
+/// [`tagged_depth`] for the node that `nested` reads under a tag that ends
+/// its line, with the cursor at the start of the next line: a block
+/// collection there counts the tag as a level of its own too.
+fn depth_under(
+    cursor: &mut Cursor<'_>,
+    context: Context,
+    tag: &Tag,
+    open: usize,
+) -> Result<usize, ParseError> {
+    let start = cursor.pos();
+    let depth = match under(cursor, context) {
+        None => Ok(open),
+        Some((_, true)) => tag_level(tag, open),
+        Some((found, false)) => {
+            cursor.set_pos(cursor.pos() + found);
+            no_tab_before_block(cursor)?;
+            if starts_mapping(cursor) {
+                tag_level(tag, open)
+            } else {
+                cursor.skip_spaces();
+                tagged_depth(cursor, tag, open)
+            }
+        }
+    };
+    cursor.set_pos(start);
+    depth
+}
+
+/// The depth inside `open` values that a collection after `tag` opens in:
+/// the tag counts as a level of its own.
+fn tag_level(tag: &Tag, open: usize) -> Result<usize, ParseError> {
+    let at = tag.span.start;
+    nest(open, at..at + 1)
+}
+
+/// A tag at `at` on a node that already has one.
+fn second_tag(at: usize) -> ParseError {
+    ParseError::new("a value has at most one tag", at..at + 1)
+}
+
 /// A key written after a tag, read by `read` and checked against the tag. A
 /// `:` right after the tag leaves the key empty, as `is_empty_key` reads it
-/// inside a flow collection or not.
+/// inside a flow collection or not, and a second tag is refused.
 fn tagged_key<F>(cursor: &mut Cursor<'_>, in_flow: bool, read: F) -> Result<String, ParseError>
 where
     F: FnOnce(&mut Cursor<'_>) -> Result<String, ParseError>,
@@ -1133,6 +1199,9 @@ where
     let tag = tag(cursor)?;
     cursor.skip_spaces();
     let start = cursor.pos();
+    if cursor.peek() == Some(b'!') {
+        return Err(second_tag(start));
+    }
     let text = if is_empty_key(cursor, in_flow) {
         String::new()
     } else {

@@ -591,3 +591,88 @@ fn frontmatter_nested_one_level_past_the_value_cap_is_refused_at_its_innermost_v
         }
     });
 }
+
+#[test]
+fn a_second_tag_on_a_value_or_a_key_is_refused_where_it_starts() {
+    on_two_megabytes(|| {
+        for source in [
+            "---\na: !!str !!str x\n---\n",
+            "---\n!!str !!str a: 1\n---\n",
+            "---\na: [!!str !!str x]\n---\n",
+            "---\na: {!!str !!str b: 1}\n---\n",
+            "---\na: !!str\n  !!str x\n---\n",
+        ] {
+            let error = parse(source).unwrap_err();
+            assert_eq!(error.message, "a value has at most one tag");
+            let at = source.rfind("!!").unwrap();
+            assert_eq!(error.span, at..at + 1);
+        }
+    });
+}
+
+/// The frontmatter of each shape of nesting whose levels each hold a tag on
+/// a collection or an explicit key, `levels` deep, with the text that opens
+/// its innermost level. Each level counts twice toward the value cap.
+fn tagged_frontmatter(levels: usize) -> [(String, &'static str); 3] {
+    let mut tags = String::new();
+    let mut explicit = String::new();
+    for level in 0..levels {
+        let indent = "  ".repeat(level);
+        tags.push_str(&indent);
+        tags.push_str("a: !!map\n");
+        explicit.push_str(&indent);
+        explicit.push_str("? a\n");
+        explicit.push_str(&indent);
+        explicit.push_str(":\n");
+    }
+    let innermost = "  ".repeat(levels);
+    let lists = format!("{}1{}", "!!seq [".repeat(levels), "]".repeat(levels));
+    [
+        (format!("---\n{tags}{innermost}b: 1\n---\n"), "!!"),
+        (format!("---\na: {lists}\n---\n"), "!!"),
+        (format!("---\n{explicit}{innermost}b: 1\n---\n"), "?"),
+    ]
+}
+
+#[test]
+fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
+    on_two_megabytes(|| {
+        let levels = VALUE_CAP / 2;
+        for (source, _) in tagged_frontmatter(levels) {
+            let document = parse(&source).unwrap();
+            assert_eq!(frontmatter_depth(&document), levels);
+            for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
+                let options = WriteOptions {
+                    frontmatter: format,
+                };
+                let written = write(&document, &options).unwrap();
+                assert_eq!(frontmatter_depth(&parse(&written).unwrap()), levels);
+            }
+            let copy = document.clone();
+            assert_eq!(copy, document);
+            let printed = format!("{document:?}");
+            assert!(printed.starts_with("Document {"));
+            drop(copy);
+            let json = to_json(&document).unwrap();
+            let back: Document = from_json(&json).unwrap();
+            assert_eq!(to_json(&back).unwrap(), json);
+            drop(back);
+            drop(document);
+        }
+    });
+}
+
+#[test]
+fn tags_and_explicit_keys_nested_one_level_past_the_value_cap_are_refused_at_the_innermost() {
+    on_two_megabytes(|| {
+        for (source, opener) in tagged_frontmatter(VALUE_CAP / 2 + 1) {
+            let error = parse(&source).unwrap_err();
+            assert_eq!(
+                error.message,
+                format!("the value nests deeper than {VALUE_CAP} levels")
+            );
+            let at = source.rfind(opener).unwrap();
+            assert_eq!(error.span, at..at + 1);
+        }
+    });
+}
