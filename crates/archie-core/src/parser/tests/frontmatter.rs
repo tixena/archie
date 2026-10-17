@@ -1578,6 +1578,71 @@ fn a_pair_of_a_flow_mapping_over_several_lines_is_dropped_up_to_the_next_line_at
 }
 
 #[test]
+fn text_where_a_comma_is_expected_in_a_flow_mapping_over_several_lines_is_dropped() {
+    let separator = "expected `,` or `}` in the mapping";
+    let missing = "---\n{\n  title: Notes\n  date: 2026-10-17\n}\n---\n";
+    assert_eq!(
+        kept_and_dropped(missing),
+        one_dropped(&["title"], separator, "date: 2026-10-17")
+    );
+    let quoted = "---\n{\n  a: \"x\n  y\" junk,\n  b: 1\n}\n---\n";
+    check(
+        quoted,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "x y"
+      Pair key=b
+        Scalar Integer 1
+  MarkdownBlock
+"#,
+    );
+    assert_eq!(
+        kept_and_dropped(quoted),
+        one_dropped(&["a", "b"], separator, "junk,")
+    );
+    for (source, text) in [(missing, "date"), (quoted, "junk")] {
+        let at = source.find(text).unwrap();
+        let strict = parse_with::<Plain>(source, &ParseOptions::strict());
+        assert_eq!(strict.unwrap_err(), ParseError::new(separator, at..at));
+    }
+    assert_eq!(
+        kept_and_dropped("---\n{\n  a: \"x\" junk,\n  b: 1\n}\n---\n"),
+        one_dropped(&["b"], separator, "a: \"x\" junk,")
+    );
+    let repeated = "---\n{\n  a: 1,\n  a: \"x\" junk,\n  b: 2\n}\n---\n";
+    check(
+        repeated,
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+      Pair key=b
+        Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    assert_eq!(
+        kept_and_dropped(repeated),
+        one_dropped(&["a", "b"], separator, "a: \"x\" junk,")
+    );
+}
+
+#[test]
+fn a_missing_comma_in_a_flow_mapping_on_one_line_fails_the_mapping() {
+    let separator = "expected `,` or `}` in the mapping";
+    let source = "---\n{a: \"x\" b: 1}\n---\n";
+    let at = source.find('b').unwrap();
+    assert_eq!(broken(source).error, ParseError::new(separator, at..at));
+    assert_eq!(
+        kept_and_dropped("---\nm: {a: \"x\" b}\nc: 1\n---\n"),
+        one_dropped(&["c"], separator, "m: {a: \"x\" b}")
+    );
+}
+
+#[test]
 fn a_yaml_line_indented_more_than_the_value_above_it_drops_that_entry() {
     let deeper = "this line is indented more than the keys above it";
     assert_eq!(

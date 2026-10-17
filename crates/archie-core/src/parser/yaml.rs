@@ -1160,7 +1160,9 @@ fn no_empty_entry(cursor: &Cursor<'_>) -> Result<(), ParseError> {
 
 /// A flow mapping `depth` values deep whose lines are indented more than
 /// `column`, the column of its key or `-`; none at the root. A pair that
-/// raises a drop or does not read is dropped by [`settle_flow_pair`].
+/// raises a drop or does not read is dropped by [`settle_flow_pair`], and so
+/// is text where a `,` or a `}` is expected, with the pair before it when
+/// that pair starts on the text's line.
 fn flow_mapping(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
@@ -1176,19 +1178,30 @@ fn flow_mapping(
         }
         no_empty_entry(cursor)?;
         let mark = cursor.mark();
+        // Held back until the text after it keeps it, as a repeated key merges.
+        let mut read_pair = IndexMap::new();
         let read = match flow_pair_key(cursor, column, false, depth) {
-            Ok(name) => flow_pair(cursor, column, depth, mark, name, &mut pairs),
+            Ok(name) => flow_pair(cursor, column, depth, mark, name, &mut read_pair),
             Err(stop) => Err(stop),
         };
         if !settle_flow_pair(cursor, mark, column, depth, read)? {
             continue;
         }
         skip_flow_space(cursor, column)?;
+        let separated = matches!(cursor.peek(), Some(b',' | b'}'));
+        let with_pair = !separated && !cursor.slice(mark.pos..cursor.pos()).contains('\n');
+        if !with_pair {
+            for (name, pair) in read_pair {
+                insert(&mut pairs, name, pair);
+            }
+        }
         if cursor.eat(b'}') {
             break;
         }
         if !cursor.eat(b',') {
-            return cursor.error("expected `,` or `}` in the mapping");
+            let broken = if with_pair { mark } else { cursor.mark() };
+            let failure = cursor.error("expected `,` or `}` in the mapping");
+            let _: bool = settle_flow_pair(cursor, broken, column, depth, failure)?;
         }
     }
     Ok(Mapping {
