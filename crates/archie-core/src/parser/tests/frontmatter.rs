@@ -1,4 +1,4 @@
-use super::check;
+use super::{check, check_spans};
 
 #[test]
 fn a_file_with_no_delimiter_on_its_first_line_has_no_frontmatter() {
@@ -164,5 +164,71 @@ Document
         Heading
           Text "a: 1"
 "#,
+    );
+}
+
+#[test]
+fn a_yaml_frontmatter_after_a_byte_order_mark_is_read() {
+    let source = "\u{feff}---\na: 1\n---\n# A\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+"#,
+    );
+    check_spans(
+        source,
+        &[
+            ("Document", source),
+            ("Frontmatter format=Yaml", "---\na: 1\n---"),
+            ("Mapping", "a: 1"),
+            ("Pair key=a", "a: 1"),
+            ("Scalar Integer 1", "1"),
+            ("MarkdownBlock", "# A\n"),
+            ("Section", "# A"),
+            ("Heading", "# A"),
+            (r#"Text "A""#, "A"),
+        ],
+    );
+}
+
+#[test]
+fn a_toml_frontmatter_after_a_byte_order_mark_is_read() {
+    let source = "\u{feff}+++\na = 1\n+++\nx\n";
+    check(
+        source,
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+    Section
+      Paragraph
+        Line
+          Text "x"
+"#,
+    );
+    check_spans(
+        source,
+        &[
+            ("Document", source),
+            ("Frontmatter format=Toml", "+++\na = 1\n+++"),
+            ("Mapping", "a = 1"),
+            ("Pair key=a", "a = 1"),
+            ("Scalar Integer 1", "1"),
+            ("MarkdownBlock", "x\n"),
+            ("Section", "x"),
+            ("Paragraph", "x"),
+            ("Line", "x"),
+            (r#"Text "x""#, "x"),
+        ],
     );
 }

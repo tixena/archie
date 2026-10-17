@@ -733,7 +733,9 @@ where
 }
 
 /// `frontmatter`, the written frontmatter of `document`, then its body, and
-/// the first error met while writing the body, if any.
+/// the first error met while writing the body, if any. A byte-order mark
+/// that would start the file is written `&#65279;`, since the reader skips a
+/// plain one there.
 fn with_body<E>(mut frontmatter: String, document: &Document<E>) -> (String, Option<WriteError>)
 where
     E: Extension,
@@ -744,7 +746,14 @@ where
     };
     writer.node(&document.kind, Construct::Document(document));
     let error = writer.error.take();
-    frontmatter.push_str(&writer.finish());
+    let body = writer.finish();
+    match body.strip_prefix('\u{feff}') {
+        Some(rest) if frontmatter.is_empty() => {
+            frontmatter.push_str("&#65279;");
+            frontmatter.push_str(rest);
+        }
+        Some(_) | None => frontmatter.push_str(&body),
+    }
     (frontmatter, error)
 }
 

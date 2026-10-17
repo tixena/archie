@@ -1567,6 +1567,38 @@ fn a_body_line_after_the_frontmatter_is_not_escaped() {
 }
 
 #[test]
+fn a_byte_order_mark_at_the_start_of_a_file_is_not_written() {
+    let yaml = "\u{feff}---\na: 1\n---\n# A\n";
+    let yaml_text = round_trip(yaml);
+    assert_eq!(yaml_text, "---\na: 1\n---\n# A\n");
+    assert_eq!(mapping(&yaml_text), mapping(yaml));
+    assert_eq!(round_trip("\u{feff}# A\n\ntext\n"), "# A\n\ntext\n");
+    let plus = "\u{feff}+++\na = 1\n+++\nx\n";
+    assert_eq!(round_trip(plus), "---\na: 1\n---\nx\n");
+    let toml_text = toml(plus);
+    assert_eq!(toml_text, "+++\na = 1\n+++\nx\n");
+    assert_eq!(toml(&toml_text), toml_text);
+    assert_eq!(mapping(&toml_text), mapping(plus));
+    assert_eq!(body(&toml_text), body(plus));
+}
+
+#[test]
+fn a_byte_order_mark_that_would_start_the_file_is_written_as_a_reference() {
+    let text = round_trip("\u{feff}\u{feff}# A\n");
+    assert_eq!(text, "&#65279;# A\n");
+    assert_eq!(round_trip(&text), text);
+}
+
+#[test]
+fn a_byte_order_mark_after_the_start_of_the_file_is_written_as_it_is() {
+    assert_eq!(round_trip("a\u{feff}b\n"), "a\u{feff}b\n");
+    assert_eq!(
+        round_trip("---\na: 1\n---\n\u{feff}x\n"),
+        "---\na: 1\n---\n\u{feff}x\n"
+    );
+}
+
+#[test]
 fn the_owners_sample_frontmatter_is_written_with_its_quotes_dropped() {
     let text = written(OWNERS_SAMPLE);
     assert!(

@@ -66,6 +66,7 @@ frontmatter := TOML_OPEN toml TOML_CLOSE
              | YAML_OPEN yaml YAML_CLOSE
 ```
 
+- A byte-order mark, U+FEFF, at the start of the file is skipped.
 - `TOML_OPEN` is the first line of the file when that line is `+++`. `TOML_CLOSE` is
   the next line that is `+++`.
 - `YAML_OPEN` is the first line of the file when that line is `---`. `YAML_CLOSE` is
@@ -916,7 +917,7 @@ then read and written again, gives the same text the second time.
 
 | Construct | Written as |
 |---|---|
-| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; then its markdown block. The text ends with one line ending; an empty document is empty text. |
+| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
 | Blank lines | One between two blocks and after a heading. Inside a tight list, none between the blocks of an item. |
 | Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A final run of `#`s in its text that a space or a tab precedes, or that is the whole text, gets a backslash before its first `#`, because the reader would take the run for the closing sequence: `Title ##` is written `# Title \##`. A heading line with no text is its marks alone. Every heading line is written. |
 | A heading that holds a line break | At depth 1 or 2, written underlined: its lines, each but the last ended by the break's `\`, guarded as a paragraph's lines, then `===` at depth 1 or `---` at depth 2 on a line of its own, because a `#` heading is one line. At depth 3 to 6, and right after other text in a tight list item, where a blank line would make the list loose, the one-line form, with the break written `&#10;`. |

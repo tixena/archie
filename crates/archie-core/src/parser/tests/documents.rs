@@ -1,10 +1,10 @@
 //! Whole documents. Each is a file under `fixtures/`, with the outline of
-//! the tree it parses into beside it in a `.tree` file. Each reads back from
-//! JSON as that tree, every `kind` empty, and its extension nodes build
-//! again from it.
+//! the tree it parses into beside it in a `.tree` file, or a source written
+//! here. Each reads back from JSON as that tree, every `kind` empty, and its
+//! extension nodes build again from it.
 
-use super::check;
 use super::json::{reads_back_from_json, rebuilds_from_json};
+use super::{check, check_spans};
 
 macro_rules! document {
     ($name:ident) => {
@@ -47,3 +47,52 @@ document!(changelog);
 document!(daily_note);
 document!(essay);
 document!(readme);
+
+#[test]
+fn a_heading_after_a_byte_order_mark_opens_the_first_section() {
+    let source = "\u{feff}# A\n\ntext\n";
+    check(
+        source,
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+      Paragraph
+        Line
+          Text "text"
+"#,
+    );
+    check_spans(
+        source,
+        &[
+            ("Document", source),
+            ("MarkdownBlock", "# A\n\ntext\n"),
+            ("Section", "# A\n\ntext"),
+            ("Heading", "# A"),
+            (r#"Text "A""#, "A"),
+            ("Paragraph", "text"),
+            ("Line", "text"),
+            (r#"Text "text""#, "text"),
+        ],
+    );
+    reads_back_from_json(source);
+    rebuilds_from_json(source);
+}
+
+#[test]
+fn a_byte_order_mark_after_the_first_byte_is_text() {
+    let source = "a\u{feff}b\n";
+    check(
+        source,
+        r#"Document
+  MarkdownBlock
+    Section
+      Paragraph
+        Line
+          Text "a\u{feff}b"
+"#,
+    );
+    reads_back_from_json(source);
+    rebuilds_from_json(source);
+}

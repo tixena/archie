@@ -144,7 +144,12 @@ fn parse_with_set<T>(source: &str, options: &ParseOptions) -> Result<Document<T>
 where
     T: Extension,
 {
-    let (frontmatter, body_start) = frontmatter::parse(source)?;
+    let start = if source.starts_with('\u{feff}') {
+        '\u{feff}'.len_utf8()
+    } else {
+        0
+    };
+    let (frontmatter, body_start) = frontmatter::parse(source, start)?;
     let (body, _, cells) = block::parse(source, body_start);
     let mut document = Document {
         body,

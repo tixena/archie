@@ -16,17 +16,17 @@ use crate::parser::{toml, yaml};
 /// before, overflow a 2 MB debug stack when they are read.
 pub const VALUE_CAP: usize = 400;
 
-/// The frontmatter `source` opens with, if any, and the offset its body
-/// starts at.
-pub fn parse(source: &str) -> Result<(Option<Frontmatter>, usize), ParseError> {
-    let opening = line_at(source, 0);
-    let format = match source[..opening.end].trim_end() {
+/// The frontmatter `source` opens with at byte `start`, if any, and the
+/// offset its body starts at.
+pub fn parse(source: &str, start: usize) -> Result<(Option<Frontmatter>, usize), ParseError> {
+    let opening = line_at(source, start);
+    let format = match source[start..opening.end].trim_end() {
         "+++" => FrontmatterFormat::Toml,
         "---" => FrontmatterFormat::Yaml,
-        _ => return Ok((None, 0)),
+        _ => return Ok((None, start)),
     };
     let Some(closing) = closing(source, opening.next, format) else {
-        return Ok((None, 0));
+        return Ok((None, start));
     };
     let content = opening.next..closing.start;
     let mapping = match format {
@@ -36,7 +36,7 @@ pub fn parse(source: &str) -> Result<(Option<Frontmatter>, usize), ParseError> {
     let frontmatter = Frontmatter {
         format,
         mapping,
-        span: 0..closing.start + 3,
+        span: start..closing.start + 3,
     };
     Ok((Some(frontmatter), closing.next))
 }
