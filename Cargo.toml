@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/archie-core"]
+members = ["crates/archie-core", "crates/archie-query"]
 resolver = "2"
 
 [workspace.package]
@@ -12,6 +12,9 @@ repository = "https://github.com/tixena/archie"
 [workspace.dependencies]
 # Error handling
 thiserror = "2"
+
+# Cursor encoding
+base64 = "0.22"
 
 # Insertion-ordered map
 indexmap = { version = "2", features = ["serde"] }
