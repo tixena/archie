@@ -1365,6 +1365,16 @@ fn a_hand_built_finite_float_is_written_as_the_shortest_text_that_reads_back_as_
 }
 
 #[test]
+fn text_holding_a_colon_and_a_tab_is_written_into_yaml_quoted_and_reads_back_as_itself() {
+    let document = with_frontmatter_value(ScalarValue::String("b:\tc".to_owned()));
+    assert!(written_yaml(&document).contains("x: \"b:\\tc\"\n"));
+    assert_eq!(
+        read_back_value(&document),
+        ScalarValue::String("b:\tc".to_owned())
+    );
+}
+
+#[test]
 fn toml_quotes_all_text_and_puts_tables_after_the_plain_keys() {
     let source = "---
 title: Notes

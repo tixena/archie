@@ -206,6 +206,22 @@ fn a_plain_value_cannot_hold_a_colon_and_a_space() {
 }
 
 #[test]
+fn a_plain_value_cannot_hold_a_colon_and_a_tab() {
+    let tab = "---\na: b:\tc\n---\n";
+    assert_eq!(
+        refusal(tab),
+        (
+            "a plain value cannot hold `: `; quote it".to_owned(),
+            "b:\tc"
+        )
+    );
+    assert_eq!(
+        parse(tab).unwrap_err(),
+        parse("---\na: b: c\n---\n").unwrap_err()
+    );
+}
+
+#[test]
 fn an_empty_entry_of_a_flow_collection_is_refused_at_its_comma() {
     let refused = |source: &str| {
         let error = parse(source).unwrap_err();

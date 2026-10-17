@@ -605,8 +605,9 @@ flow_key      := TAG? ( double_quoted | single_quoted | FLOW_KEY ) | TAG
   and `{"a":1}` is `{a: 1}`.
 - A comment starts at a `#` that follows a space or a tab.
 - `PLAIN` runs to the end of the line, or to a comment; inside a flow collection it
-  stops at `,`, `[`, `]`, `{` or `}`. It cannot hold `: ` or end with `:`; such a
-  value fails the file with ``a plain value cannot hold `: `; quote it``.
+  stops at `,`, `[`, `]`, `{` or `}`. It cannot hold a `:` followed by a space or a
+  tab, or end with `:`; such a value fails the file with
+  ``a plain value cannot hold `: `; quote it``.
 - A `PLAIN` cannot start with `@`, `` ` ``, `%`, `,`, `]` or `}`, nor with `?`, `:`
   or `-` followed by a space, a tab or the end of the line. Such a value fails the
   file with ``a plain value cannot start with `@`; quote it``, naming the

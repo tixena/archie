@@ -921,9 +921,10 @@ fn uncommented(line: &str) -> &str {
         .map_or(line, |before| &before[..before.len() - 1])
 }
 
-/// Whether a plain scalar's text holds `: ` or ends with `:`, as a key does.
+/// Whether a plain scalar's text holds a `:` followed by a space or a tab, or
+/// ends with `:`, as a key does.
 fn holds_pair(text: &str) -> bool {
-    text.contains(": ") || text.ends_with(':')
+    text.contains(": ") || text.contains(":\t") || text.ends_with(':')
 }
 
 /// The text of a plain scalar from the source it covers: each line without
