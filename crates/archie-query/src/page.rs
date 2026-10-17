@@ -3,6 +3,12 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
+/// The key a cursor from [`page`] continues after, or `None` when it does not decode.
+#[must_use]
+pub fn cursor_key(cursor: &str) -> Option<String> {
+    String::from_utf8(URL_SAFE_NO_PAD.decode(cursor).ok()?).ok()
+}
+
 /// Keys sorted ascending by the caller. Cursor = base64url (no padding) of the last returned key.
 ///
 /// The page holds up to `limit` keys (a `limit` of 0 is treated as 1, so a
@@ -17,8 +23,7 @@ pub fn page<'keys>(
     limit: usize,
 ) -> (Vec<&'keys str>, Option<String>) {
     let start = after
-        .and_then(|cursor| URL_SAFE_NO_PAD.decode(cursor).ok())
-        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(cursor_key)
         .map_or(0, |last| keys.partition_point(|key| *key <= last));
     let rest = &keys[start..];
     let taken = &rest[..limit.max(1).min(rest.len())];

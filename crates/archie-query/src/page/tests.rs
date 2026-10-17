@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use crate::page::page;
+use crate::page::{cursor_key, page};
 
 fn cursor_of(key: &str) -> String {
     URL_SAFE_NO_PAD.encode(key)
@@ -93,4 +93,10 @@ fn a_cursor_past_the_last_key_gives_an_empty_last_page() {
     let (items, next) = page(&all, Some(&cursor_of("z")), 2);
     assert_eq!(items.len(), 0);
     assert_eq!(next, None);
+}
+
+#[test]
+fn a_cursor_names_the_key_it_continues_after() {
+    assert_eq!(cursor_key(&cursor_of("b/c.md")).as_deref(), Some("b/c.md"));
+    assert_eq!(cursor_key("not base64!"), None);
 }

@@ -168,6 +168,9 @@ It returns the keys of the page and the cursor for the next one.
   neither repeat nor skip another.
 - A cursor that does not decode counts as no cursor, and the page starts at the
   first key.
+- `page::cursor_key(cursor)` returns the key a cursor continues after, or `None`
+  when it does not decode, so a caller can check a cursor without knowing its
+  encoding.
 
 ## Related
 
