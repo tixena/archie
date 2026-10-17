@@ -733,7 +733,16 @@ fn a_text_line_that_a_tab_would_make_a_block_is_escaped() {
 
 #[test]
 fn an_item_whose_first_line_starts_with_a_tab_writes_it_under_the_marker() {
-    assert_eq!(round_trip("-\n  \t<div>\n"), "-\n  \t<div>\n");
+    assert_eq!(round_trip("-\n  \t<div>\n"), "-\n    <div>\n");
+}
+
+#[test]
+fn an_html_block_led_by_a_tab_reads_back_the_same_under_a_wider_marker() {
+    let source = format!("{}1. j\n\n   \t<div>\n", "1. a\n".repeat(9));
+    assert_eq!(
+        round_trip(&source),
+        "1. a\n\n2. a\n\n3. a\n\n4. a\n\n5. a\n\n6. a\n\n7. a\n\n8. a\n\n9. a\n\n10. j\n\n     <div>\n"
+    );
 }
 
 #[test]

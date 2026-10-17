@@ -136,8 +136,9 @@ enum Start {
     Underline(u8),
 }
 
-/// A line's text cut at a column: the spaces left of a tab that the column
-/// falls inside, then the text after that tab.
+/// A line's text cut at a column: as spaces, the columns past it of a tab it
+/// falls inside, or of the white space before an HTML block's text, then the
+/// text after them.
 #[derive(Clone, Copy)]
 struct Cut<'src> {
     spaces: usize,
@@ -327,7 +328,7 @@ impl Lexer<'_> {
                 };
                 self.push(kind, text.at..end);
             }
-            Some(Start::Html(start)) => self.html(white, text.at, start),
+            Some(Start::Html(start)) => self.html(white, text, start),
             Some(Start::Item { marker, width }) => {
                 let after = text.after(width);
                 let inner = after.text(source, end);
@@ -418,15 +419,19 @@ impl Lexer<'_> {
     }
 
     /// Reads an HTML block whose first line's white space starts at `white`
-    /// and whose text starts at `at`, up to the line that ends it by `start`,
-    /// the end of the enclosing list item, or the end of the file. Its lines
-    /// are kept as written, past the item's text column.
-    fn html(&mut self, white: Spot, at: usize, start: html::Start) {
+    /// and text at `head`, up to the line that ends it by `start`, the end of
+    /// the enclosing list item, or the end of the file. Its lines are kept as
+    /// written past the item's text column, the first's white space as spaces.
+    fn html(&mut self, white: Spot, head: Spot, start: html::Start) {
         let source = self.source;
         let level = self.level();
+        let at = head.at;
         let first = line_at(source, at);
-        let (from, first_cut) = white.cut(source, first.end, level);
-        let mut lines = vec![first_cut];
+        let from = white.cut(source, first.end, level).0;
+        let mut lines = vec![Cut {
+            spaces: head.column - level,
+            text: &source[at..first.end],
+        }];
         let mut block_end = first.end;
         let mut blanks = Vec::new();
         let mut scan = self.pos;

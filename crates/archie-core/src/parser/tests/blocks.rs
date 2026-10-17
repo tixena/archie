@@ -848,6 +848,25 @@ fn a_tab_that_the_code_column_falls_inside_leaves_its_columns_past_it_as_spaces(
 }
 
 #[test]
+fn a_tab_before_an_html_block_past_the_item_text_is_kept_as_the_spaces_it_spans() {
+    check(
+        "1. j\n\n   \t<div>\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      List start=1 loose
+        Item
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "j"
+              Html " <div>"
+"#,
+    );
+}
+
+#[test]
 fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
     check(
         "\
