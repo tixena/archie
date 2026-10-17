@@ -335,6 +335,27 @@ fn a_toml_number_with_a_leading_zero_or_a_misplaced_underscore_is_refused() {
 }
 
 #[test]
+fn a_yaml_integer_too_large_for_64_bits_is_refused() {
+    for written in [
+        "99999999999999999999",
+        "-99999999999999999999",
+        "0xffffffffffffffffff",
+    ] {
+        assert_eq!(
+            failed(&format!("---\nbig: {written}\n---\n")),
+            named(
+                &format!("`{written}` is an integer too large for 64 bits"),
+                written
+            )
+        );
+    }
+    assert_eq!(
+        failed("---\n99999999999999999999\n---\n"),
+        named("the frontmatter must be a mapping", "99999999999999999999")
+    );
+}
+
+#[test]
 fn yaml_indentation_that_matches_no_block_is_refused() {
     let (deeper, _) = failure("---\na: 1\n  b: 2\n---\n");
     assert_eq!(deeper, "this line is indented more than the keys above it");

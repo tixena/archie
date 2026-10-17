@@ -49,6 +49,28 @@ pub fn yaml(text: &str) -> ScalarValue {
     }
 }
 
+/// Whether `text` is written as a YAML integer, decimal with an optional sign
+/// or `0o` or `0x` and digits in that base, that 64 bits cannot hold.
+pub fn is_oversized_integer(text: &str) -> bool {
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    let (digits, radix) = YAML_RADIXES
+        .iter()
+        .find_map(|&(prefix, radix)| Some((text.strip_prefix(prefix)?, radix)))
+        .unwrap_or((unsigned, 10));
+    !digits.is_empty()
+        && digits.chars().all(|digit| digit.is_digit(radix))
+        && integer(text, YAML_RADIXES).is_none()
+}
+
+/// Decimal digits with an optional sign, of any size, read as a float.
+pub fn decimal_float(text: &str) -> Option<ScalarValue> {
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if !is_digits(unsigned) {
+        return None;
+    }
+    text.parse().ok().map(finite_or_infinite)
+}
+
 pub fn is_date(text: &str) -> bool {
     date(text).is_some()
 }

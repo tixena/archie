@@ -177,8 +177,9 @@ fn push_text(out: &mut String, text: &str, in_flow: bool) {
 
 /// Whether `text` written plain would read as something else: another type,
 /// a key, a comment, an indicator, a flow collection's end, or text without
-/// the spaces around it or its control characters. Text in the form of a
-/// time of day is quoted as a time of day is, so a second write keeps it.
+/// the spaces around it or its control characters; or would fail the file as
+/// an integer too large for 64 bits. Text in the form of a time of day is
+/// quoted as a time of day is, so a second write keeps it.
 fn needs_quotes(text: &str, in_flow: bool) -> bool {
     text.starts_with(INDICATORS)
         || text.starts_with(' ')
@@ -188,6 +189,7 @@ fn needs_quotes(text: &str, in_flow: bool) -> bool {
         || text.contains(char::is_control)
         || (in_flow && text.contains(FLOW_INDICATORS))
         || scalar::is_time(text)
+        || scalar::is_oversized_integer(text)
         || !matches!(scalar::yaml(text), ScalarValue::String(_))
 }
 

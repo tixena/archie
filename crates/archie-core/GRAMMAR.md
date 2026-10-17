@@ -727,8 +727,9 @@ line under a tag that ends its line.
 - A tagged scalar's text is read again by the rules for an unquoted value of the
   tag's type in the table below: `!!str 01234` is the String `"01234"`, and
   `!!timestamp` reads a Date, a DateTime or a LocalDateTime. `!!float` reads a Float
-  or a NonFinite, and also reads the text of a decimal integer, so `!!float 1` is the
-  Float `1`. `!!map` and `!!seq` only check that the value is a mapping or a list.
+  or a NonFinite, and also reads decimal digits of any size with an optional sign, so
+  `!!float 1` is the Float `1` and `!!float 99999999999999999999` is the Float
+  `1e20`. `!!map` and `!!seq` only check that the value is a mapping or a list.
 - A value that does not fit its tag fails the file, as
   ``"`abc` is not a value of the tag `!!int`"``, or
   ``"a list is not a value of the tag `!!map`"``.
@@ -748,7 +749,7 @@ A `PLAIN` value's type comes from how it is written:
 |---|---|
 | Nothing, `~`, `null`, `Null`, `NULL` | Null |
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
-| An optional sign and digits; or `0x`, `0o` and digits in that base | Integer, 64 bits |
+| An optional sign and digits; or `0x`, `0o` and digits in that base. A decimal, octal or hexadecimal integer that does not fit 64 bits fails the file, as ``"`99999999999999999999` is an integer too large for 64 bits"`` | Integer, 64 bits |
 | An optional sign; then digits, a dot and optional digits, or a dot and digits, or digits alone when an exponent follows; then an optional exponent: `e` or `E`, an optional sign and digits. `.5`, `5.`, `-.5e3` and `1e3` are floats, and `.` is a string | Float, finite |
 | `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 | `2026-10-10`, when that day exists in the calendar | Date |

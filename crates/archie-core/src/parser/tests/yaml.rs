@@ -192,6 +192,46 @@ f: 1e3
 }
 
 #[test]
+fn digits_too_large_for_64_bits_read_under_a_float_or_a_text_tag_or_quoted() {
+    check(
+        "\
+---
+largest: 9223372036854775807
+float: !!float 99999999999999999999
+quoted: \"99999999999999999999\"
+text: !!str 99999999999999999999
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=largest
+        Scalar Integer 9223372036854775807
+      Pair key=float
+        Scalar Float 100000000000000000000
+      Pair key=quoted
+        Scalar String "99999999999999999999"
+      Pair key=text
+        Scalar String "99999999999999999999"
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_key_of_digits_too_large_for_64_bits_is_its_text_whether_implicit_or_explicit() {
+    let mapping = r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=99999999999999999999
+        Scalar String "x"
+  MarkdownBlock
+"#;
+    check("---\n99999999999999999999: x\n---\n", mapping);
+    check("---\n? 99999999999999999999\n: x\n---\n", mapping);
+}
+
+#[test]
 fn a_list_entry_may_hold_a_mapping_and_mappings_nest_lists_of_mappings() {
     check(
         "\
