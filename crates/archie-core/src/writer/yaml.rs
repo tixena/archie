@@ -1,6 +1,6 @@
 //! Frontmatter written in YAML: mappings in block form, lists of plain
 //! values in flow form, and text in double quotes only when the reader would
-//! read it plain as something else.
+//! read it plain as something else or it has the form of a time of day.
 
 use core::fmt::{self, Write as _};
 
@@ -177,7 +177,8 @@ fn push_text(out: &mut String, text: &str, in_flow: bool) {
 
 /// Whether `text` written plain would read as something else: another type,
 /// a key, a comment, an indicator, a flow collection's end, or text without
-/// the spaces around it or its control characters.
+/// the spaces around it or its control characters. Text in the form of a
+/// time of day is quoted as a time of day is, so a second write keeps it.
 fn needs_quotes(text: &str, in_flow: bool) -> bool {
     text.starts_with(INDICATORS)
         || text.starts_with(' ')
@@ -186,6 +187,7 @@ fn needs_quotes(text: &str, in_flow: bool) -> bool {
         || text.contains(" #")
         || text.contains(char::is_control)
         || (in_flow && text.contains(FLOW_INDICATORS))
+        || scalar::is_time(text)
         || !matches!(scalar::yaml(text), ScalarValue::String(_))
 }
 

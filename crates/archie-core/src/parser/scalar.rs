@@ -68,6 +68,10 @@ fn date(text: &str) -> Option<NaiveDate> {
     )
 }
 
+pub fn is_time(text: &str) -> bool {
+    time(text).is_some()
+}
+
 /// A time of day such as `07:32:00`, with an optional fraction. Second 60 is
 /// a leap second, which chrono holds as second 59 plus one more second of
 /// nanoseconds.

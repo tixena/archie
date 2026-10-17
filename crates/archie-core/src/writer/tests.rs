@@ -396,9 +396,7 @@ fn every_fixture_reads_back_to_the_same_body_and_writes_the_same_text_again() {
     for (name, source) in FIXTURES {
         let text = written(source);
         assert_eq!(body(&text), body(source), "{name}: {text}");
-        // A time of day reads back from YAML as text, which needs no quotes.
-        let again = text.replace("standup_at: \"09:30:00\"", "standup_at: 09:30:00");
-        assert_eq!(written(&text), again, "{name}");
+        assert_eq!(written(&text), text, "{name}");
     }
 }
 
@@ -1281,6 +1279,15 @@ fn a_time_of_day_is_written_into_yaml_as_quoted_text() {
         written("+++\nat = 07:32:00\n+++\n"),
         "---\nat: \"07:32:00\"\n---\n"
     );
+}
+
+#[test]
+fn a_time_of_day_written_into_yaml_writes_the_same_quoted_text_again() {
+    let text = written("+++\nat = 07:32:00\n+++\nx\n");
+    assert_eq!(text, "---\nat: \"07:32:00\"\n---\nx\n");
+    assert_eq!(written(&text), text);
+    let fraction = "---\nat: \"07:32:00.5\"\n---\nx\n";
+    assert_eq!(written(fraction), fraction);
 }
 
 #[test]
