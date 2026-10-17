@@ -981,7 +981,10 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   joined by `\n`, and place every span of the `Mapping`, or of the error, back in the
   source. `context.lines_of(range)` gives the parts of a range on the construct's own
   lines: on each of its grid cell's lines, or else the range split at each `\n`, which
-  it leaves out. So an extension reads a header the same way inside a grid cell and
+  it leaves out, each line past the construct's indentation: past the frame, then past
+  at most `column` columns of its leading white space, a tab that `column` falls inside
+  passed whole, as `context.markdown` reads it. A part that starts later on its line
+  keeps its start. So an extension reads a header the same way inside a grid cell and
   out, with `read_yaml_lines(context.source, &context.lines_of(range))`.
 - `to_json(document)` writes a document as JSON, and `from_json::<E>(text)` reads it
   back, at any depth archie reads. No node writes its `kind`.

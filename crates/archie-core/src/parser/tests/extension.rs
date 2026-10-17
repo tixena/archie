@@ -485,16 +485,14 @@ where
     outline(&rows.rows)
 }
 
-/// Each node of the header of the first comment in `source`, or in its
-/// first grid cell when `in_cell` is set, with the source text it covers.
-fn header_spans(source: &str, in_cell: bool) -> Vec<(String, String)> {
+/// Each node of the header of the first comment in the markdown block that
+/// `pick` takes from the body of `source`, with the source text it covers.
+fn header_spans(
+    source: &str,
+    pick: fn(&MarkdownBlock<With<Comments>>) -> &MarkdownBlock<With<Comments>>,
+) -> Vec<(String, String)> {
     let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
-    let body = if in_cell {
-        &first_cell(&document.body).body
-    } else {
-        &document.body
-    };
-    let comment = code_blocks(body)[0]
+    let comment = code_blocks(pick(&document.body))[0]
         .kind
         .0
         .as_deref()
@@ -506,6 +504,19 @@ fn header_spans(source: &str, in_cell: bool) -> Vec<(String, String)> {
         .into_iter()
         .map(|row| (row.label, source[row.span].to_owned()))
         .collect()
+}
+
+/// What `header_spans` gives for the header `id: abc`, `author: ada`, its
+/// second line indented by `indent`.
+fn header_rows(indent: &str) -> [(String, String); 5] {
+    [
+        ("Mapping", format!("id: abc\n{indent}author: ada")),
+        ("Pair key=id", "id: abc".to_owned()),
+        (r#"Scalar String "abc""#, "abc".to_owned()),
+        ("Pair key=author", "author: ada".to_owned()),
+        (r#"Scalar String "ada""#, "ada".to_owned()),
+    ]
+    .map(|(label, text)| (label.to_owned(), text))
 }
 
 /// `document` written to JSON, read back, and its extension nodes built
@@ -1422,7 +1433,7 @@ fn a_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root() {
     let written = "```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```";
     let grid = in_grid_cell(written);
     assert_eq!(
-        header_spans(&grid, true),
+        header_spans(&grid, |body| &first_cell(body).body),
         [
             ("Mapping", "id: abc     | x |\n| author: ada"),
             ("Pair key=id", "id: abc"),
@@ -1434,7 +1445,7 @@ fn a_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root() {
         "{grid}"
     );
     assert_eq!(
-        header_spans(&format!("{written}\n"), false),
+        header_spans(&format!("{written}\n"), |body| body),
         [
             ("Mapping", "id: abc\nauthor: ada"),
             ("Pair key=id", "id: abc"),
@@ -1455,7 +1466,7 @@ fn a_toml_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root(
     let written = "```remargin\n+++\nid = \"abc\"\nauthor = \"ada\"\n+++\nBody.\n```";
     let grid = in_grid_cell(written);
     assert_eq!(
-        header_spans(&grid, true),
+        header_spans(&grid, |body| &first_cell(body).body),
         [
             ("Mapping", "id = \"abc\"     | x |\n| author = \"ada\""),
             ("Pair key=id", "id = \"abc\""),
@@ -1467,7 +1478,7 @@ fn a_toml_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root(
         "{grid}"
     );
     assert_eq!(
-        header_spans(&format!("{written}\n"), false),
+        header_spans(&format!("{written}\n"), |body| body),
         [
             ("Mapping", "id = \"abc\"\nauthor = \"ada\""),
             ("Pair key=id", "id = \"abc\""),
@@ -1477,6 +1488,45 @@ fn a_toml_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root(
         ]
         .map(|(label, text)| (label.to_owned(), text.to_owned()))
     );
+}
+
+#[test]
+fn a_comment_header_in_a_list_item_indented_with_tabs_reads_as_at_the_root() {
+    let root = "```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```\n";
+    assert_eq!(header_spans(root, |body| body), header_rows(""));
+    for (source, indent) in [
+        (
+            "- ```remargin\n  ---\n  id: abc\n  author: ada\n  ---\n  Body.\n  ```\n",
+            "  ",
+        ),
+        (
+            "-\t```remargin\n\t---\n\tid: abc\n\tauthor: ada\n\t---\n\tBody.\n\t```\n",
+            "\t",
+        ),
+    ] {
+        assert_eq!(
+            header_spans(source, first_item),
+            header_rows(indent),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn a_comment_in_a_markdown_block_in_a_list_item_has_the_same_header_as_at_the_root() {
+    let written = "````markdown\n```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```\n````\n";
+    for (marker, indent) in [("- ", "  "), ("-\t", "\t")] {
+        let source = format!("{marker}{}", &indented(written, indent)[indent.len()..]);
+        let spans = header_spans(&source, |body| {
+            code_blocks(first_item(body))[0]
+                .kind
+                .0
+                .as_deref()
+                .and_then(first)
+                .unwrap()
+        });
+        assert_eq!(spans, header_rows(indent), "{source:?}");
+    }
 }
 
 #[test]

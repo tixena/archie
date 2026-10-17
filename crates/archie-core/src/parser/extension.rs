@@ -13,7 +13,7 @@ use crate::parser::ast::{
     ThematicBreak,
 };
 use crate::parser::error::ParseError;
-use crate::parser::line::Base;
+use crate::parser::line::{Base, line_from};
 use crate::parser::{block, claim};
 use crate::writer::Writer;
 
@@ -98,18 +98,29 @@ pub struct Context<'text> {
 
 impl Context<'_> {
     /// The parts of `range` on the construct's own lines: on each of the
-    /// grid cell's lines, or else `range` split at each `\n`, which it leaves out.
+    /// grid cell's lines, or else `range` split at each `\n`, which it leaves
+    /// out, each line read past the frame and `column`, as `markdown` reads it.
     #[must_use]
     pub fn lines_of(&self, range: Range<usize>) -> Vec<Range<usize>> {
         if let Some(lines) = self.lines {
             return within(lines, &range);
         }
+        let base = Base {
+            columns: self.column,
+            frame: self.frame.0,
+        };
+        let mut line_start = self.source[..range.start]
+            .rfind('\n')
+            .map_or(0, |at| at + 1);
         let mut start = range.start;
         self.source[range]
             .split('\n')
             .map(|line| {
-                let part = start..start + line.len();
-                start = part.end + 1;
+                let end = start + line.len();
+                let indented = line_from(self.source, line_start, base).start.min(end);
+                let part = start.max(indented)..end;
+                start = end + 1;
+                line_start = start;
                 part
             })
             .collect()
