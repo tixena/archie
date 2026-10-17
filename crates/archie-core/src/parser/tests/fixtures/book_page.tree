@@ -22,7 +22,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "What a row of the listing carries: a path alone, or a path together with the"
@@ -31,21 +30,18 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Whether a listing recurses."
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Whether non-markdown files are listed alongside markdown ones."
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Whether the ignore list in "
@@ -54,14 +50,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "What happens when no path is given."
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Output and exit codes."
@@ -80,7 +74,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Link form=Markdown target="get.md"
@@ -89,7 +82,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Link form=Markdown target="query.md"
@@ -100,7 +92,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Link form=Markdown target="../../concepts/archie-and-remargin.md"
@@ -111,7 +102,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Link form=Markdown target="index.md"

@@ -250,7 +250,9 @@ where
     T: Extension,
 {
     fn offer(&mut self, pass: &Pass<'_>) -> Result<(), ParseError> {
-        self.heading.offer(pass)?;
+        if let Some(heading) = &mut self.heading {
+            heading.offer(pass)?;
+        }
         each(&mut self.blocks, pass)?;
         each(&mut self.subsections, pass)?;
         let claimed = T::claim(Construct::Section(self), &pass.at(self.span.start));

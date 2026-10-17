@@ -11,7 +11,6 @@ fn a_heading_or_a_fence_is_not_recognized_inside_a_block_quote() {
         r##"Document
   MarkdownBlock
     Section
-      Heading
       BlockQuote "# quoted heading\n```\nquoted code"
 "##,
     );

@@ -155,9 +155,11 @@ fn clear_kind(kind: &mut Kind<Markdown>) {
 fn clear_section(section: &mut Section) {
     section.span = 0..0;
     clear_kind(&mut section.kind);
-    section.heading.span = 0..0;
-    clear_kind(&mut section.heading.kind);
-    clear_inlines(&mut section.heading.children);
+    if let Some(heading) = &mut section.heading {
+        heading.span = 0..0;
+        clear_kind(&mut heading.kind);
+        clear_inlines(&mut heading.children);
+    }
     for block in &mut section.blocks {
         clear_block_node(block);
     }
@@ -285,11 +287,11 @@ fn titled(title: &str, text: &str, subsections: Vec<Section>) -> Section {
             }],
             span: 0..0,
         })],
-        heading: Heading {
+        heading: Some(Heading {
             children: vec![text_node(title)],
             kind: Kind(None),
             span: 0..0,
-        },
+        }),
         kind: Kind(None),
         span: 0..0,
         subsections,
@@ -300,11 +302,11 @@ fn titled(title: &str, text: &str, subsections: Vec<Section>) -> Section {
 fn headed(children: Vec<Inline>, subsections: Vec<Section>) -> Section {
     Section {
         blocks: Vec::new(),
-        heading: Heading {
+        heading: Some(Heading {
             children,
             kind: Kind(None),
             span: 0..0,
-        },
+        }),
         kind: Kind(None),
         span: 0..0,
         subsections,
@@ -412,18 +414,24 @@ fn a_thematic_break_of_any_marks_is_written_as_stars() {
 }
 
 #[test]
-fn headings_get_one_mark_per_level_and_an_empty_heading_only_over_subsections() {
+fn every_heading_line_is_written_and_a_section_with_none_writes_no_line() {
     assert_eq!(
         round_trip("# Hi H1\n### This is H3\n"),
-        "# Hi H1\n\n##\n\n### This is H3\n"
+        "# Hi H1\n\n### This is H3\n"
     );
     assert_eq!(round_trip("intro\n"), "intro\n");
-    assert_eq!(round_trip("intro\n## B\n"), "#\n\nintro\n\n## B\n");
+    assert_eq!(round_trip("intro\n## B\n"), "intro\n\n## B\n");
+    assert_eq!(round_trip("## Intro\n\n# Title\n"), "## Intro\n\n# Title\n");
+    assert_eq!(round_trip("Sub\n---\ntext\n"), "## Sub\n\ntext\n");
+}
+
+#[test]
+fn a_heading_line_with_no_text_keeps_its_section() {
+    assert_eq!(round_trip("# A\n\n#\n\nfoo\n"), "# A\n\n#\n\nfoo\n");
     assert_eq!(
-        round_trip("## Intro\n\n# Title\n"),
-        "#\n\n## Intro\n\n# Title\n"
+        round_trip("# Hi H1\n##\n### This is H3\n"),
+        "# Hi H1\n\n##\n\n### This is H3\n"
     );
-    assert_eq!(round_trip("Sub\n---\ntext\n"), "#\n\n## Sub\n\ntext\n");
 }
 
 #[test]
@@ -434,10 +442,7 @@ fn a_section_seven_levels_deep_is_a_markdown_block_inside_its_parent() {
         "{text}"
     );
     let source = "###### F\n\n````markdown\n# G\n\n```rust\nfn main() {}\n```\n````\n";
-    assert_eq!(
-        round_trip(source),
-        format!("#\n\n##\n\n###\n\n####\n\n#####\n\n{source}")
-    );
+    assert_eq!(round_trip(source), source);
 }
 
 #[test]

@@ -281,7 +281,10 @@ where
 }
 
 /// A heading, the blocks under it, then its subsections. Its level is its
-/// depth in the `MarkdownBlock`. An empty heading has no children.
+/// depth in the `MarkdownBlock`.
+///
+/// `heading` is `None` when no heading line was written, and a heading line
+/// with no text is a heading with no children.
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -291,7 +294,8 @@ where
     E: Extension,
 {
     pub blocks: Vec<Block<E>>,
-    pub heading: Heading<E>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading: Option<Heading<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
     pub span: Range<usize>,

@@ -33,7 +33,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Parser status"
@@ -45,7 +44,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Open questions"
@@ -53,14 +51,12 @@ Document
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "Which YAML features to read?"
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "Where do findings go?"
@@ -71,14 +67,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Ada: write the grammar document"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Grace: review the tree"

@@ -23,7 +23,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Strong
@@ -40,7 +39,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Strong
@@ -49,7 +47,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Strong
@@ -62,14 +59,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Read-only. Never mutate state from this command."
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Do not hand-roll the cutoff from "
@@ -82,7 +77,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "If the user gave a "
@@ -91,7 +85,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "If "

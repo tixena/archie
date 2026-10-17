@@ -100,7 +100,6 @@ Body text.
         Sequence
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Body text."

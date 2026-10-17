@@ -81,18 +81,13 @@ fn paragraph(start: usize, value: &str) -> Block {
     })
 }
 
-/// A list item's content: one section with an empty heading, holding
-/// `blocks`.
+/// A list item's content: one section with no heading, holding `blocks`.
 fn content(start: usize, covered: &str, blocks: Vec<Block>) -> MarkdownBlock {
     MarkdownBlock {
         kind: Kind(None),
         sections: vec![Section {
             blocks,
-            heading: Heading {
-                children: Vec::new(),
-                kind: Kind(None),
-                span: start..start,
-            },
+            heading: None,
             kind: Kind(None),
             span: span(start, covered),
             subsections: Vec::new(),
@@ -225,11 +220,11 @@ fn steps() -> Block {
 fn the_example_parses_into_the_tree_written_by_hand() {
     let section = Section {
         blocks: vec![dependencies(), steps()],
-        heading: Heading {
+        heading: Some(Heading {
             children: vec![text(108, "Ship parser")],
             kind: Kind(None),
             span: span(106, "# Ship parser"),
-        },
+        }),
         kind: Kind(None),
         span: span(106, SOURCE[106..].trim_end()),
         subsections: Vec::new(),

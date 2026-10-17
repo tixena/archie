@@ -1,7 +1,6 @@
 Document
   MarkdownBlock
     Section
-      Heading
       Html "<p align=\"center\">\n  <img src=\"logo.svg\" width=\"120\" alt=\"logo\">\n</p>"
     Section
       Heading
@@ -30,7 +29,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Frontmatter in two syntaxes"
@@ -38,7 +36,6 @@ Document
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "TOML between "
@@ -47,7 +44,6 @@ Document
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "YAML between "
@@ -56,14 +52,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "A body grammar that is context-free"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Byte ranges on every node"
@@ -75,21 +69,18 @@ Document
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "Tool"
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "Frontmatter"
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "Tree"
@@ -97,21 +88,18 @@ Document
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "quill"
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "TOML, YAML"
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "yes"
@@ -119,21 +107,18 @@ Document
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "other"
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "YAML"
             TableCell
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "no"

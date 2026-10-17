@@ -7,7 +7,6 @@ fn a_file_with_no_delimiter_on_its_first_line_has_no_frontmatter() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Just text."
@@ -27,7 +26,6 @@ No closing line.
         r#"Document
   MarkdownBlock
     Section
-      Heading
       ThematicBreak
       Paragraph
         Line
@@ -52,7 +50,6 @@ Body.
     Mapping
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Body."
@@ -73,7 +70,6 @@ More.
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Text."
@@ -121,7 +117,6 @@ fn windows_line_endings_read_the_same() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
@@ -164,7 +159,6 @@ Document
         r#"Document
   MarkdownBlock
     Section
-      Heading
       ThematicBreak
       Section
         Heading

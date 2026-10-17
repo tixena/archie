@@ -33,14 +33,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Soak the beans overnight."
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Simmer for 40 minutes."
@@ -49,7 +47,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Season and serve."
@@ -60,14 +57,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Keeps 3 days in the fridge"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "Freezes well"

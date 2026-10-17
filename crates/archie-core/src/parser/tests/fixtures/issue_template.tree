@@ -13,7 +13,6 @@ Document
         Scalar String ""
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Strong
@@ -29,7 +28,6 @@ Document
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "Run "
@@ -37,7 +35,6 @@ Document
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "See the error"

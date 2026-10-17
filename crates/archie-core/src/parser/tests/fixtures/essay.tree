@@ -1,7 +1,6 @@
 Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Markdown began as a way to write for the web without writing HTML. It was never"

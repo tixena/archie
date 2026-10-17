@@ -30,7 +30,6 @@ Document
             Scalar Integer 3
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Short introduction shown in listings."

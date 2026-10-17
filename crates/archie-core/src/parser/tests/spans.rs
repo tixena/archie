@@ -11,12 +11,10 @@ fn a_line_spans_its_own_text_and_a_paragraph_spans_its_lines() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "- a\n  b"),
-            ("Heading", ""),
             ("List", "- a\n  b"),
             ("Item", "- a\n  b"),
             ("MarkdownBlock", "a\n  b"),
             ("Section", "a\n  b"),
-            ("Heading", ""),
             ("Paragraph", "a\n  b"),
             ("Line", "a"),
             (r#"Text "a""#, "a"),
@@ -57,21 +55,19 @@ fn an_empty_heading_has_an_empty_span_at_the_start_of_its_section() {
     assert_eq!(sections.len(), 2);
     let subsections = &sections[1].subsections;
     assert_eq!(subsections.len(), 2);
-    for (section, covered) in [
-        (&sections[0], "intro"),
-        (&subsections[0], "### C"),
-        (&subsections[1], "##"),
+    for (section, covered, written) in [
+        (&sections[0], "intro", false),
+        (&subsections[0], "### C", false),
+        (&subsections[1], "##", true),
     ] {
         assert_eq!(&source[section.span.clone()], covered);
         let start = section.span.start;
-        assert_eq!(
-            section.heading,
-            Heading {
-                children: Vec::new(),
-                kind: Kind(None),
-                span: start..start,
-            }
-        );
+        let empty = Heading {
+            children: Vec::new(),
+            kind: Kind(None),
+            span: start..start,
+        };
+        assert_eq!(section.heading, written.then_some(empty));
     }
 }
 
@@ -86,12 +82,10 @@ fn a_code_block_spans_from_its_opening_fence_to_its_closing_fence() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", item),
-            ("Heading", ""),
             ("List", item),
             ("Item", item),
             ("MarkdownBlock", content),
             ("Section", content),
-            ("Heading", ""),
             ("Paragraph", "x"),
             ("Line", "x"),
             (r#"Text "x""#, "x"),
@@ -110,7 +104,6 @@ fn inline_nodes_span_their_delimiters() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", line),
-            ("Heading", ""),
             ("Paragraph", line),
             ("Line", line),
             (r#"Text "a ""#, "a "),
@@ -135,7 +128,6 @@ fn emphasis_strong_html_autolinks_and_line_breaks_span_their_delimiters() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", paragraph),
-            ("Heading", ""),
             ("Paragraph", paragraph),
             ("Line", "**a *b*** <i> <x@y.z>  "),
             ("Strong", "**a *b***"),
@@ -177,7 +169,6 @@ fn yaml_frontmatter_spans() {
             ("Scalar Null", ""),
             ("MarkdownBlock", "body\n"),
             ("Section", "body"),
-            ("Heading", ""),
             ("Paragraph", "body"),
             ("Line", "body"),
             (r#"Text "body""#, "body"),
@@ -222,12 +213,10 @@ fn an_indented_code_block_spans_from_its_code_column_to_its_last_line() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", item),
-            ("Heading", ""),
             ("List loose", item),
             ("Item", item),
             ("MarkdownBlock", content),
             ("Section", content),
-            ("Heading", ""),
             ("Paragraph", "a"),
             ("Line", "a"),
             (r#"Text "a""#, "a"),
@@ -273,7 +262,6 @@ fn a_block_quote_a_break_and_html_span_their_lines_and_a_heading_its_underline()
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "> a\n> b"),
-            ("Heading", ""),
             (r#"BlockQuote "a\nb""#, "> a\n> b"),
             ("Section", "T\n===\n\n***\n\n<div>\nx\n</div>"),
             ("Heading", "T\n==="),
@@ -293,7 +281,6 @@ fn the_text_of_a_heading_over_two_lines_spans_both() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "first\n  second `code`\n---"),
-            ("Heading", ""),
             ("Section", "first\n  second `code`\n---"),
             ("Heading", "first\n  second `code`\n---"),
             (r#"Text "first second ""#, "first\n  second "),
@@ -311,7 +298,6 @@ fn each_piece_of_a_node_across_lines_spans_its_part_on_its_line() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "Some *emphasis that\ngoes on* here."),
-            ("Heading", ""),
             ("Paragraph", "Some *emphasis that\ngoes on* here."),
             ("Line", "Some *emphasis that"),
             (r#"Text "Some ""#, "Some "),
@@ -334,7 +320,6 @@ fn a_piece_that_two_spaces_end_spans_its_line_break() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "*a  \nb*"),
-            ("Heading", ""),
             ("Paragraph", "*a  \nb*"),
             ("Line", "*a  "),
             ("Emphasis continues=next", "*a  "),
@@ -356,7 +341,6 @@ fn a_piece_of_inline_html_spans_the_spaces_before_its_line_end() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "x <span  \nclass=\"x\">"),
-            ("Heading", ""),
             ("Paragraph", "x <span  \nclass=\"x\">"),
             ("Line", "x <span  "),
             (r#"Text "x ""#, "x "),

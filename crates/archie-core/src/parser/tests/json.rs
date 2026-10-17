@@ -252,8 +252,10 @@ fn unclaim_markdown_block(block: &mut MarkdownBlock) {
 
 fn unclaim_section(section: &mut Section) {
     section.kind = Kind(None);
-    section.heading.kind = Kind(None);
-    unclaim_inlines(&mut section.heading.children);
+    if let Some(heading) = &mut section.heading {
+        heading.kind = Kind(None);
+        unclaim_inlines(&mut heading.children);
+    }
     for block in &mut section.blocks {
         match block {
             Block::BlockQuote(block_quote) => block_quote.kind = Kind(None),

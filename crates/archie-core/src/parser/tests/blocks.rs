@@ -29,7 +29,6 @@ A second paragraph.
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "First line"
@@ -65,7 +64,6 @@ Text in beta.
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Intro before any heading."
@@ -128,8 +126,41 @@ text in D
 }
 
 #[test]
-fn a_skipped_level_is_a_section_with_an_empty_heading() {
-    let tree = r#"Document
+fn a_skipped_level_is_a_section_with_no_heading() {
+    check(
+        "# Hi H1\n### This is H3\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "Hi H1"
+      Section
+        Section
+          Heading
+            Text "This is H3"
+"#,
+    );
+}
+
+#[test]
+fn a_heading_line_with_no_text_is_a_heading_with_no_children() {
+    check(
+        "# A\n\n#\n\nfoo\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "A"
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "foo"
+"#,
+    );
+    check(
+        "# Hi H1\n##\n### This is H3\n",
+        r#"Document
   MarkdownBlock
     Section
       Heading
@@ -139,9 +170,22 @@ fn a_skipped_level_is_a_section_with_an_empty_heading() {
         Section
           Heading
             Text "This is H3"
-"#;
-    check("# Hi H1\n### This is H3\n", tree);
-    check("# Hi H1\n##\n### This is H3\n", tree);
+"#,
+    );
+    let source = "#\n\nfoo\n";
+    check(
+        source,
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      Paragraph
+        Line
+          Text "foo"
+"#,
+    );
+    let written = write(&parse(source).unwrap(), &WriteOptions::default()).unwrap();
+    assert_eq!(written, source);
 }
 
 #[test]
@@ -151,7 +195,6 @@ fn text_before_a_deeper_first_heading_holds_that_heading_as_a_subsection() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "intro"
@@ -163,7 +206,7 @@ fn text_before_a_deeper_first_heading_holds_that_heading_as_a_subsection() {
 }
 
 #[test]
-fn a_body_whose_first_heading_is_deeper_starts_with_an_empty_heading() {
+fn a_body_whose_first_heading_is_deeper_starts_with_a_section_with_no_heading() {
     check(
         "\
 ## Starts at two
@@ -177,7 +220,6 @@ fn a_body_whose_first_heading_is_deeper_starts_with_an_empty_heading() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Section
         Heading
           Text "Starts at two"
@@ -185,7 +227,6 @@ fn a_body_whose_first_heading_is_deeper_starts_with_an_empty_heading() {
       Heading
         Text "One"
       Section
-        Heading
         Section
           Heading
             Text "Three"
@@ -212,7 +253,6 @@ fn a_heading_needs_one_to_six_hashes_and_a_space() {
 Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text \"#NoSpace is a paragraph\"
@@ -243,7 +283,6 @@ fn a_list_item_holds_sections_whose_levels_count_from_the_item() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
@@ -275,19 +314,16 @@ fn a_line_indented_to_the_item_text_continues_the_item() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "one"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "two"
@@ -296,7 +332,6 @@ fn a_line_indented_to_the_item_text_continues_the_item() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "three"
@@ -312,12 +347,10 @@ fn a_line_left_of_the_item_text_ends_the_list_and_starts_a_paragraph() {
             r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
@@ -344,12 +377,10 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List loose
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "parent"
@@ -357,7 +388,6 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
                 Item
                   MarkdownBlock
                     Section
-                      Heading
                       Paragraph
                         Line
                           Text "child"
@@ -365,14 +395,12 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
                         Item
                           MarkdownBlock
                             Section
-                              Heading
                               Paragraph
                                 Line
                                   Text "grandchild"
                 Item
                   MarkdownBlock
                     Section
-                      Heading
                       Paragraph
                         Line
                           Text "second child"
@@ -382,7 +410,6 @@ fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "sibling"
@@ -404,12 +431,10 @@ fn another_bullet_character_starts_a_new_list_and_an_item_may_be_empty() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "star"
@@ -417,7 +442,6 @@ fn another_bullet_character_starts_a_new_list_and_an_item_may_be_empty() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "plus"
@@ -427,7 +451,6 @@ fn another_bullet_character_starts_a_new_list_and_an_item_may_be_empty() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "after the empty item"
@@ -445,12 +468,10 @@ continues at column zero
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "item"
@@ -468,17 +489,14 @@ fn a_bullet_after_a_bullet_on_one_line_nests() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               List
                 Item
                   MarkdownBlock
                     Section
-                      Heading
                       Paragraph
                         Line
                           Text "inner"
@@ -502,7 +520,6 @@ After the code.
         r#"Document
   MarkdownBlock
     Section
-      Heading
       CodeBlock info="rust" value="fn main() {\n    // # not a heading\n    - not a list\n}"
       Paragraph
         Line
@@ -528,12 +545,10 @@ fn a_fence_inside_an_item_closes_only_on_a_fence_at_least_as_long() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List loose
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "step"
@@ -541,7 +556,6 @@ fn a_fence_inside_an_item_closes_only_on_a_fence_at_least_as_long() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "next"
@@ -560,7 +574,6 @@ never closed
         r#"Document
   MarkdownBlock
     Section
-      Heading
       CodeBlock info="" value="never closed\n# still code"
 "#,
     );
@@ -578,12 +591,10 @@ fn an_unclosed_fence_inside_an_item_ends_with_the_item() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "item"
@@ -591,7 +602,6 @@ fn an_unclosed_fence_inside_an_item_ends_with_the_item() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "next"
@@ -611,7 +621,6 @@ text under the heading
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Text line"
@@ -619,7 +628,6 @@ text under the heading
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "item"
@@ -651,19 +659,16 @@ fn the_item_text_starts_at_its_first_word() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "wide"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "inner"
@@ -671,7 +676,6 @@ fn the_item_text_starts_at_its_first_word() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "one"
@@ -688,7 +692,6 @@ fn four_spaces_of_indentation_are_a_code_block_and_a_tab_is_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       CodeBlock info="" value="four spaces"
       Paragraph
         Line
@@ -711,12 +714,10 @@ fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "one"
@@ -724,7 +725,6 @@ fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "two"
@@ -732,7 +732,6 @@ fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "three"
@@ -740,7 +739,6 @@ fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
@@ -748,7 +746,6 @@ fn a_new_bullet_character_or_delimiter_starts_a_new_list() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "b"
@@ -766,19 +763,16 @@ fn an_ordered_list_keeps_its_first_number() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List start=3
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "third"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "fourth"
@@ -797,12 +791,10 @@ fn an_ordered_marker_has_one_to_nine_digits() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List start=123456789
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "nine digits"
@@ -826,7 +818,6 @@ text
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "text"
@@ -839,7 +830,6 @@ text
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "one"
@@ -871,19 +861,16 @@ fn a_blank_line_between_items_or_between_two_blocks_of_an_item_makes_a_list_loos
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List loose
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "b"
@@ -894,14 +881,12 @@ fn a_blank_line_between_items_or_between_two_blocks_of_an_item_makes_a_list_loos
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "b"
@@ -911,7 +896,6 @@ fn a_blank_line_between_items_or_between_two_blocks_of_an_item_makes_a_list_loos
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "c"
@@ -922,14 +906,12 @@ fn a_blank_line_between_items_or_between_two_blocks_of_an_item_makes_a_list_loos
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "b"
@@ -950,12 +932,10 @@ fn a_blank_line_inside_a_nested_list_makes_only_the_list_it_separates_loose() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
@@ -963,7 +943,6 @@ fn a_blank_line_inside_a_nested_list_makes_only_the_list_it_separates_loose() {
                 Item
                   MarkdownBlock
                     Section
-                      Heading
                       Paragraph
                         Line
                           Text "b"
@@ -973,7 +952,6 @@ fn a_blank_line_inside_a_nested_list_makes_only_the_list_it_separates_loose() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "d"
@@ -993,12 +971,10 @@ fn a_blank_line_closing_a_nested_list_separates_the_items_around_it() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List loose
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "a"
@@ -1006,14 +982,12 @@ fn a_blank_line_closing_a_nested_list_separates_the_items_around_it() {
                 Item
                   MarkdownBlock
                     Section
-                      Heading
                       Paragraph
                         Line
                           Text "b"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "c"
@@ -1035,19 +1009,16 @@ fn text_indented_four_columns_past_the_item_text_is_a_code_block() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List start=1
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "first"
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "second"
@@ -1055,7 +1026,6 @@ fn text_indented_four_columns_past_the_item_text_is_a_code_block() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "item"
@@ -1079,23 +1049,19 @@ fn a_marker_followed_by_five_spaces_starts_its_text_one_space_after_it() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               CodeBlock info="" value="code"
         Item
           MarkdownBlock
             Section
-              Heading
               CodeBlock info="" value=" indented code"
       List start=1 loose
         Item
           MarkdownBlock
             Section
-              Heading
               CodeBlock info="" value="indented code"
               Paragraph
                 Line
@@ -1112,7 +1078,6 @@ fn an_indented_code_block_keeps_the_blank_lines_between_its_lines() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "text"
@@ -1137,7 +1102,6 @@ Some text
         r##"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Some text"
@@ -1193,7 +1157,6 @@ fn code_block_outline(info: &str, value: &str) -> String {
 Document
   MarkdownBlock
     Section
-      Heading
       CodeBlock info={info:?} value={value:?}
 "
     )
@@ -1207,12 +1170,10 @@ fn a_fence_of_tildes_inside_an_item_is_a_code_block_as_one_of_backticks_is() {
             r#"Document
   MarkdownBlock
     Section
-      Heading
       List loose
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "step"
@@ -1220,7 +1181,6 @@ fn a_fence_of_tildes_inside_an_item_is_a_code_block_as_one_of_backticks_is() {
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "next"
@@ -1249,7 +1209,6 @@ More text.
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Intro."
@@ -1268,17 +1227,14 @@ fn a_markdown_block_inside_a_nested_item_keeps_its_lines_from_the_fence_column()
         r##"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               List
                 Item
                   MarkdownBlock
                     Section
-                      Heading
                       CodeBlock info="markdown" value="# A" claimed
 "##,
     );
@@ -1293,7 +1249,6 @@ fn an_empty_item_does_not_interrupt_a_paragraph() {
                 r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "text"
@@ -1314,7 +1269,6 @@ fn an_empty_item_ends_at_a_blank_line_after_its_marker() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
@@ -1328,7 +1282,6 @@ fn an_empty_item_ends_at_a_blank_line_after_its_marker() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List start=1
         Item
           MarkdownBlock
@@ -1342,12 +1295,10 @@ fn an_empty_item_ends_at_a_blank_line_after_its_marker() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List loose
         Item
           MarkdownBlock
             Section
-              Heading
               List
                 Item
                   MarkdownBlock
@@ -1365,12 +1316,10 @@ fn an_empty_item_holds_the_text_on_the_line_right_after_its_marker() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               Paragraph
                 Line
                   Text "foo"
@@ -1391,7 +1340,6 @@ fn a_block_quote_holds_its_lines_as_text_without_their_marks() {
         r##"Document
   MarkdownBlock
     Section
-      Heading
       BlockQuote "# not a heading\n- not a list\nno space\n\n two spaces"
 "##,
     );
@@ -1411,7 +1359,6 @@ b
         r#"Document
   MarkdownBlock
     Section
-      Heading
       BlockQuote "a"
       Paragraph
         Line
@@ -1443,7 +1390,6 @@ ___
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "text"
@@ -1541,7 +1487,6 @@ b
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "T"
@@ -1572,7 +1517,6 @@ fn an_html_block_holds_its_lines_as_written() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Html "<details>\n<summary>x</summary>\n</details>"
 "#,
     );
@@ -1606,7 +1550,6 @@ y
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Html "<pre>\n\n*a*\n</pre> after"
       Paragraph
         Line
@@ -1636,7 +1579,6 @@ d
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a"
@@ -1667,7 +1609,6 @@ fn a_line_holding_one_whole_tag_starts_an_html_block() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Html "<a b='c' d=e f>"
       Html "</a >"
       Paragraph
@@ -1729,7 +1670,6 @@ text
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "text"
@@ -1771,31 +1711,26 @@ fn inside_a_list_item_each_construct_counts_columns_from_the_item_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               BlockQuote "q\nr"
         Item
           MarkdownBlock
             Section
-              Heading
               Section
                 Heading
                   Text "a"
         Item
           MarkdownBlock
             Section
-              Heading
               Html "<div>\nx\n</div>"
         Item
           MarkdownBlock
         Item
           MarkdownBlock
             Section
-              Heading
               ThematicBreak
 "#,
     );
@@ -1815,12 +1750,10 @@ fn a_quoted_line_left_of_the_item_text_ends_the_item() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       List
         Item
           MarkdownBlock
             Section
-              Heading
               BlockQuote "q"
       BlockQuote "r"
 "#,
@@ -1834,7 +1767,6 @@ fn a_block_quote_an_underlined_heading_a_break_and_html_read_together() {
         r##"Document
   MarkdownBlock
     Section
-      Heading
       BlockQuote "# quoted"
     Section
       Heading
@@ -1852,7 +1784,6 @@ fn a_no_break_space_at_a_line_end_is_text_and_only_spaces_and_tabs_make_a_line_b
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a\u{a0}"
@@ -1865,7 +1796,6 @@ fn a_no_break_space_at_a_line_end_is_text_and_only_spaces_and_tabs_make_a_line_b
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a"
@@ -1880,7 +1810,6 @@ fn a_no_break_space_at_a_line_end_is_text_and_only_spaces_and_tabs_make_a_line_b
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a"
@@ -1911,7 +1840,6 @@ fn a_definition_title_over_a_line_end_keeps_the_spaces_before_it() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="/u" title="t  \nx"
@@ -1923,7 +1851,6 @@ fn a_definition_title_over_a_line_end_keeps_the_spaces_before_it() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="/u" title="t"

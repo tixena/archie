@@ -13,7 +13,6 @@ Document
             Scalar Boolean true
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "The parser reads a file in two stages."

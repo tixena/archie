@@ -7,7 +7,6 @@ Document
         Scalar String "The parser reads a file\nin two stages."
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Body."

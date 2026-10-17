@@ -41,14 +41,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "2026-09-28: call about the parser"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "2026-09-12: met at the meetup"

@@ -37,7 +37,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "One tree for every consumer"
@@ -45,21 +44,18 @@ Document
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "frontmatter holds values, not syntax"
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "spans are byte ranges"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "TOML first, YAML also read"
@@ -70,21 +66,18 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[x] Model the tree"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[ ] Write the lexer #next"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[ ] Review with "

@@ -13,7 +13,6 @@ fn a_wiki_link_has_a_target_and_may_have_an_alias() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "See "
@@ -35,7 +34,6 @@ fn a_link_holds_its_text_as_children_and_its_destination() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Read "
@@ -56,7 +54,6 @@ fn a_code_span_keeps_what_is_inside_it_as_written() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Use "
@@ -76,7 +73,6 @@ fn a_backslash_before_punctuation_makes_it_plain_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[[not a link]] and * star, a path C:\\temp"
@@ -91,7 +87,6 @@ fn brackets_that_do_not_form_a_link_stay_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[text] (gap), [text](has space), [[]], [[a]b]], [unclosed, an "
@@ -110,7 +105,6 @@ Start [[a]]
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Start "
@@ -130,7 +124,6 @@ fn backticks_with_no_matching_run_stay_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "A lone ` tick."
@@ -153,7 +146,6 @@ Document
         Scalar String \"caf\u{e9}\"
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text \"caf\u{e9} \"
@@ -175,7 +167,6 @@ more](dest) and [a [b] c](d)
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="dest" continues=next
@@ -197,7 +188,6 @@ fn an_image_is_an_embed_in_either_form_and_may_sit_inside_a_link() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Hi! "
@@ -221,7 +211,6 @@ fn emphasis_and_strong_are_read_from_their_delimiters() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Emphasis
@@ -245,7 +234,6 @@ fn reference_links_autolinks_and_inline_html_are_read() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="https://example.com"
@@ -268,7 +256,6 @@ fn one_delimiter_is_emphasis_and_two_are_strong_with_either_character() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Emphasis
@@ -293,7 +280,6 @@ fn three_delimiters_are_emphasis_around_strong() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Emphasis
@@ -310,7 +296,6 @@ fn an_underscore_inside_a_word_opens_no_emphasis() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "snake_case_word and "
@@ -343,7 +328,6 @@ a * not emphasis *
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "*"
@@ -401,7 +385,6 @@ fn an_escaped_delimiter_is_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "*not emphasis* and "
@@ -418,7 +401,6 @@ fn inline_html_is_an_html_node_as_written() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a "
@@ -448,7 +430,6 @@ fn a_less_than_sign_that_starts_no_tag_is_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "1 < 2, <a b=>, <1a>, <not closed"
@@ -463,7 +444,6 @@ fn an_autolink_is_a_link_to_what_it_shows() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="https://example.com"
@@ -482,7 +462,6 @@ fn a_backslash_or_two_spaces_before_another_line_end_their_line_with_a_line_brea
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "first"
@@ -503,7 +482,6 @@ fn the_last_line_of_a_paragraph_ends_with_no_line_break() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a\\"
@@ -527,7 +505,6 @@ fn one_space_or_an_escaped_backslash_at_the_end_of_a_line_is_no_line_break() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a"
@@ -568,7 +545,6 @@ fn a_reference_link_takes_its_target_from_the_definition_of_its_label() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="u"
@@ -599,7 +575,6 @@ fn a_label_with_no_definition_stays_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[the guide][nope], [nope][] and [nope]"
@@ -619,7 +594,6 @@ fn brackets_followed_by_a_label_are_no_shortcut_and_an_inline_link_comes_first()
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[foo]"
@@ -640,7 +614,6 @@ fn inline_nodes_nest_inside_links_emphasis_and_strong() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="x"
@@ -665,7 +638,6 @@ fn a_code_span_inside_link_text_may_hold_a_bracket() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="x"
@@ -683,7 +655,6 @@ fn a_paragraph_holds_strong_links_line_breaks_and_html_together() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Read "
@@ -710,7 +681,6 @@ fn labels_match_by_unicode_case_folding_and_collapsed_whitespace() {
 Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target=\"/url\"
@@ -734,7 +704,6 @@ fn a_destination_is_held_with_its_escapes_and_references_resolved() {
 Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target=\"/u_x\"
@@ -766,7 +735,6 @@ fn a_link_or_an_image_keeps_its_title_in_any_of_its_forms() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="/u" title="T"
@@ -800,7 +768,6 @@ fn a_reference_link_with_a_title_and_an_escaped_destination() {
 Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target=\"/url\"
@@ -820,7 +787,6 @@ fn flanking_counts_unicode_punctuation_and_whitespace() {
 Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text \"a*\u{201C}foo\u{201D}* and a*\\\"foo\\\"* and *\\u{a0}a* and \"
@@ -837,7 +803,6 @@ fn emphasis_across_a_line_end_is_cut_into_a_piece_on_each_line() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Some "
@@ -858,7 +823,6 @@ fn an_opening_with_no_closing_in_its_paragraph_stays_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "Some *emphasis that"
@@ -878,7 +842,6 @@ fn a_middle_piece_goes_on_both_ways() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Emphasis continues=next
@@ -900,7 +863,6 @@ fn nested_nodes_across_a_line_end_are_each_cut() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Strong continues=next
@@ -923,7 +885,6 @@ fn delimiter_runs_pair_across_a_line_end() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Emphasis continues=next
@@ -944,7 +905,6 @@ fn a_code_span_across_a_line_end_holds_the_part_on_each_line() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Code "a" continues=next
@@ -961,7 +921,6 @@ fn each_piece_of_a_link_holds_its_target() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="u" continues=next
@@ -980,7 +939,6 @@ fn a_piece_of_a_link_may_hold_no_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="u" title="t" continues=next
@@ -998,7 +956,6 @@ fn each_piece_of_an_image_holds_the_alt_text_on_its_line() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Image form=Markdown target="u" alt="a" continues=next
@@ -1015,7 +972,6 @@ fn inline_html_across_a_line_end_holds_what_is_written_on_each_line() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Html "<span" continues=next
@@ -1034,7 +990,6 @@ fn a_hard_line_break_ends_the_first_piece() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Emphasis continues=next
@@ -1089,7 +1044,6 @@ fn a_code_span_does_not_cross_a_blank_line() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "`a"
@@ -1107,7 +1061,6 @@ fn a_reference_image_takes_its_target_and_title_from_the_definition_of_its_label
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Image form=Markdown target="/u" alt="a"
@@ -1118,7 +1071,6 @@ fn a_reference_image_takes_its_target_and_title_from_the_definition_of_its_label
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Image form=Markdown target="/u" title="T" alt="a"
@@ -1129,7 +1081,6 @@ fn a_reference_image_takes_its_target_and_title_from_the_definition_of_its_label
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Image form=Markdown target="/u" alt="a"
@@ -1144,7 +1095,6 @@ fn a_reference_image_whose_label_has_no_definition_stays_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "![a][9]"
@@ -1162,7 +1112,6 @@ fn entity_and_numeric_character_references_in_text_are_resolved() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", line),
-            ("Heading", ""),
             ("Paragraph", line),
             ("Line", line),
             ("Text \"a & b \u{a9} # \\\" &foo; \u{fffd}\"", line),
@@ -1177,7 +1126,6 @@ fn a_reference_stays_as_written_in_a_code_span_an_autolink_and_inline_html() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Code "&amp;"
@@ -1210,7 +1158,6 @@ fn link_text_and_image_text_may_hold_balanced_brackets() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="d"
@@ -1222,7 +1169,6 @@ fn link_text_and_image_text_may_hold_balanced_brackets() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Image form=Markdown target="d" alt="a [b] c"
@@ -1233,7 +1179,6 @@ fn link_text_and_image_text_may_hold_balanced_brackets() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="/u"
@@ -1249,7 +1194,6 @@ fn a_link_inside_link_text_leaves_the_outer_brackets_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[a "
@@ -1275,7 +1219,6 @@ fn a_code_span_loses_one_space_at_each_end_when_both_ends_are_spaces() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", line),
-            ("Heading", ""),
             ("Paragraph", line),
             ("Line", line),
             (r#"Code "a""#, "` a `"),
@@ -1298,7 +1241,6 @@ fn a_code_span_across_a_line_end_keeps_the_spaces_before_it() {
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "`foo   bar \nbaz`"),
-            ("Heading", ""),
             ("Paragraph", "`foo   bar \nbaz`"),
             ("Line", "`foo   bar "),
             (r#"Code "foo   bar " continues=next"#, "`foo   bar "),
@@ -1317,7 +1259,6 @@ fn two_spaces_before_a_line_end_inside_a_code_span_are_code_and_no_line_break() 
             ("Document", whole),
             ("MarkdownBlock", whole),
             ("Section", "`a  \nb`"),
-            ("Heading", ""),
             ("Paragraph", "`a  \nb`"),
             ("Line", "`a  "),
             (r#"Code "a  " continues=next"#, "`a  "),
@@ -1348,7 +1289,6 @@ fn a_paragraph_reads_reference_images_references_brackets_and_code_span_ends() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Image form=Markdown target="/logo.svg" title="Logo" alt="logo"
@@ -1368,7 +1308,6 @@ fn inline_html_and_a_link_title_keep_the_spaces_before_a_line_end() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "x "
@@ -1382,7 +1321,6 @@ fn inline_html_and_a_link_title_keep_the_spaces_before_a_line_end() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="u" title="t  \nx" continues=next
@@ -1396,7 +1334,6 @@ fn inline_html_and_a_link_title_keep_the_spaces_before_a_line_end() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "a"
@@ -1413,7 +1350,6 @@ fn a_line_ending_at_an_end_of_a_code_span_counts_as_a_space_and_stays_between_it
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Code "a" continues=next
@@ -1440,7 +1376,6 @@ fn a_link_inside_an_image_inside_link_text_leaves_the_outer_brackets_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[a "
@@ -1457,7 +1392,6 @@ fn ten_thousand_brackets_around_a_word_are_text_around_a_wiki_link() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "{}"
@@ -1477,7 +1411,6 @@ fn of_links_nested_two_thousand_deep_only_the_innermost_is_a_link() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "{}"
@@ -1498,7 +1431,6 @@ fn a_run_of_angle_brackets_is_text_and_an_autolink_search_stops_at_a_bracket() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "<<<<<x"
@@ -1509,7 +1441,6 @@ fn a_run_of_angle_brackets_is_text_and_an_autolink_search_stops_at_a_bracket() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "<a"
@@ -1526,7 +1457,6 @@ fn empty_brackets_before_unclosed_parentheses_are_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "[]([]([]("
@@ -1541,7 +1471,6 @@ fn backtick_runs_that_close_nothing_are_text() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "`a``a```a````a`````a"
@@ -1556,7 +1485,6 @@ fn a_destination_holds_parentheses_nested_at_most_thirty_two_deep() {
         r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="((((b))))"
@@ -1570,7 +1498,6 @@ fn a_destination_holds_parentheses_nested_at_most_thirty_two_deep() {
             r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Link form=Markdown target="{deepest}"
@@ -1585,7 +1512,6 @@ fn a_destination_holds_parentheses_nested_at_most_thirty_two_deep() {
             r#"Document
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "{deeper}"
@@ -1713,9 +1639,7 @@ fn a_link_that_would_nest_past_the_inline_cap_keeps_its_brackets_as_text() {
 /// The outline of a document of one paragraph of one line, whose nodes'
 /// outlines are `nodes`.
 fn one_line(nodes: &str) -> String {
-    format!(
-        "Document\n  MarkdownBlock\n    Section\n      Heading\n      Paragraph\n        Line\n{nodes}"
-    )
+    format!("Document\n  MarkdownBlock\n    Section\n      Paragraph\n        Line\n{nodes}")
 }
 
 #[test]

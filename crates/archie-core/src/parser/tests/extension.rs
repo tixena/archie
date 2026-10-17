@@ -524,7 +524,6 @@ fn an_extension_turns_the_blocks_it_claims_into_its_own_typed_node() {
         block_outline(&comment.body),
         r#"MarkdownBlock
   Section
-    Heading
     Paragraph
       Line
         Text "Looks good."
@@ -600,7 +599,6 @@ fn a_claim_that_cannot_be_read_inside_a_markdown_block_falls_back_or_fails_a_str
         block_outline(markdown),
         r#"MarkdownBlock
   Section
-    Heading
     CodeBlock info="remargin" value="no header"
 "#
     );
@@ -642,7 +640,6 @@ fn a_markdown_block_inside_a_markdown_block_is_read_the_same_way() {
         block_outline(outer),
         r##"MarkdownBlock
   Section
-    Heading
     CodeBlock info="md" value="# B" claimed
 "##
     );
@@ -673,7 +670,6 @@ fn a_comment_inside_a_markdown_block_is_still_a_comment() {
         block_outline(&comment.body),
         r#"MarkdownBlock
   Section
-    Heading
     Paragraph
       Line
         Text "Inside."
@@ -927,7 +923,6 @@ fn a_comment_inside_a_nested_item_has_the_same_body_as_at_the_root() {
       Item
         MarkdownBlock
           Section
-            Heading
             Paragraph
               Line
                 Text "point"
@@ -1064,7 +1059,6 @@ fn a_markdown_block_in_a_grid_cell_counts_its_columns_from_the_cell() {
             block_outline(block.kind.0.as_deref().unwrap()),
             r#"MarkdownBlock
   Section
-    Heading
     CodeBlock info="" value="code"
 "#,
             "{source}"

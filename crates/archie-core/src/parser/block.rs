@@ -374,7 +374,7 @@ where
     E: Extension,
 {
     /// Adds `block` to the innermost open section. A block read while none
-    /// is open opens the first section, with an empty heading.
+    /// is open opens the first section, with no heading.
     fn block(&mut self, block: Block<E>) {
         let span = block.span().clone();
         if self.open.is_empty() {
@@ -415,7 +415,7 @@ where
 
     /// Opens the section of a heading `level` marks deep: closes every open
     /// section at that depth or deeper, and fills a skipped level with a
-    /// section whose heading is empty. `written` is the heading line.
+    /// section with no heading. `written` is the heading line.
     fn open(&mut self, level: usize, heading: Heading<E>, written: Range<usize>) {
         while self.open.len() >= level
             && let Some(section) = self.open.pop()
@@ -427,7 +427,7 @@ where
         }
         self.open.push(Section {
             blocks: Vec::new(),
-            heading,
+            heading: Some(heading),
             kind: Kind(None),
             span: written,
             subsections: Vec::new(),
@@ -726,14 +726,14 @@ where
     }
 }
 
-/// A section with an empty heading, starting at `at`.
+/// A section with no heading, starting at `at`.
 const fn untitled<E>(at: usize) -> Section<E>
 where
     E: Extension,
 {
     Section {
         blocks: Vec::new(),
-        heading: empty_heading(at),
+        heading: None,
         kind: Kind(None),
         span: at..at,
         subsections: Vec::new(),

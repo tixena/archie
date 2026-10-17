@@ -41,21 +41,18 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[x] Blank and text lines"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[x] Headings"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[ ] List items"
@@ -63,21 +60,18 @@ Document
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "[ ] nested items"
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "[ ] continuation lines"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[ ] Fenced code blocks"

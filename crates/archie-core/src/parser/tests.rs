@@ -245,8 +245,10 @@ impl Rows<'_> {
         E: Extension,
     {
         self.push(depth, "Section".to_owned(), &section.span);
-        self.push(depth + 1, "Heading".to_owned(), &section.heading.span);
-        self.inlines(depth + 2, &section.heading.children);
+        if let Some(heading) = &section.heading {
+            self.push(depth + 1, "Heading".to_owned(), &heading.span);
+            self.inlines(depth + 2, &heading.children);
+        }
         for block in &section.blocks {
             self.block(depth + 1, block);
         }

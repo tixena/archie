@@ -28,7 +28,6 @@ Document
             Scalar Float 4.5
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "The parser reads a file in two stages."

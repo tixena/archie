@@ -13,14 +13,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[x] Review the tree"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[x] Answer "
@@ -29,7 +27,6 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "[ ] Draft the grammar"
@@ -40,14 +37,12 @@ Document
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "09:15 started on the lexer"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "11:40 "
@@ -57,14 +52,12 @@ Document
                   Item
                     MarkdownBlock
                       Section
-                        Heading
                         Paragraph
                           Line
                             Text "65 tests"
           Item
             MarkdownBlock
               Section
-                Heading
                 Paragraph
                   Line
                     Text "14:00 call with "

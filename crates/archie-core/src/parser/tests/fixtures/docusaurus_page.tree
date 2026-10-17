@@ -17,7 +17,6 @@ Document
           Scalar String "parser"
   MarkdownBlock
     Section
-      Heading
       Paragraph
         Line
           Text "import Tabs from '@theme/Tabs';"

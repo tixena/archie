@@ -409,20 +409,16 @@ impl Writer {
         lines
     }
 
-    /// The heading, written when it has text or the section has
-    /// subsections, then the blocks, then the subsections one level deeper.
-    /// Past the deepest level, each subsection is a `markdown` block. A
-    /// plain list right after a plain list of its kind takes the other
-    /// marker than that list, so the two read back as two lists.
+    /// The heading, written when the section has one, then the blocks, then
+    /// the subsections one level deeper. Past the deepest level, each
+    /// subsection is a `markdown` block. A plain list right after a plain
+    /// list of its kind takes the other marker than that list, so the two
+    /// read back as two lists.
     fn plain_section<T>(&mut self, section: &Section<T>)
     where
         T: Extension,
     {
-        let heading = &section.heading;
-        if !heading.children.is_empty()
-            || heading.kind.0.is_some()
-            || !section.subsections.is_empty()
-        {
+        if let Some(heading) = &section.heading {
             self.node(&heading.kind, Construct::Heading(heading));
         }
         let mut previous: Option<&List<T>> = None;

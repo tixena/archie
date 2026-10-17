@@ -17,7 +17,6 @@ Document
             Item
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Code "parse"
@@ -25,7 +24,6 @@ Document
             Item
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "Support for "
@@ -44,7 +42,6 @@ Document
             Item
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Strong
@@ -59,7 +56,6 @@ Document
             Item
               MarkdownBlock
                 Section
-                  Heading
                   Paragraph
                     Line
                       Text "A fence inside a list item no longer ends the list. ("
