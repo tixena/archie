@@ -579,6 +579,88 @@ site."www.example.com".port = 80
 }
 
 #[test]
+fn a_dotted_key_through_an_inline_table_writes_the_key_again() {
+    check(
+        "+++\na = {b = 1}\na.c = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_after_an_inline_table_writes_the_key_again() {
+    check(
+        "+++\na = {b = 1}\n\n[a]\nc = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn dotted_keys_that_share_a_prefix_make_one_table() {
+    check(
+        "+++\na.b = 1\na.c = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Mapping
+          Pair key=b
+            Scalar Integer 1
+          Pair key=c
+            Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
+fn a_header_written_twice_writes_the_key_again() {
+    check(
+        "+++\n[a]\nb = 1\n\n[a]\nc = 2\n+++\n",
+        "\
+Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=a repeats=1
+        Sequence
+          Mapping
+            Pair key=b
+              Scalar Integer 1
+          Mapping
+            Pair key=c
+              Scalar Integer 2
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
 fn dotted_keys_are_read_under_a_header_and_inside_an_inline_table() {
     check(
         r#"+++

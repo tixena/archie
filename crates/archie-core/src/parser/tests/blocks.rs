@@ -1249,6 +1249,18 @@ fn args_with_a_table_written_twice_are_text() {
 }
 
 #[test]
+fn args_with_a_dotted_key_through_an_inline_table_are_text() {
+    check(
+        "```md a={b=1},a.c=2\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Text "a={b=1},a.c=2" value="x" claimed
+"#,
+    );
+}
+
+#[test]
 fn args_with_a_dotted_key_written_twice_are_text() {
     check(
         "```md a.b=1,a.b=2\nx\n```\n",

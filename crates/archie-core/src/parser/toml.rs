@@ -3,6 +3,7 @@
 
 use core::ops::Range;
 use core::{iter, mem};
+use std::collections::HashMap;
 
 use indexmap::IndexMap;
 use indexmap::map::Entry;
@@ -17,6 +18,12 @@ use crate::parser::scalar;
 /// written.
 type Part = (String, Range<usize>);
 
+/// The tables a dotted key or a header made, by key, each with those made
+/// inside it. A dotted key goes on into them; a key whose value was written
+/// with `=` is written again.
+#[derive(Default)]
+struct Made(HashMap<String, Self>);
+
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
     let empty_at = content.start;
     let mut cursor = Cursor::new(source, content);
@@ -26,6 +33,7 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
     // Tables made only because a deeper header named them; a header may still
     // add to them.
     let mut implicit: Vec<Vec<String>> = Vec::new();
+    let mut made = Made::default();
     loop {
         skip_trivia(&mut cursor);
         if cursor.at_end() {
@@ -33,9 +41,10 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
         }
         if cursor.peek() == Some(b'[') {
             current = header(&mut cursor, &mut root, &mut implicit)?;
+            make(&mut made, &current);
         } else {
             let table = table_at(&mut root, &current);
-            let keys = entry(&mut cursor, table, current.len())?;
+            let keys = entry(&mut cursor, table, make(&mut made, &current), current.len())?;
             implicit.retain(|path| !dotted_through(path, &current, &keys));
         }
         stretch(&mut root, &current, cursor.pos());
@@ -149,6 +158,14 @@ fn table_of(value: &mut Value) -> &mut Mapping {
     }
 }
 
+/// Records each table on `path` as made, and returns the tables made inside
+/// the last.
+fn make<'made>(made: &'made mut Made, path: &[String]) -> &'made mut Made {
+    path.iter().fold(made, |tables, name| {
+        tables.0.entry(name.clone()).or_default()
+    })
+}
+
 /// An empty mapping at `at`.
 fn mapping_at(at: usize) -> Value {
     Value::Mapping(Mapping {
@@ -190,12 +207,13 @@ fn dotted_through(path: &[String], current: &[String], keys: &[String]) -> bool 
         .is_some_and(|rest| !rest.is_empty() && rest.len() < keys.len() && keys.starts_with(rest))
 }
 
-/// Reads `key = value` into `pairs`, a table inside `open` values, and
-/// returns the parts of the key. A dotted key adds to the tables it names,
-/// making those that do not exist.
+/// Reads `key = value` into `pairs`, a table inside `open` values whose
+/// tables a dotted key or a header made are `made`, and returns the parts of
+/// the key.
 fn entry(
     cursor: &mut Cursor<'_>,
     pairs: &mut IndexMap<String, Pair>,
+    made: &mut Made,
     open: usize,
 ) -> Result<Vec<String>, ParseError> {
     let (parents, last) = key_path(cursor)?;
@@ -212,15 +230,25 @@ fn entry(
         .chain(iter::once(&last))
         .map(|(name, _)| name.clone())
         .collect();
-    put(pairs, &parents, last, value);
+    put(pairs, made, &parents, last, value);
     Ok(keys)
 }
 
-/// Adds `value` under `last`, inside the tables `parents` name.
-fn put(pairs: &mut IndexMap<String, Pair>, parents: &[Part], last: Part, value: Value) {
+/// Adds `value` under `last`, inside the tables `parents` name. A part goes
+/// on into a table of `made`; any other part gets a new table, which joins a
+/// value already written for its key. `last` is written with `=`, so it
+/// leaves `made`.
+fn put(
+    pairs: &mut IndexMap<String, Pair>,
+    made: &mut Made,
+    parents: &[Part],
+    last: Part,
+    value: Value,
+) {
     let end = value.span().end;
     let Some(((name, written), rest)) = parents.split_first() else {
         let (name, written) = last;
+        made.0.remove(&name);
         let pair = Pair {
             repeats: Vec::new(),
             span: written.start..end,
@@ -230,21 +258,23 @@ fn put(pairs: &mut IndexMap<String, Pair>, parents: &[Part], last: Part, value: 
         return;
     };
     let span = written.start..end;
-    let pair = match pairs.entry(name.clone()) {
-        Entry::Vacant(slot) => slot.insert(Pair {
+    if let (Some(pair), Some(inside)) = (pairs.get_mut(name), made.0.get_mut(name)) {
+        pair.repeats.push(span);
+        let table = table_of(&mut pair.value);
+        put(&mut table.pairs, inside, rest, last, value);
+        fit(table);
+    } else {
+        let mut inside = Made::default();
+        let mut table = IndexMap::new();
+        put(&mut table, &mut inside, rest, last, value);
+        made.0.insert(name.clone(), inside);
+        let pair = Pair {
             repeats: Vec::new(),
             span,
-            value: mapping_at(written.start),
-        }),
-        Entry::Occupied(slot) => {
-            let pair = slot.into_mut();
-            pair.repeats.push(span);
-            pair
-        }
-    };
-    let table = table_of(&mut pair.value);
-    put(&mut table.pairs, rest, last, value);
-    fit(table);
+            value: Value::Mapping(finish(table, written.start)),
+        };
+        insert(pairs, name.clone(), pair);
+    }
 }
 
 /// A key, or a dotted key such as `owner.name` with spaces allowed around
@@ -462,10 +492,11 @@ fn inline_table(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseErro
     cursor.bump();
     cursor.skip_spaces();
     let mut pairs = IndexMap::new();
+    let mut made = Made::default();
     if !cursor.eat(b'}') {
         loop {
             cursor.skip_spaces();
-            entry(cursor, &mut pairs, depth)?;
+            entry(cursor, &mut pairs, &mut made, depth)?;
             cursor.skip_spaces();
             if cursor.eat(b'}') {
                 break;
