@@ -11,6 +11,11 @@ use crate::parser::error::ParseError;
 use crate::parser::line::{Line, line_at};
 use crate::parser::{toml, yaml};
 
+/// How deep the values the TOML and YAML readers build nest, counted
+/// together: YAML block mappings 467 deep, each key indented under the one
+/// before, overflow a 2 MB debug stack when they are read.
+pub const VALUE_CAP: usize = 400;
+
 /// The frontmatter `source` opens with, if any, and the offset its body
 /// starts at.
 pub fn parse(source: &str) -> Result<(Option<Frontmatter>, usize), ParseError> {
@@ -34,6 +39,16 @@ pub fn parse(source: &str) -> Result<(Option<Frontmatter>, usize), ParseError> {
         span: 0..closing.start + 3,
     };
     Ok((Some(frontmatter), closing.next))
+}
+
+/// The depth of a value opened at `span` inside `open` values, or an error
+/// pointing at `span` when that passes `VALUE_CAP`.
+pub fn nest(open: usize, span: Range<usize>) -> Result<usize, ParseError> {
+    if open < VALUE_CAP {
+        return Ok(open + 1);
+    }
+    let message = format!("the value nests deeper than {VALUE_CAP} levels");
+    Err(ParseError::new(&message, span))
 }
 
 /// Adds a pair to a mapping being read. A key written again joins the first

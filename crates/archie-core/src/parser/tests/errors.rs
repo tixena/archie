@@ -1,4 +1,8 @@
-use crate::parser::parse;
+use super::on_two_megabytes;
+use crate::parser::ast::{Document, FrontmatterFormat, Mapping, Value};
+use crate::parser::frontmatter::VALUE_CAP;
+use crate::parser::{from_json, parse, to_json};
+use crate::writer::{WriteOptions, write};
 
 /// The message `source` fails with and the source text the error points at.
 fn failure(source: &str) -> (String, &str) {
@@ -486,4 +490,104 @@ fn the_key_of_a_pair_inside_a_flow_list_stays_on_one_line() {
     let refused = |at: &'static str| ("expected `,` or `]` in the list".to_owned(), at);
     assert_eq!(refusal("---\n[x\n  y: 1]\n---\n"), refused("y: 1]"));
     assert_eq!(refusal("---\na: [x\n  y: 1]\n---\n"), refused("y: 1]"));
+}
+
+/// The frontmatter of each shape of nesting the readers count, its values
+/// `depth` deep, with the character that opens its innermost value.
+fn nested_frontmatter(depth: usize) -> [(String, char); 6] {
+    let lists = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+    let tables = format!("{}1{}", "{b = ".repeat(depth), "}".repeat(depth));
+    let mut keys = String::new();
+    for level in 0..depth {
+        keys.push_str(&"  ".repeat(level));
+        keys.push_str("a:\n");
+    }
+    keys.push_str(&"  ".repeat(depth));
+    keys.push_str("b: 1\n");
+    [
+        (format!("+++\na = {lists}\n+++\n"), '['),
+        (format!("+++\na = {tables}\n+++\n"), '{'),
+        (format!("+++\n{}b = 1\n+++\n", "a.".repeat(depth)), 'a'),
+        (
+            format!("+++\n[{}b]\nc = 1\n+++\n", "a.".repeat(depth - 1)),
+            'b',
+        ),
+        (format!("---\na: {lists}\n---\n"), '['),
+        (format!("---\n{keys}---\n"), 'b'),
+    ]
+}
+
+/// How deep the values of `mapping` nest: the mappings and lists around the
+/// deepest one, and itself.
+fn value_depth(mapping: &Mapping) -> usize {
+    let mut deepest = 0;
+    let mut open: Vec<(usize, &Value)> = mapping
+        .pairs
+        .values()
+        .map(|pair| (1, &pair.value))
+        .collect();
+    while let Some((depth, value)) = open.pop() {
+        match value {
+            Value::Mapping(inner) => {
+                deepest = deepest.max(depth);
+                open.extend(inner.pairs.values().map(|pair| (depth + 1, &pair.value)));
+            }
+            Value::Scalar(_) => {}
+            Value::Sequence(sequence) => {
+                deepest = deepest.max(depth);
+                open.extend(sequence.items.iter().map(|item| (depth + 1, item)));
+            }
+        }
+    }
+    deepest
+}
+
+/// The depth of the values of the frontmatter of `document`.
+fn frontmatter_depth(document: &Document) -> usize {
+    document
+        .frontmatter
+        .as_ref()
+        .map_or(0, |frontmatter| value_depth(&frontmatter.mapping))
+}
+
+#[test]
+fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
+    on_two_megabytes(|| {
+        for (source, _) in nested_frontmatter(VALUE_CAP) {
+            let document = parse(&source).unwrap();
+            assert_eq!(frontmatter_depth(&document), VALUE_CAP);
+            for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
+                let options = WriteOptions {
+                    frontmatter: format,
+                };
+                let written = write(&document, &options).unwrap();
+                assert_eq!(frontmatter_depth(&parse(&written).unwrap()), VALUE_CAP);
+            }
+            let copy = document.clone();
+            assert_eq!(copy, document);
+            let printed = format!("{document:?}");
+            assert!(printed.starts_with("Document {"));
+            drop(copy);
+            let json = to_json(&document).unwrap();
+            let back: Document = from_json(&json).unwrap();
+            assert_eq!(to_json(&back).unwrap(), json);
+            drop(back);
+            drop(document);
+        }
+    });
+}
+
+#[test]
+fn frontmatter_nested_one_level_past_the_value_cap_is_refused_at_its_innermost_value() {
+    on_two_megabytes(|| {
+        for (source, opener) in nested_frontmatter(VALUE_CAP + 1) {
+            let error = parse(&source).unwrap_err();
+            assert_eq!(
+                error.message,
+                format!("the value nests deeper than {VALUE_CAP} levels")
+            );
+            let at = source.rfind(opener).unwrap();
+            assert_eq!(error.span, at..at + 1);
+        }
+    });
 }

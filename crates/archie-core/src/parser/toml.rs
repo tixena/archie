@@ -10,11 +10,12 @@ use indexmap::map::Entry;
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{append, extent, finish, insert};
+use crate::parser::frontmatter::{append, extent, finish, insert, nest};
 use crate::parser::scalar;
 
-/// One part of a key, such as `name` in `owner.name`, and where it starts.
-type Part = (String, usize);
+/// One part of a key, such as `name` in `owner.name`, and where it is
+/// written.
+type Part = (String, Range<usize>);
 
 pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError> {
     let empty_at = content.start;
@@ -34,7 +35,7 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             current = header(&mut cursor, &mut root, &mut implicit)?;
         } else {
             let table = table_at(&mut root, &current);
-            let keys = entry(&mut cursor, table)?;
+            let keys = entry(&mut cursor, table, current.len())?;
             implicit.retain(|path| !dotted_through(path, &current, &keys));
         }
         stretch(&mut root, &current, cursor.pos());
@@ -56,6 +57,10 @@ fn header(
     let array = cursor.eat(b'[');
     cursor.skip_spaces();
     let (parents, last) = key_path(cursor)?;
+    parents
+        .iter()
+        .chain(iter::once(&last))
+        .try_fold(0, |open, (_, written)| nest(open, written.clone()))?;
     if !(cursor.eat(b']') && (!array || cursor.eat(b']'))) {
         return cursor.error("expected `]` to close the table header");
     }
@@ -185,18 +190,23 @@ fn dotted_through(path: &[String], current: &[String], keys: &[String]) -> bool 
         .is_some_and(|rest| !rest.is_empty() && rest.len() < keys.len() && keys.starts_with(rest))
 }
 
-/// Reads `key = value` into `pairs` and returns the parts of the key. A
-/// dotted key adds to the tables it names, making those that do not exist.
+/// Reads `key = value` into `pairs`, a table inside `open` values, and
+/// returns the parts of the key. A dotted key adds to the tables it names,
+/// making those that do not exist.
 fn entry(
     cursor: &mut Cursor<'_>,
     pairs: &mut IndexMap<String, Pair>,
+    open: usize,
 ) -> Result<Vec<String>, ParseError> {
     let (parents, last) = key_path(cursor)?;
+    let depth = parents
+        .iter()
+        .try_fold(open, |depth, (_, written)| nest(depth, written.clone()))?;
     if !cursor.eat(b'=') {
         return cursor.error("expected `=` after the key");
     }
     cursor.skip_spaces();
-    let value = value(cursor)?;
+    let value = value(cursor, depth)?;
     let keys = parents
         .iter()
         .chain(iter::once(&last))
@@ -209,22 +219,22 @@ fn entry(
 /// Adds `value` under `last`, inside the tables `parents` name.
 fn put(pairs: &mut IndexMap<String, Pair>, parents: &[Part], last: Part, value: Value) {
     let end = value.span().end;
-    let Some(((name, start), rest)) = parents.split_first() else {
-        let (name, start) = last;
+    let Some(((name, written), rest)) = parents.split_first() else {
+        let (name, written) = last;
         let pair = Pair {
             repeats: Vec::new(),
-            span: start..end,
+            span: written.start..end,
             value,
         };
         insert(pairs, name, pair);
         return;
     };
-    let span = *start..end;
+    let span = written.start..end;
     let pair = match pairs.entry(name.clone()) {
         Entry::Vacant(slot) => slot.insert(Pair {
             repeats: Vec::new(),
             span,
-            value: mapping_at(*start),
+            value: mapping_at(written.start),
         }),
         Entry::Occupied(slot) => {
             let pair = slot.into_mut();
@@ -255,7 +265,8 @@ fn key_path(cursor: &mut Cursor<'_>) -> Result<(Vec<Part>, Part), ParseError> {
 
 fn part(cursor: &mut Cursor<'_>) -> Result<Part, ParseError> {
     let start = cursor.pos();
-    Ok((key(cursor)?, start))
+    let name = key(cursor)?;
+    Ok((name, start..cursor.pos()))
 }
 
 fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
@@ -278,7 +289,8 @@ fn key(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     }
 }
 
-fn value(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
+/// The value at the cursor, inside `open` values.
+fn value(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
     let start = cursor.pos();
     match cursor.peek() {
         Some(b'"') => {
@@ -297,8 +309,8 @@ fn value(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
             };
             Ok(string(start..cursor.pos(), text))
         }
-        Some(b'[') => array(cursor),
-        Some(b'{') => inline_table(cursor),
+        Some(b'[') => array(cursor, open),
+        Some(b'{') => inline_table(cursor, open),
         Some(_) | None => bare(cursor),
     }
 }
@@ -419,8 +431,9 @@ fn literal_string(cursor: &mut Cursor<'_>) -> Result<String, ParseError> {
     Ok(text)
 }
 
-fn array(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
+fn array(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
     let start = cursor.pos();
+    let depth = nest(open, start..start + 1)?;
     cursor.bump();
     let mut items = Vec::new();
     loop {
@@ -428,7 +441,7 @@ fn array(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
         if cursor.eat(b']') {
             break;
         }
-        items.push(value(cursor)?);
+        items.push(value(cursor, depth)?);
         skip_trivia(cursor);
         if cursor.eat(b']') {
             break;
@@ -443,15 +456,16 @@ fn array(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
     }))
 }
 
-fn inline_table(cursor: &mut Cursor<'_>) -> Result<Value, ParseError> {
+fn inline_table(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, ParseError> {
     let start = cursor.pos();
+    let depth = nest(open, start..start + 1)?;
     cursor.bump();
     cursor.skip_spaces();
     let mut pairs = IndexMap::new();
     if !cursor.eat(b'}') {
         loop {
             cursor.skip_spaces();
-            entry(cursor, &mut pairs)?;
+            entry(cursor, &mut pairs, depth)?;
             cursor.skip_spaces();
             if cursor.eat(b'}') {
                 break;

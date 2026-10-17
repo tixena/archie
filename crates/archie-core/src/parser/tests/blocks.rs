@@ -4,6 +4,7 @@ use super::{Rows, check, on_two_megabytes};
 use crate::parser::ast::{Args, Block, Document, Inline, Mapping, MarkdownBlock, Section};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
+use crate::parser::frontmatter::VALUE_CAP;
 use crate::parser::inline::INLINE_CAP;
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{from_json, parse, to_json};
@@ -1233,6 +1234,27 @@ fn args_whose_inline_table_ends_before_the_last_brace_are_text() {
       CodeBlock language="md" args=Text "a=1} # x" value="x" claimed
 "#,
     );
+}
+
+#[test]
+fn args_nested_past_the_value_cap_are_text_and_written_back_as_they_were() {
+    on_two_megabytes(|| {
+        // The table the args are read in opens one value around them.
+        let args = format!("a = {}1{}", "[".repeat(VALUE_CAP), "]".repeat(VALUE_CAP));
+        let source = format!("```md {args}\nx\n```\n");
+        let document = parse(&source).unwrap();
+        let read = match &document.body.sections[0].blocks[0] {
+            Block::CodeBlock(code) => Some(&code.args),
+            Block::BlockQuote(_)
+            | Block::Html(_)
+            | Block::List(_)
+            | Block::Paragraph(_)
+            | Block::Table(_)
+            | Block::ThematicBreak(_) => None,
+        };
+        assert!(matches!(read, Some(Args::Text(text)) if *text == args));
+        assert_eq!(write(&document, &WriteOptions::default()).unwrap(), source);
+    });
 }
 
 #[test]

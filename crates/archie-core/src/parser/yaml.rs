@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::Cursor;
 use crate::parser::error::ParseError;
-use crate::parser::frontmatter::{finish, insert};
+use crate::parser::frontmatter::{finish, insert, nest};
 use crate::parser::scalar;
 
 /// The core-schema tags archie reads, plus `!!timestamp`.
@@ -76,7 +76,7 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
     let root = cursor.pos();
     match cursor.peek() {
         Some(b'{') => {
-            let mapping = flow_mapping(&mut cursor, None)?;
+            let mapping = flow_mapping(&mut cursor, None, 0)?;
             end_of_line(&mut cursor)?;
             if next_line(&mut cursor).is_some() {
                 return cursor.error("expected the end of the frontmatter after the mapping");
@@ -84,12 +84,12 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
             Ok(mapping)
         }
         Some(b'[') => {
-            let list = flow_sequence(&mut cursor, None)?;
+            let list = flow_sequence(&mut cursor, None, 0)?;
             Err(not_a_mapping(list.span()))
         }
         Some(_) | None => {
             cursor.set_pos(line_start);
-            let mapping = block_mapping(&mut cursor, indent).map_err(|error| {
+            let mapping = block_mapping(&mut cursor, indent, 0).map_err(|error| {
                 cursor.set_pos(root);
                 lone_value(&mut cursor, indent).map_or(error, |span| not_a_mapping(&span))
             })?;
@@ -105,9 +105,9 @@ pub fn parse(source: &str, content: Range<usize>) -> Result<Mapping, ParseError>
 /// or a list does and a key does not.
 fn lone_value(cursor: &mut Cursor<'_>, indent: usize) -> Option<Range<usize>> {
     let value = if is_dash(cursor, 0) {
-        block_sequence(cursor, cursor.pos() - indent, indent).ok()?
+        block_sequence(cursor, cursor.pos() - indent, indent, 0).ok()?
     } else {
-        let value = inline_value(cursor, Context::Key(indent)).ok()?;
+        let value = inline_value(cursor, Context::Key(indent), 0).ok()?;
         end_of_line(cursor).ok()?;
         value
     };
@@ -136,19 +136,25 @@ fn next_line(cursor: &mut Cursor<'_>) -> Option<usize> {
     }
 }
 
-/// The pairs written at exactly `indent`, starting at the cursor's line.
-fn block_mapping(cursor: &mut Cursor<'_>, indent: usize) -> Result<Mapping, ParseError> {
+/// The pairs written at exactly `indent`, starting at the cursor's line: a
+/// mapping `depth` values deep.
+fn block_mapping(
+    cursor: &mut Cursor<'_>,
+    indent: usize,
+    depth: usize,
+) -> Result<Mapping, ParseError> {
     let empty_at = cursor.pos();
     let mut pairs = IndexMap::new();
-    mapping_lines(cursor, indent, &mut pairs)?;
+    mapping_lines(cursor, indent, depth, &mut pairs)?;
     Ok(finish(pairs, empty_at))
 }
 
 /// The pairs on the lines from the cursor on that are written at exactly
-/// `indent`.
+/// `indent`, of a mapping `depth` values deep.
 fn mapping_lines(
     cursor: &mut Cursor<'_>,
     indent: usize,
+    depth: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     while let Some(found) = next_line(cursor) {
@@ -165,31 +171,37 @@ fn mapping_lines(
         if is_dash(cursor, 0) {
             return cursor.error("expected a key, found a list entry");
         }
-        entry(cursor, indent, pairs)?;
+        entry(cursor, indent, depth, pairs)?;
     }
     Ok(())
 }
 
-/// A mapping whose first key is written on a list entry's line, at
-/// `column`; its other keys follow on lines indented to that column.
-fn entry_mapping(cursor: &mut Cursor<'_>, column: usize) -> Result<Mapping, ParseError> {
+/// A mapping `depth` values deep whose first key is written on a list
+/// entry's line, at `column`; its other keys follow on lines indented to that
+/// column.
+fn entry_mapping(
+    cursor: &mut Cursor<'_>,
+    column: usize,
+    depth: usize,
+) -> Result<Mapping, ParseError> {
     let empty_at = cursor.pos();
     let mut pairs = IndexMap::new();
-    entry(cursor, column, &mut pairs)?;
-    mapping_lines(cursor, column, &mut pairs)?;
+    entry(cursor, column, depth, &mut pairs)?;
+    mapping_lines(cursor, column, depth, &mut pairs)?;
     Ok(finish(pairs, empty_at))
 }
 
-/// One pair of a block mapping whose keys are at column `indent`: a `key:`
-/// and its value, a `:` and its value with the empty key, or an explicit key
-/// after `?`.
+/// One pair of a block mapping whose keys are at column `indent`, inside
+/// `open` values: a `key:` and its value, a `:` and its value with the empty
+/// key, or an explicit key after `?`.
 fn entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
+    open: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     if is_explicit_key(cursor) {
-        return explicit_entry(cursor, indent, pairs);
+        return explicit_entry(cursor, indent, open, pairs);
     }
     let start = cursor.pos();
     let name = if is_empty_key(cursor, false) {
@@ -204,7 +216,7 @@ fn entry(
     if !separated_at(cursor, 0) {
         return cursor.error("expected a space after the `:`");
     }
-    let value = indicated_value(cursor, indent)?;
+    let value = indicated_value(cursor, indent, open)?;
     let pair = Pair {
         repeats: Vec::new(),
         span: start..value.span().end,
@@ -220,10 +232,11 @@ fn entry(
 fn explicit_entry(
     cursor: &mut Cursor<'_>,
     indent: usize,
+    open: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
-    let key = compact_value(cursor, start - indent, indent, Context::Key(indent))?;
+    let key = compact_value(cursor, start - indent, indent, Context::Key(indent), open)?;
     let key_end = key.span().end;
     let name = explicit_key(cursor, key)?;
     let value = if next_line(cursor) == Some(indent)
@@ -231,7 +244,7 @@ fn explicit_entry(
         && separated_at(cursor, indent + 1)
     {
         let line_start = cursor.pos();
-        compact_value(cursor, line_start, indent, Context::Key(indent))?
+        compact_value(cursor, line_start, indent, Context::Key(indent), open)?
     } else {
         null(key_end)
     };
@@ -257,14 +270,18 @@ fn explicit_key(cursor: &Cursor<'_>, key: Value) -> Result<String, ParseError> {
 /// The value after the `:` of a key at column `indent`, with the cursor
 /// right after the `:`: the rest of the line, what the lines under it hold,
 /// or null right after the `:`.
-fn indicated_value(cursor: &mut Cursor<'_>, indent: usize) -> Result<Value, ParseError> {
+fn indicated_value(
+    cursor: &mut Cursor<'_>,
+    indent: usize,
+    open: usize,
+) -> Result<Value, ParseError> {
     let after = cursor.pos();
     cursor.skip_spaces();
     if at_line_end(cursor) {
         end_of_line(cursor)?;
-        return nested(cursor, Context::Key(indent), after);
+        return nested(cursor, Context::Key(indent), after, open);
     }
-    let value = inline_value(cursor, Context::Key(indent))?;
+    let value = inline_value(cursor, Context::Key(indent), open)?;
     end_of_line(cursor)?;
     Ok(value)
 }
@@ -328,10 +345,15 @@ fn is_explicit_key(cursor: &Cursor<'_>) -> bool {
     cursor.peek() == Some(b'?') && separated_at(cursor, 1)
 }
 
-/// The value of a key or a list entry with nothing after it on its line:
-/// what the lines indented more than it hold, a list at a key's own
-/// column, or null.
-fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<Value, ParseError> {
+/// The value of a key or a list entry with nothing after it on its line,
+/// inside `open` values: what the lines indented more than it hold, a list
+/// at a key's own column, or null.
+fn nested(
+    cursor: &mut Cursor<'_>,
+    context: Context,
+    null_at: usize,
+    open: usize,
+) -> Result<Value, ParseError> {
     let Some(found) = next_line(cursor) else {
         return Ok(null(null_at));
     };
@@ -341,18 +363,21 @@ fn nested(cursor: &mut Cursor<'_>, context: Context, null_at: usize) -> Result<V
         return Ok(null(null_at));
     }
     let line_start = cursor.pos();
+    let at = line_start + found;
     if is_list {
-        return block_sequence(cursor, line_start, found);
+        let depth = nest(open, at..at + 1)?;
+        return block_sequence(cursor, line_start, found, depth);
     }
-    cursor.set_pos(line_start + found);
+    cursor.set_pos(at);
     no_tab_before_block(cursor)?;
     if starts_mapping(cursor) {
+        let depth = nest(open, at..at + 1)?;
         cursor.set_pos(line_start);
-        return Ok(Value::Mapping(block_mapping(cursor, found)?));
+        return Ok(Value::Mapping(block_mapping(cursor, found, depth)?));
     }
     // A tab after the indentation separates a flow node from it.
     cursor.skip_spaces();
-    line_value(cursor, context)
+    line_value(cursor, context, open)
 }
 
 /// Refuses the tab at the cursor, after the indentation of a line, when a
@@ -377,13 +402,14 @@ fn tab_indent(at: usize) -> ParseError {
     ParseError::new("a tab cannot indent a line; use spaces", at..at + 1)
 }
 
-/// A block list whose first `-` is at column `indent` of the line starting
-/// at `line_start`, and whose other entries are the lines below with a `-`
-/// at that column.
+/// A block list `depth` values deep whose first `-` is at column `indent` of
+/// the line starting at `line_start`, and whose other entries are the lines
+/// below with a `-` at that column.
 fn block_sequence(
     cursor: &mut Cursor<'_>,
     line_start: usize,
     indent: usize,
+    depth: usize,
 ) -> Result<Value, ParseError> {
     let start = line_start + indent;
     let mut entry_line = line_start;
@@ -394,6 +420,7 @@ fn block_sequence(
             entry_line,
             indent,
             Context::Entry(indent),
+            depth,
         )?);
         let Some(found) = next_line(cursor) else {
             break;
@@ -417,38 +444,42 @@ fn block_sequence(
 }
 
 /// The value after the `-`, `?` or `:` at column `indent` of the line
-/// starting at `line_start`, written in `context`. A `-` after it starts a
-/// list at its own column, and a `key:` or a `?` there a mapping, unless a
-/// tab comes before them: a tab is never indentation.
+/// starting at `line_start`, written in `context` inside `open` values. A `-`
+/// after it starts a list at its own column, and a `key:` or a `?` there a
+/// mapping, unless a tab comes before them: a tab is never indentation.
 fn compact_value(
     cursor: &mut Cursor<'_>,
     line_start: usize,
     indent: usize,
     context: Context,
+    open: usize,
 ) -> Result<Value, ParseError> {
     cursor.set_pos(line_start + indent + 1);
     let after_indicator = cursor.pos();
     cursor.skip_spaces();
-    let column = cursor.pos() - line_start;
+    let at = cursor.pos();
+    let column = at - line_start;
     if at_line_end(cursor) {
         end_of_line(cursor)?;
-        return nested(cursor, context, after_indicator);
+        return nested(cursor, context, after_indicator, open);
     }
-    let indented = !cursor.slice(after_indicator..cursor.pos()).contains('\t');
+    let indented = !cursor.slice(after_indicator..at).contains('\t');
     if indented && is_dash(cursor, 0) {
-        return block_sequence(cursor, line_start, column);
+        let depth = nest(open, at..at + 1)?;
+        return block_sequence(cursor, line_start, column, depth);
     }
     if indented && starts_mapping(cursor) {
-        return Ok(Value::Mapping(entry_mapping(cursor, column)?));
+        let depth = nest(open, at..at + 1)?;
+        return Ok(Value::Mapping(entry_mapping(cursor, column, depth)?));
     }
-    line_value(cursor, context)
+    line_value(cursor, context, open)
 }
 
 /// The value that starts a line of a block or follows its `-`, `?` or `:`,
-/// up to the end of that line. A flow collection followed by `:` there is a
-/// key, and a key is a string.
-fn line_value(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
-    let value = inline_value(cursor, context)?;
+/// inside `open` values, up to the end of that line. A flow collection
+/// followed by `:` there is a key, and a key is a string.
+fn line_value(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, ParseError> {
+    let value = inline_value(cursor, context, open)?;
     cursor.skip_spaces();
     if matches!(value, Value::Mapping(_) | Value::Sequence(_))
         && cursor.peek() == Some(b':')
@@ -461,14 +492,20 @@ fn line_value(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseE
     Ok(value)
 }
 
-/// A value that starts at the cursor. It ends on its own line, except a flow
-/// collection, which may run over several, and a block scalar, which takes
-/// the lines under it; either way the cursor stops after its last text.
-fn inline_value(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
+/// A value that starts at the cursor, inside `open` values. It ends on its
+/// own line, except a flow collection, which may run over several, and a
+/// block scalar, which takes the lines under it; either way the cursor stops
+/// after its last text.
+fn inline_value(
+    cursor: &mut Cursor<'_>,
+    context: Context,
+    open: usize,
+) -> Result<Value, ParseError> {
     let start = cursor.pos();
     match cursor.peek() {
-        Some(b'[') => flow_sequence(cursor, context.column()),
-        Some(b'{') => flow_mapping(cursor, context.column()).map(Value::Mapping),
+        Some(b'[') => flow_sequence(cursor, context.column(), nest(open, start..start + 1)?),
+        Some(b'{') => flow_mapping(cursor, context.column(), nest(open, start..start + 1)?)
+            .map(Value::Mapping),
         Some(b'"') => {
             let text = double_quoted(cursor, Some(context))?;
             Ok(string(start..cursor.pos(), text))
@@ -481,15 +518,19 @@ fn inline_value(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, Pars
             Context::Entry(indent) | Context::Key(indent) => block_scalar(cursor, indent),
             Context::Flow(_) => plain(cursor, context),
         },
-        Some(b'!') => tagged(cursor, context),
+        Some(b'!') => tagged(cursor, context, open),
         Some(b'&' | b'*') => anchor(cursor),
         Some(_) | None => plain(cursor, context),
     }
 }
 
-/// A flow list whose lines are indented more than `column`, the column of
-/// its key or `-`; none at the root.
-fn flow_sequence(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value, ParseError> {
+/// A flow list `depth` values deep whose lines are indented more than
+/// `column`, the column of its key or `-`; none at the root.
+fn flow_sequence(
+    cursor: &mut Cursor<'_>,
+    column: Option<usize>,
+    depth: usize,
+) -> Result<Value, ParseError> {
     let start = cursor.pos();
     cursor.bump();
     let mut items = Vec::new();
@@ -499,7 +540,7 @@ fn flow_sequence(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value
             break;
         }
         no_empty_entry(cursor)?;
-        items.push(flow_item(cursor, column)?);
+        items.push(flow_item(cursor, column, depth)?);
         skip_flow_space(cursor, column)?;
         if cursor.eat(b']') {
             break;
@@ -514,15 +555,20 @@ fn flow_sequence(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value
     }))
 }
 
-/// One entry of a flow list: a value, or a pair, which makes a mapping of
-/// one pair.
-fn flow_item(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Value, ParseError> {
+/// One entry of a flow list, inside `open` values: a value, or a pair, which
+/// makes a mapping of one pair.
+fn flow_item(
+    cursor: &mut Cursor<'_>,
+    column: Option<usize>,
+    open: usize,
+) -> Result<Value, ParseError> {
     if !is_flow_pair(cursor) {
-        return inline_value(cursor, Context::Flow(column));
+        return inline_value(cursor, Context::Flow(column), open);
     }
     let start = cursor.pos();
+    let depth = nest(open, start..start + 1)?;
     let mut pairs = IndexMap::new();
-    flow_entry(cursor, column, true, &mut pairs)?;
+    flow_entry(cursor, column, true, depth, &mut pairs)?;
     Ok(Value::Mapping(finish(pairs, start)))
 }
 
@@ -549,9 +595,13 @@ fn no_empty_entry(cursor: &Cursor<'_>) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// A flow mapping whose lines are indented more than `column`, the column
-/// of its key or `-`; none at the root.
-fn flow_mapping(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Mapping, ParseError> {
+/// A flow mapping `depth` values deep whose lines are indented more than
+/// `column`, the column of its key or `-`; none at the root.
+fn flow_mapping(
+    cursor: &mut Cursor<'_>,
+    column: Option<usize>,
+    depth: usize,
+) -> Result<Mapping, ParseError> {
     let start = cursor.pos();
     cursor.bump();
     let mut pairs = IndexMap::new();
@@ -561,7 +611,7 @@ fn flow_mapping(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Mappin
             break;
         }
         no_empty_entry(cursor)?;
-        flow_entry(cursor, column, false, &mut pairs)?;
+        flow_entry(cursor, column, false, depth, &mut pairs)?;
         skip_flow_space(cursor, column)?;
         if cursor.eat(b'}') {
             break;
@@ -576,14 +626,15 @@ fn flow_mapping(cursor: &mut Cursor<'_>, column: Option<usize>) -> Result<Mappin
     })
 }
 
-/// One pair of a flow mapping, or of a flow list. Line breaks and comments
-/// may come before its `:`; in a flow list, `is_flow_pair` allows that only
-/// after an explicit key. A key with no `:`, or with nothing after it, holds
-/// null.
+/// One pair of a flow mapping, or of a flow list, inside `open` values. Line
+/// breaks and comments may come before its `:`; in a flow list,
+/// `is_flow_pair` allows that only after an explicit key. A key with no `:`,
+/// or with nothing after it, holds null.
 fn flow_entry(
     cursor: &mut Cursor<'_>,
     column: Option<usize>,
     in_list: bool,
+    open: usize,
     pairs: &mut IndexMap<String, Pair>,
 ) -> Result<(), ParseError> {
     let start = cursor.pos();
@@ -596,7 +647,7 @@ fn flow_entry(
         if matches!(cursor.peek(), Some(b',' | b'}' | b']')) {
             null(after_colon)
         } else {
-            inline_value(cursor, Context::Flow(column))?
+            inline_value(cursor, Context::Flow(column), open)?
         }
     } else {
         null(key_end)
@@ -1046,26 +1097,27 @@ fn is_spaced(line: &str) -> bool {
     line.starts_with([' ', '\t'])
 }
 
-/// A value written after a tag, read again under it. In block context a tag
-/// may end its line, and the value is what the lines under it hold, as for
-/// a key or a list entry with nothing after it; with none, it is empty.
-fn tagged(cursor: &mut Cursor<'_>, context: Context) -> Result<Value, ParseError> {
+/// A value written after a tag, inside `open` values, read again under it.
+/// In block context a tag may end its line, and the value is what the lines
+/// under it hold, as for a key or a list entry with nothing after it; with
+/// none, it is empty.
+fn tagged(cursor: &mut Cursor<'_>, context: Context, open: usize) -> Result<Value, ParseError> {
     let tag = tag(cursor)?;
     let value = match context {
         Context::Entry(_) | Context::Key(_) => {
             cursor.skip_spaces();
             if at_line_end(cursor) {
                 end_of_line(cursor)?;
-                let block = nested(cursor, context, tag.span.end)?;
+                let block = nested(cursor, context, tag.span.end, open)?;
                 cursor.set_pos(block.span().end);
                 block
             } else {
-                inline_value(cursor, context)?
+                inline_value(cursor, context, open)?
             }
         }
         Context::Flow(column) => {
             skip_flow_space(cursor, column)?;
-            inline_value(cursor, context)?
+            inline_value(cursor, context, open)?
         }
     };
     retag(cursor, &tag, value)
