@@ -183,7 +183,8 @@ impl Lexer<'_> {
     }
 
     /// Reads the lines after an opening fence of `length` `mark`s, up to the
-    /// closing fence, the end of the enclosing list item, or the end of the
+    /// closing fence, indented at most three columns past the enclosing
+    /// item's text, the end of the enclosing list item, or the end of the
     /// file.
     fn code_block(&mut self, column: usize, at: usize, end: usize, length: usize, mark: char) {
         let source = self.source;
@@ -205,7 +206,10 @@ impl Lexer<'_> {
                 break;
             }
             self.pos = line.next;
-            if trimmed.len() >= length && trimmed.chars().all(|character| character == mark) {
+            if indent < level + 4
+                && trimmed.len() >= length
+                && trimmed.chars().all(|character| character == mark)
+            {
                 block_end = line.start + indent + trimmed.len();
                 break;
             }

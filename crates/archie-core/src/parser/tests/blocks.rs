@@ -611,6 +611,48 @@ fn an_unclosed_fence_inside_an_item_ends_with_the_item() {
 }
 
 #[test]
+fn a_fence_indented_four_columns_is_content_and_one_indented_three_closes_the_block() {
+    check(
+        "```\ncode\n    ```\nafter\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock value="code\n    ```\nafter"
+"#,
+    );
+    check(
+        "```\ncode\n   ```\nafter\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock value="code"
+      Paragraph
+        Line
+          Text "after"
+"#,
+    );
+}
+
+#[test]
+fn a_fence_indented_four_columns_past_the_item_text_is_content() {
+    check(
+        "- x\n  ```\n  code\n        ```\n  after\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      List
+        Item
+          MarkdownBlock
+            Section
+              Paragraph
+                Line
+                  Text "x"
+              CodeBlock value="code\n      ```\nafter"
+"#,
+    );
+}
+
+#[test]
 fn a_list_or_a_heading_ends_a_paragraph_without_a_blank_line() {
     check(
         "\

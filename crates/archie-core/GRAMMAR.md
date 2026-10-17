@@ -133,10 +133,11 @@ Each line is read as follows.
    2. A fenced code block: three or more backticks whose info string holds no
       backtick, or three or more tildes. The lexer takes every line up to and
       including the first line made only of the fence's character, at least as many
-      of it as opened the block. With no closing fence, the block ends before the
-      first line of text indented less than the enclosing item's text, or at the end
-      of the text. Each line inside loses at most as many leading spaces as the column
-      of the opening fence.
+      of it as opened the block, indented at most three columns past the enclosing
+      item's text: a line of them indented further is content. With no closing fence,
+      the block ends before the first line of text indented less than the enclosing
+      item's text, or at the end of the text. Each line inside loses at most as many
+      leading spaces as the column of the opening fence.
    3. `THEMATIC_BREAK`.
    4. `HEADING_n`. A list item may hold one.
    5. `BLOCK_QUOTE`.
@@ -996,13 +997,11 @@ with the text it reads from and the text it writes.
    heading's `#`s, a list marker or the marks of a thematic break from what follows, so
    a tab and `code`, `#`, a tab and `Title`, and `-`, a tab and `item` are paragraph
    text.
-6. A closing fence may be indented any number of spaces past the enclosing item's
-   text. CommonMark allows up to three, and reads a fence indented further as content.
-7. An image's `alt` is the text between its brackets as written. CommonMark reads
+6. An image's `alt` is the text between its brackets as written. CommonMark reads
    inline nodes there.
-8. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
+7. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
    reads both as text.
-9. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
+8. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
    cells at most 40 deep together. Past either cap, the marks stay text.
 
 ### From GitHub's tables

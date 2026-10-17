@@ -962,6 +962,14 @@ fn a_fence_with_no_info_string_is_written_with_none() {
 }
 
 #[test]
+fn a_code_block_holding_a_fence_indented_four_columns_is_fenced_longer() {
+    assert_eq!(
+        round_trip("```\ncode\n    ```\nafter\n"),
+        "````\ncode\n    ```\nafter\n````\n"
+    );
+}
+
+#[test]
 fn a_code_block_whose_args_hold_a_backtick_is_fenced_with_tildes() {
     for (source, text) in [
         ("~~~sh a`b\nx\n~~~\n", "~~~sh a`b\nx\n~~~\n"),
