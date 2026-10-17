@@ -23,6 +23,14 @@ use crate::writer::inline::{Near, Pieces, Segments};
 /// written inside its parent as a `markdown` block.
 const DEEPEST: usize = 6;
 
+/// What is written before a writer's text in its block: nothing, or text,
+/// as when an extension writes a node it claimed after other text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Before {
+    Nothing,
+    Text,
+}
+
 /// The marker of a list's items: `-` for a bullet list and `.` after an
 /// ordered list's numbers, or the other one, `*` or `)`, for a list right
 /// after a list of its kind written with `-` or `.`.
@@ -69,6 +77,8 @@ pub struct WriteOptions {
 
 /// Builds the markdown text. Extensions write their nodes through it.
 pub struct Writer {
+    /// What is written before this writer's text in its block.
+    after_text: Before,
     /// Whether a blank line is due before the next text written.
     blank: bool,
     /// The depth of the section being written, from 1.
@@ -138,6 +148,11 @@ impl Writer {
         T: Extension,
     {
         let mut writer = Self {
+            after_text: if self.after_text == Before::Text || !self.out.is_empty() {
+                Before::Text
+            } else {
+                Before::Nothing
+            },
             depth: self.depth,
             file_start: self.at_file_start(),
             place: mem::take(&mut self.place),
@@ -226,7 +241,7 @@ impl Writer {
             _ => "",
         };
         let pieces = Pieces::of(&heading.children);
-        let after_text = self.tight && !self.out.is_empty();
+        let after_text = self.tight && (self.after_text == Before::Text || !self.out.is_empty());
         if !underline.is_empty() && !after_text && inline::holds_line_break(&heading.children) {
             self.put_lines(|writer, pipes| {
                 let mut segments = Segments::new(&pieces);
@@ -397,6 +412,7 @@ impl Writer {
 
     pub(crate) const fn new() -> Self {
         Self {
+            after_text: Before::Nothing,
             blank: false,
             depth: 1,
             error: None,

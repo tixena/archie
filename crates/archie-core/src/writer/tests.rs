@@ -8,8 +8,9 @@ use crate::parser::ast::{
     Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Pair, Paragraph, Scalar,
     ScalarValue, Section, Sequence, Table, TableCell, TableFormat, TableRow, Text, Value,
 };
-use crate::parser::extension::Markdown;
-use crate::parser::parse;
+use crate::parser::error::ParseError;
+use crate::parser::extension::{Construct, Context, Extension, Markdown};
+use crate::parser::{ParseOptions, parse, parse_with};
 use crate::writer::{WriteError, WriteOptions, Writer, write};
 
 /// Every file under `parser/tests/fixtures/`.
@@ -117,6 +118,34 @@ const TOML_SAMPLE: &str =
 const TOML: WriteOptions = WriteOptions {
     frontmatter: FrontmatterFormat::Toml,
 };
+
+/// Claims every heading and writes it in its plain form.
+#[derive(Debug, Clone, PartialEq)]
+struct Headings;
+
+impl Extension for Headings {
+    type Node<T>
+        = ()
+    where
+        T: Extension;
+
+    fn claim<T>(
+        construct: Construct<'_, T>,
+        _context: &Context<'_>,
+    ) -> Option<Result<(), ParseError>>
+    where
+        T: Extension,
+    {
+        matches!(construct, Construct::Heading(_)).then_some(Ok(()))
+    }
+
+    fn write<T>(_node: &(), plain: Construct<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
+    }
+}
 
 fn written(source: &str) -> String {
     write(&parse(source).unwrap(), &WriteOptions::default()).unwrap()
@@ -763,6 +792,29 @@ fn a_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line
     let text = write(&built, &WriteOptions::default()).unwrap();
     assert_eq!(text, "- p\n  # h&#10;b\n- q\n");
     assert_eq!(written(&text), text);
+}
+
+#[test]
+fn a_claimed_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line() {
+    let options = ParseOptions::default();
+    let mut built = parse_with::<Headings>("- p\n  # h\n- q\n", &options).unwrap();
+    if let Some(Block::List(list)) = built.body.sections[0].blocks.first_mut()
+        && let Some(heading) = &mut list.items[0].body.sections[1].heading
+    {
+        heading.children.push(Inline::LineBreak(LineBreak {
+            kind: Kind(None),
+            span: 0..0,
+        }));
+        heading.children.push(Inline::Text(Text {
+            kind: Kind(None),
+            span: 0..0,
+            value: "b".to_owned(),
+        }));
+    }
+    let text = write(&built, &WriteOptions::default()).unwrap();
+    assert_eq!(text, "- p\n  # h&#10;b\n- q\n");
+    let again = parse_with::<Headings>(&text, &options).unwrap();
+    assert_eq!(write(&again, &WriteOptions::default()).unwrap(), text);
 }
 
 #[test]
