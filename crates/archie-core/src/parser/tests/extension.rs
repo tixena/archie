@@ -1202,6 +1202,85 @@ fn a_markdown_block_in_a_grid_cell_counts_its_columns_from_the_cell() {
 }
 
 #[test]
+fn tab_stops_in_a_markdown_block_in_a_grid_cell_count_from_its_fence_as_in_its_value() {
+    let source = "+-------------+---+\n| a           | x |\n|   ```md     | x |\n|   -\ty       | x |\n|             | x |\n|           z | x |\n|   ```       | x |\n+-------------+---+\n";
+    let options = ParseOptions::default();
+    let document = parse_with::<Plain>(source, &options).unwrap();
+    let claimed = |read: &Document<With<Plain>>| {
+        let block = code_blocks(&first_cell(&read.body).body)[0];
+        (
+            block.value.clone(),
+            block.kind.0.as_deref().and_then(first).map(block_outline),
+        )
+    };
+    let (value, markdown) = claimed(&document);
+    assert_eq!(value, "-\ty\n\n        z");
+    assert_eq!(markdown, Some(block_outline(&parse(&value).unwrap().body)));
+    assert_eq!(
+        markdown.as_deref(),
+        Some(
+            r#"MarkdownBlock
+  Section
+    List loose
+      Item
+        MarkdownBlock
+          Section
+            Paragraph
+              Line
+                Text "y"
+            CodeBlock value="z"
+"#
+        )
+    );
+    let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+    let again = rebuild_with::<Plain>(&back, &options).unwrap();
+    assert_eq!(claimed(&again), claimed(&document));
+    let written = "+--------+-----+\n| a      | x   |\n|        | x   |\n| ````md | x   |\n| - y    | x   |\n|        | x   |\n|   ```  | x   |\n|   z    |     |\n|   ```  |     |\n| ````   |     |\n+--------+-----+\n";
+    assert_eq!(write(&document, &WriteOptions::default()).unwrap(), written);
+    assert_eq!(write(&again, &WriteOptions::default()).unwrap(), written);
+}
+
+#[test]
+fn a_markdown_block_in_a_grid_cell_reads_as_its_value_with_its_fence_at_any_column() {
+    let options = ParseOptions::default();
+    for column in 0..8 {
+        let pad = " ".repeat(column);
+        // The item's text starts at column 4, so it holds the fences at 4 to 7.
+        let source = in_grid_cell(&format!(
+            "-   a\n\n{pad}```md\n{pad}-\ty\n\n{pad}        z\n{pad}```"
+        ));
+        let document = parse_with::<Plain>(&source, &options).unwrap();
+        let claimed = |read: &Document<With<Plain>>| {
+            let body = &first_cell(&read.body).body;
+            let block = if column < 4 {
+                code_blocks(body)[0]
+            } else {
+                code_blocks(first_item(body))[0]
+            };
+            (
+                block.value.clone(),
+                block.kind.0.as_deref().and_then(first).map(block_outline),
+            )
+        };
+        let (value, markdown) = claimed(&document);
+        assert_eq!(value, "-\ty\n\n        z", "{source}");
+        assert_eq!(
+            markdown,
+            Some(block_outline(&parse(&value).unwrap().body)),
+            "{source}"
+        );
+        let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+        let again = rebuild_with::<Plain>(&back, &options).unwrap();
+        assert_eq!(claimed(&again), claimed(&document), "{source}");
+        assert_eq!(
+            write(&again, &WriteOptions::default()).unwrap(),
+            write(&document, &WriteOptions::default()).unwrap(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
 fn a_comment_in_a_grid_cell_has_the_same_body_as_at_the_root() {
     let body = "---\nid: abc\n---\n# Title\n\n- point\n\n      code\n";
     let root = format!("```remargin\n{body}```\n");

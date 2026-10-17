@@ -867,7 +867,7 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   columns of its leading white space left out and its tab stops counted from `column`,
   as in a code block's value: a tab moves to the next multiple of 4 past it. In a grid
   cell it reads only the parts of the range on the cell's lines, and its tab stops
-  count from the cell's line. Its spans count from the start of the source.
+  count from `column` there too. Its spans count from the start of the source.
 - No node that the block cap of list items, markdown blocks and table cells holds is
   offered, so a markdown block an extension reads with `context.markdown` nests under
   the same cap as the file's own.

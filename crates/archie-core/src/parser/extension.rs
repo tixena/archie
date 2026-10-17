@@ -98,7 +98,7 @@ impl Context<'_> {
     /// `T`, each line with at most `column` columns of its leading white
     /// space left out and its tab stops counted from there.
     /// In a grid cell, only the parts of `range` on the cell's lines are
-    /// read, one after another, with tab stops counted from the cell's line.
+    /// read, one after another.
     /// The block is one container deeper than the construct. Spans count from
     /// the start of the source.
     ///

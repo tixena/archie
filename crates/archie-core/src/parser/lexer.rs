@@ -730,10 +730,9 @@ fn join(lines: &[Cut<'_>]) -> String {
 }
 
 /// Reads `lines`, ranges of `source`, as consecutive lines of one text, each
-/// with at most `base` columns of its leading white space left out, the way
-/// `lex_from` reads a file, held by `outer` containers. Spans count from the start of
-/// `source`.
-pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize, outer: usize) -> Vec<Token> {
+/// read past `base`, the way `lex_from` reads a file, held by `outer`
+/// containers. Spans count from the start of `source`.
+pub fn lex_lines(source: &str, lines: &[Range<usize>], base: Base, outer: usize) -> Vec<Token> {
     let mut starts = Vec::with_capacity(lines.len());
     let mut text = String::new();
     for line in lines {
@@ -752,15 +751,7 @@ pub fn lex_lines(source: &str, lines: &[Range<usize>], base: usize, outer: usize
             .zip(starts.get(index))
             .map_or(at, |(line, &start)| line.start + (at - start))
     };
-    let mut tokens = lex_from(
-        &text,
-        0,
-        Base {
-            columns: base,
-            restart: false,
-        },
-        outer,
-    );
+    let mut tokens = lex_from(&text, 0, base, outer);
     for token in &mut tokens {
         token.span = place(token.span.start)..place(token.span.end);
         match &mut token.kind {

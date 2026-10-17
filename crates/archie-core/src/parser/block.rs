@@ -81,7 +81,7 @@ where
         let tokens = self
             .lexed
             .remove(&span)
-            .unwrap_or_else(|| lex_lines(self.source, &cell.lines, 0, depth + 1));
+            .unwrap_or_else(|| lex_lines(self.source, &cell.lines, Base::default(), depth + 1));
         let mut parser = Self {
             cells: Cells::new(),
             definitions: self.definitions.clone(),
@@ -485,8 +485,9 @@ where
 
 /// The markdown block written on `lines`, ranges of `source` read as
 /// consecutive lines, each with at most `base` columns of its leading white
-/// space left out, with its link definitions and its grid cells' lines. It spans `span`,
-/// and `outer` containers hold it.
+/// space left out and its tab stops counted from there, with its link
+/// definitions and its grid cells' lines. It spans `span`, and `outer`
+/// containers hold it.
 pub fn parse_lines<E>(
     source: &str,
     lines: &[Range<usize>],
@@ -497,7 +498,19 @@ pub fn parse_lines<E>(
 where
     E: Extension,
 {
-    read(source, lex_lines(source, lines, base, outer), span)
+    read(
+        source,
+        lex_lines(
+            source,
+            lines,
+            Base {
+                columns: base,
+                restart: true,
+            },
+            outer,
+        ),
+        span,
+    )
 }
 
 fn read<E>(
@@ -545,7 +558,7 @@ fn definitions(source: &str, tokens: &[Token], lexed: &mut Lexed) -> Definitions
                 .chain(&table.rows)
                 .flat_map(|row| &row.cells);
             for cell in cells {
-                let read = lex_lines(source, &cell.lines, 0, depth + 1);
+                let read = lex_lines(source, &cell.lines, Base::default(), depth + 1);
                 for (label, target) in definitions(source, &read, lexed) {
                     found.entry(label).or_insert(target);
                 }
