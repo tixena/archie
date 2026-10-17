@@ -1758,6 +1758,60 @@ fn a_dropped_toml_table_ends_at_the_next_header_after_a_bracket_left_open() {
 }
 
 #[test]
+fn a_toml_pair_past_the_value_cap_whose_bracket_never_closes_ends_before_the_next_pair() {
+    on_two_megabytes(|| {
+        let past = VALUE_CAP + 1;
+        let cap = format!("the value nests deeper than {VALUE_CAP} levels");
+        let tree = "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=k
+        Scalar Integer 0
+      Pair key=b
+        Scalar Integer 2
+      Pair key=u
+        Mapping
+          Pair key=z
+            Scalar Integer 3
+  MarkdownBlock
+";
+        let open = format!("deep = {}", "[".repeat(past));
+        let closed = format!("{open}1{}", "]".repeat(past));
+        for deep in [&open, &closed] {
+            let source = format!("+++\nk = 0\n{deep}\nb = 2\n[u]\nz = 3\n+++\n");
+            check(&source, tree);
+            assert_eq!(
+                kept_and_dropped(&source),
+                one_dropped(&["k", "b", "u"], &cap, deep)
+            );
+        }
+        let under_s = format!("+++\nk = 0\n[s]\n{open}\nb = 2\n[u]\nz = 3\n+++\n");
+        check(
+            &under_s,
+            "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=k
+        Scalar Integer 0
+      Pair key=s
+        Mapping
+          Pair key=b
+            Scalar Integer 2
+      Pair key=u
+        Mapping
+          Pair key=z
+            Scalar Integer 3
+  MarkdownBlock
+",
+        );
+        assert_eq!(
+            kept_and_dropped(&under_s),
+            one_dropped(&["k", "s", "u"], &cap, &open)
+        );
+    });
+}
+
+#[test]
 fn a_toml_statement_that_does_not_read_passes_a_string_whole_past_a_bad_escape() {
     let source = "+++\na = 1 2\n\"\\q\"\"\"\nb = 2\n+++\n";
     check(

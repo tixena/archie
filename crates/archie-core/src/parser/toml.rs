@@ -60,7 +60,7 @@ pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<Dropped
         } else {
             statement(&mut cursor, &mut root, &current, &mut implicit, &mut made)
         };
-        let (error, skip): (ParseError, fn(&mut Cursor<'_>)) = match read {
+        let error = match read {
             Ok(end) => {
                 stretch(&mut root, &current, end);
                 outcome = Some(Ok(()));
@@ -68,19 +68,19 @@ pub fn read(source: &str, content: Range<usize>) -> Result<(Mapping, Vec<Dropped
             }
             Err(Stop::Drop(error)) => {
                 outcome = Some(Ok(()));
-                (error, skip_pair)
+                error
             }
             Err(Stop::Fail(error)) => {
                 let _: &mut Result<(), ParseError> =
                     outcome.get_or_insert_with(|| Err(error.clone()));
-                (error, skip_broken_pair)
+                error
             }
         };
         cursor.set_pos(mark.pos);
         if is_header {
             skip_table(&mut cursor);
         } else {
-            skip(&mut cursor);
+            skip_broken_pair(&mut cursor);
         }
         cursor.drop_since(mark, error);
     }
@@ -365,9 +365,9 @@ fn skip_pair(cursor: &mut Cursor<'_>) {
     }
 }
 
-/// Moves the cursor from the start of a pair that does not read past its
-/// value, as [`skip_value`] does from its `=`, then on as [`skip_statement`]
-/// does.
+/// Moves the cursor from the start of a pair that does not read, or that
+/// nests past the value cap, past its value, as [`skip_value`] does from its
+/// `=`, then on as [`skip_statement`] does.
 fn skip_broken_pair(cursor: &mut Cursor<'_>) {
     loop {
         match cursor.peek() {

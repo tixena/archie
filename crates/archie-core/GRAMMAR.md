@@ -517,7 +517,9 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   pairs under it, up to the next header. `deep =` and arrays nested 401 deep, then
   `b = 2`, is `{b = 2}`, and inline tables `{a = {a = ...}}` nested 401 deep lose only
   their innermost pair. What follows the value that passes the cap, up to the end of
-  the pair, is not read. The same cap holds for a code block's args, which past it stay
+  the pair, is not read: a pair past the cap ends as a refused pair's value does, so
+  `deep =` and 401 `[` never closed, then `b = 2`, `[u]` and `z = 3`, is
+  `{b: 2, u: {z: 3}}`. The same cap holds for a code block's args, which past it stay
   `Text`.
 
 A value's type comes from how it is written:
