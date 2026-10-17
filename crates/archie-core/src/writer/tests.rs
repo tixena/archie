@@ -438,6 +438,42 @@ fn a_heading_line_with_no_text_keeps_its_section() {
 }
 
 #[test]
+fn a_section_with_no_heading_after_a_sibling_writes_an_empty_heading_line() {
+    let untitled = |section: Section| Section {
+        heading: None,
+        ..section
+    };
+    let a = || headed(vec![text_node("A")], Vec::new());
+    let b = || headed(vec![text_node("B")], Vec::new());
+    for (sections, text) in [
+        (
+            vec![a(), untitled(titled("", "foo", Vec::new()))],
+            "# A\n\n#\n\nfoo\n",
+        ),
+        (
+            vec![a(), untitled(headed(Vec::new(), vec![b()]))],
+            "# A\n\n#\n\n## B\n",
+        ),
+        (
+            vec![untitled(titled("", "intro", Vec::new())), b()],
+            "intro\n\n# B\n",
+        ),
+    ] {
+        let built = document(sections);
+        let written_once = write(&built, &WriteOptions::default()).unwrap();
+        assert_eq!(written_once, text);
+        assert_eq!(written(text), text);
+        let mut read_back = built.body;
+        for section in read_back.sections.iter_mut().skip(1) {
+            if section.heading.is_none() {
+                section.heading = headed(Vec::new(), Vec::new()).heading;
+            }
+        }
+        assert_eq!(body(text), read_back, "{text:?}");
+    }
+}
+
+#[test]
 fn a_section_seven_levels_deep_is_a_markdown_block_inside_its_parent() {
     let text = write(&document(vec![levels(1, 7)]), &WriteOptions::default()).unwrap();
     assert!(
