@@ -152,7 +152,40 @@ leading_dot: .5
       Pair key=truthy
         Scalar Boolean true
       Pair key=leading_dot
-        Scalar String ".5"
+        Scalar Float 0.5
+  MarkdownBlock
+"#,
+    );
+}
+
+#[test]
+fn a_float_may_have_no_digit_before_its_dot_or_none_after_it() {
+    check(
+        "\
+---
+a: .5
+b: 5.
+c: -.5e3
+d: 5.e3
+e: .
+f: 1e3
+---
+",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar Float 0.5
+      Pair key=b
+        Scalar Float 5
+      Pair key=c
+        Scalar Float -500
+      Pair key=d
+        Scalar Float 5000
+      Pair key=e
+        Scalar String "."
+      Pair key=f
+        Scalar Float 1000
   MarkdownBlock
 "#,
     );

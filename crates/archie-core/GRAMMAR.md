@@ -749,7 +749,7 @@ A `PLAIN` value's type comes from how it is written:
 | Nothing, `~`, `null`, `Null`, `NULL` | Null |
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
 | An optional sign and digits; or `0x`, `0o` and digits in that base | Integer, 64 bits |
-| Digits with a fraction of digits, an exponent or both, with an optional sign | Float, finite |
+| An optional sign; then digits, a dot and optional digits, or a dot and digits, or digits alone when an exponent follows; then an optional exponent: `e` or `E`, an optional sign and digits. `.5`, `5.`, `-.5e3` and `1e3` are floats, and `.` is a string | Float, finite |
 | `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 | `2026-10-10`, when that day exists in the calendar | Date |
 | A date-time, written as in TOML, whose date exists in the calendar | DateTime, or LocalDateTime when it has no offset |
@@ -1042,9 +1042,7 @@ with the text it reads from and the text it writes.
    Each is refused with an error that names it.
 3. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
-4. A number written with nothing before or after its dot, such as `.5` or `5.`, is a
-   string. YAML's core schema reads it as a float.
-5. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
+4. Where the JavaScript library `yaml` 2.9.1 departs from the YAML 1.2.2 grammar,
    archie follows the grammar. `? k` then `  : v` fails, where the library reads
    `{k: v}`: the `:` of an explicit key's value stands at the column of its `?`. `? a`
    then `:` then `: b` is `{a: null, "": b}`, where the library reads

@@ -42,7 +42,7 @@ pub fn yaml(text: &str) -> ScalarValue {
         ".nan" | ".NaN" | ".NAN" => ScalarValue::NonFinite(NonFinite::Nan),
         _ => integer(text, YAML_RADIXES)
             .map(ScalarValue::Integer)
-            .or_else(|| float(text).map(finite_or_infinite))
+            .or_else(|| yaml_float(text).map(finite_or_infinite))
             .or_else(|| date_time(text))
             .or_else(|| date(text).map(ScalarValue::Date))
             .unwrap_or_else(|| ScalarValue::String(text.to_owned())),
@@ -163,29 +163,53 @@ fn integer(text: &str, radixes: &[(&str, u32)]) -> Option<i64> {
     text.parse().ok()
 }
 
+/// A float with digits on each side of its dot, as TOML writes it.
 fn float(text: &str) -> Option<f64> {
+    let (whole, fraction) = float_parts(text)?;
+    if !is_digits(whole) || !fraction.is_none_or(is_digits) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// A float by the YAML core schema: the digits before its dot or the ones
+/// after it may be missing, but not both.
+fn yaml_float(text: &str) -> Option<f64> {
+    let (whole, fraction) = float_parts(text)?;
+    let digits_around_dot = if whole.is_empty() {
+        fraction.is_some_and(is_digits)
+    } else {
+        is_digits(whole) && fraction.is_none_or(|digits| digits.is_empty() || is_digits(digits))
+    };
+    if !digits_around_dot {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// The text before a float's dot and the text after it, once its sign and a
+/// well-formed exponent are dropped; `None` when it has neither a dot nor an
+/// exponent.
+fn float_parts(text: &str) -> Option<(&str, Option<&str>)> {
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
     let (mantissa, exponent) = unsigned
         .split_once(['e', 'E'])
         .map_or((unsigned, None), |(mantissa, exponent)| {
             (mantissa, Some(exponent))
         });
+    let exponent_digits = exponent.map(|part| part.strip_prefix(['+', '-']).unwrap_or(part));
+    if !exponent_digits.is_none_or(is_digits) {
+        return None;
+    }
     let (whole, fraction) = mantissa
         .split_once('.')
         .map_or((mantissa, None), |(whole, fraction)| {
             (whole, Some(fraction))
         });
-    let exponent_digits = exponent.map(|part| part.strip_prefix(['+', '-']).unwrap_or(part));
-    if !is_digits(whole)
-        || !fraction.is_none_or(is_digits)
-        || !exponent_digits.is_none_or(is_digits)
-    {
-        return None;
-    }
     if fraction.is_none() && exponent.is_none() {
         return None;
     }
-    text.parse().ok()
+    Some((whole, fraction))
 }
 
 /// A `Float`, or an infinity for digits too large for a float to hold.

@@ -215,6 +215,14 @@ Document
 }
 
 #[test]
+fn a_float_with_no_digit_before_its_dot_or_none_after_it_fails_the_file() {
+    for written in [".5", "5."] {
+        let error = parse(&format!("+++\na = {written}\n+++\n")).unwrap_err();
+        assert_eq!(error.message, format!("`{written}` is not a value"));
+    }
+}
+
+#[test]
 fn a_key_written_twice_holds_a_list_of_both_values_and_keeps_its_first_place() {
     check(
         r#"+++

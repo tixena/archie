@@ -1375,6 +1375,16 @@ fn text_holding_a_colon_and_a_tab_is_written_into_yaml_quoted_and_reads_back_as_
 }
 
 #[test]
+fn text_that_reads_as_a_float_with_no_digit_before_its_dot_is_written_into_yaml_quoted() {
+    let document = with_frontmatter_value(ScalarValue::String(".5".to_owned()));
+    assert!(written_yaml(&document).contains("x: \".5\"\n"));
+    assert_eq!(
+        read_back_value(&document),
+        ScalarValue::String(".5".to_owned())
+    );
+}
+
+#[test]
 fn toml_quotes_all_text_and_puts_tables_after_the_plain_keys() {
     let source = "---
 title: Notes
