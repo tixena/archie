@@ -8,7 +8,9 @@ use crate::parser::ast::{Code, Continues, Emphasis, Image, Inline, Link, LinkFor
 use crate::parser::definition;
 use crate::parser::entity;
 use crate::parser::extension::{Construct, Extension};
+use crate::parser::html;
 use crate::parser::inline::{is_punctuation, is_whitespace};
+use crate::parser::lexer;
 use crate::parser::line::{Base, space};
 use crate::parser::table;
 use crate::writer::Writer;
@@ -62,6 +64,9 @@ enum Segment {
 /// The segments of the line being written, and the fence of each code span
 /// piece still to write, the next one last.
 pub struct Segments {
+    /// Whether the line starts with inline HTML or a code span piece, which
+    /// a backslash cannot guard.
+    bare_led: bool,
     breaks: Breaks,
     /// The lines that a line break ended, each with whether it starts with
     /// text, when lines are cut at them.
@@ -187,6 +192,7 @@ impl Segments {
     where
         T: Extension,
     {
+        self.bare_led |= self.list.is_empty();
         let fence = self.fences.pop().unwrap_or_else(|| Fence::of(&code.value));
         let ticks = "`".repeat(fence.ticks);
         let pad = if fence.pad { " " } else { "" };
@@ -251,13 +257,17 @@ impl Segments {
     }
 
     /// The line written, with a backslash before a first character that
-    /// would start a block, and whether it starts with text. `first` is set
-    /// for the first line of a paragraph.
+    /// would start a block, or four spaces when inline HTML or code leads it
+    /// and it is not `first`, a paragraph's first; and whether text leads it.
     pub fn line(&mut self, first: bool) -> (String, bool) {
         let text_led = matches!(self.list.first(), Some(Segment::Text { link: _, value: _ }));
+        let bare_led = self.bare_led;
         let mut text = self.take(Near::Edge, Near::Edge);
         if text_led && let Some(at) = block_start(&text, first) {
             text.insert(at, '\\');
+        }
+        if bare_led && !first && starts_block(&text) {
+            text.insert_str(0, "    ");
         }
         (text, text_led)
     }
@@ -340,6 +350,7 @@ impl Segments {
 
     pub fn new(pieces: &Pieces) -> Self {
         Self {
+            bare_led: false,
             breaks: Breaks::Backslash,
             cut: Vec::new(),
             fences: pieces.fences(),
@@ -396,7 +407,10 @@ impl Segments {
         match node {
             Inline::Code(code) => self.code(code),
             Inline::Emphasis(emphasis) => self.emphasis(writer, emphasis, link),
-            Inline::Html(html) => self.markup(&html.value),
+            Inline::Html(html) => {
+                self.bare_led |= self.list.is_empty();
+                self.markup(&html.value);
+            }
             Inline::Image(image) => self.image(image),
             Inline::LineBreak(_) => self.line_break(),
             Inline::Link(anchor) => self.link(writer, anchor),
@@ -433,6 +447,7 @@ impl Segments {
             }
         }
         self.list.clear();
+        self.bare_led = false;
         out
     }
 
@@ -593,6 +608,15 @@ fn block_start(text: &str, first: bool) -> Option<usize> {
         && matches!(bytes.get(digits), Some(b'.' | b')'))
         && matches!(bytes.get(digits + 1), None | Some(b' ' | b'\t')))
     .then_some(digits)
+}
+
+/// Whether `text`, written at the start of a line after a paragraph's
+/// first, would start a block, also a backtick fence or an HTML block of a
+/// kind that interrupts a paragraph.
+fn starts_block(text: &str) -> bool {
+    block_start(text, false).is_some()
+        || lexer::fence(text).is_some()
+        || html::start(text).is_some_and(|start| start.interrupts)
 }
 
 /// Whether a piece that `continues` closes on its line.

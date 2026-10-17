@@ -753,6 +753,22 @@ fn a_text_line_that_would_open_a_tilde_fence_is_escaped() {
 }
 
 #[test]
+fn a_later_line_led_by_inline_html_or_a_code_span_piece_that_would_start_a_block_is_indented() {
+    for (source, text) in [
+        ("a\n    <div>\n", "a\n    <div>\n"),
+        ("a\n\t<div>\n", "a\n    <div>\n"),
+        ("a ``b\n    # c``\n", "a `b\n    # c`\n"),
+        ("a ``b\n\t# c``\n", "a `b\n    # c`\n"),
+        ("a\n    ```b\n    c``d```\n", "a\n    ```b\nc``d```\n"),
+        ("a\n\t```b\n\tc``d```\n", "a\n    ```b\nc``d```\n"),
+        ("a\n    ````b\n    c```d````\n", "a\n    ````b\nc```d````\n"),
+        ("a\\\n    <div>\n===\n", "a\\\n    <div>\n===\n"),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
 fn a_first_body_line_that_would_open_a_toml_frontmatter_is_escaped() {
     let text = round_trip("\\+++\nx = 1\n\\+++\n");
     assert_eq!(text, "\\+++\nx = 1\n+++\n");

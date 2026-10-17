@@ -951,8 +951,13 @@ Text is written so that it reads back as the same text:
 A line that starts with text gets a backslash before its first character when that
 character would start a block: a heading, a block quote, a bullet, a thematic break, a
 tilde fence, or, on a line after a paragraph's first, a heading underline; and before
-the `.` or `)` of what would read as an ordered list's number. The lines of a
-paragraph, and those of an underlined heading, are guarded as a whole:
+the `.` or `)` of what would read as an ordered list's number. A line after the first
+of a paragraph or of an underlined heading that starts with inline HTML or a piece of
+a code span, where a backslash would read as text or as code, is indented four spaces
+when it would start one of those blocks, a backtick fence, or an HTML block of a kind
+that interrupts a paragraph: indented four spaces after text, a line continues the
+paragraph, and the reader drops the spaces. The lines of a paragraph, and those of an
+underlined heading, are guarded as a whole:
 
 - a backslash goes before the `[` of a first line that starts with text when the lines
   would read as a link reference definition;

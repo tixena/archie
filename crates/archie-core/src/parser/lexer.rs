@@ -641,7 +641,7 @@ fn heading(rest: &str) -> Option<(u8, Range<usize>)> {
 
 /// The character and the length of an opening fence: three or more
 /// backticks, whose info string holds no backtick, or three or more tildes.
-fn fence(rest: &str) -> Option<(char, usize)> {
+pub fn fence(rest: &str) -> Option<(char, usize)> {
     let mark = rest
         .chars()
         .next()
