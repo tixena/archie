@@ -503,6 +503,34 @@ fn a_section_with_no_heading_after_a_sibling_writes_an_empty_heading_line() {
 }
 
 #[test]
+fn a_first_section_with_no_heading_that_a_read_would_not_build_writes_an_empty_heading_line() {
+    let trees = |heading: Option<Heading>| {
+        let a = |subsections| headed(vec![text_node("A")], subsections);
+        let foo = Section {
+            heading: heading.clone(),
+            ..titled("", "foo", Vec::new())
+        };
+        let empty = || Section {
+            heading: heading.clone(),
+            ..headed(Vec::new(), Vec::new())
+        };
+        [
+            vec![a(vec![foo])],
+            vec![a(vec![empty()])],
+            vec![empty(), headed(vec![text_node("B")], Vec::new())],
+        ]
+    };
+    let texts = ["# A\n\n##\n\nfoo\n", "# A\n\n##\n", "#\n\n# B\n"];
+    let read_backs = trees(headed(Vec::new(), Vec::new()).heading);
+    for ((sections, read_back), text) in trees(None).into_iter().zip(read_backs).zip(texts) {
+        let written_once = write(&document(sections), &WriteOptions::default()).unwrap();
+        assert_eq!(written_once, text);
+        assert_eq!(written(text), text);
+        assert_eq!(body(text), document(read_back).body, "{text:?}");
+    }
+}
+
+#[test]
 fn a_section_seven_levels_deep_is_a_markdown_block_inside_its_parent() {
     let text = write(&document(vec![levels(1, 7)]), &WriteOptions::default()).unwrap();
     assert!(

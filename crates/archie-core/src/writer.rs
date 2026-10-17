@@ -40,20 +40,34 @@ enum Marker {
     Other,
 }
 
-/// The place of a section in its list of sections: the first, or after a
-/// sibling, which a heading line, empty when it has no heading, keeps it
-/// apart from.
+/// The place of a section in its list of sections: the first of a
+/// markdown block, the first subsection of its parent, or after a sibling,
+/// which a heading line, empty when it has no heading, keeps it apart from.
 #[derive(Clone, Copy, Default)]
 enum Place {
     #[default]
-    First,
+    BlockFirst,
     Later,
+    SubsectionFirst,
 }
 
 impl Place {
-    /// The place of the section at `index` in its list.
-    const fn of(index: usize) -> Self {
-        if index == 0 { Self::First } else { Self::Later }
+    /// The place of the section at `index` in a markdown block's list.
+    const fn in_block(index: usize) -> Self {
+        if index == 0 {
+            Self::BlockFirst
+        } else {
+            Self::Later
+        }
+    }
+
+    /// The place of the subsection at `index` in its parent's list.
+    const fn in_parent(index: usize) -> Self {
+        if index == 0 {
+            Self::SubsectionFirst
+        } else {
+            Self::Later
+        }
     }
 }
 
@@ -419,7 +433,7 @@ impl Writer {
             file_start: false,
             marker: Marker::First,
             out: String::new(),
-            place: Place::First,
+            place: Place::BlockFirst,
             tight: false,
         }
     }
@@ -482,19 +496,24 @@ impl Writer {
     }
 
     /// The heading, written when the section has one, or else an empty
-    /// heading line after a sibling, then the blocks, then the subsections
-    /// one level deeper. Past the deepest level, each subsection is a
-    /// `markdown` block. A plain list right after a plain list of its kind
-    /// takes the other marker than that list, so the two read back as two
-    /// lists.
+    /// heading line, unless a read builds the section again with none: as
+    /// the first of a markdown block holding blocks or subsections, or as
+    /// the first subsection of its parent holding subsections and no
+    /// blocks. Then the blocks, then the subsections one level deeper. Past
+    /// the deepest level, each subsection is a `markdown` block. A plain
+    /// list right after a plain list of its kind takes the other marker than
+    /// that list, so the two read back as two lists.
     fn plain_section<T>(&mut self, section: &Section<T>)
     where
         T: Extension,
     {
         match (&section.heading, mem::take(&mut self.place)) {
             (Some(heading), _) => self.node(&heading.kind, Construct::Heading(heading)),
-            (None, Place::First) => {}
-            (None, Place::Later) => {
+            (None, Place::BlockFirst)
+                if !section.blocks.is_empty() || !section.subsections.is_empty() => {}
+            (None, Place::SubsectionFirst)
+                if section.blocks.is_empty() && !section.subsections.is_empty() => {}
+            (None, _) => {
                 self.separate();
                 self.put(&"#".repeat(self.depth));
                 self.put("\n");
@@ -518,7 +537,7 @@ impl Writer {
         for (index, subsection) in section.subsections.iter().enumerate() {
             if depth < DEEPEST {
                 self.depth = depth + 1;
-                self.place = Place::of(index);
+                self.place = Place::in_parent(index);
                 self.section(subsection);
                 self.depth = depth;
             } else {
@@ -641,7 +660,7 @@ where
                     ..Writer::new()
                 };
                 for (index, section) in block.sections.iter().enumerate() {
-                    inner.place = Place::of(index);
+                    inner.place = Place::in_block(index);
                     inner.section(section);
                 }
                 writer.keep_error(&mut inner);
