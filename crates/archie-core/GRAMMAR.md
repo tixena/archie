@@ -498,14 +498,16 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   statement. When a bracket never closes, the pair ends before the first later line
   that starts a key followed by `=`; a line that starts with `[` does not end it. A
   header that does not read is refused with its table and the pairs under it, up to
-  the next header. Strings and comments are passed over whole, so a `"""` or `'''`
+  the next header, even after an open bracket: each pair under it ends as a refused
+  pair's value does. Strings and comments are passed over whole, so a `"""` or `'''`
   string left open runs to the end of the frontmatter, dropping the rest, and a
   frontmatter that keeps no statement before it is broken. `title = Notes` then
   `date = 2026-10-17` is `{date: 2026-10-17}`, and so is `tags = ["a", "b"` then
   `date = 2026-10-17`. `a = [`, `[1],`, `@` and `]` on four lines, then `b = 2`, is
-  `{b: 2}`, with one drop. `[a]`, `x = 1`, `[owner` then `y = 2` is `{a: {x: 1}}`. A
-  pair is read to the end of its line before it is kept: `a = 1 2` is refused with
-  `expected the end of the line after the value`.
+  `{b: 2}`, with one drop. `[a]`, `x = 1`, `[owner` then `y = 2` is `{a: {x: 1}}`, and
+  `[t`, `x = [`, `y = 1`, `[u]` then `z = 3` is `{u: {z: 3}}`. A pair is read to the
+  end of its line before it is kept: `a = 1 2` is refused with `expected the end of
+  the line after the value`.
 - Values nest at most 400 deep, the value cap: arrays, inline tables, and the parts of
   dotted keys and of headers count together, and in YAML so do flow and block
   collections, properties on collections and explicit keys. The innermost pair that holds a

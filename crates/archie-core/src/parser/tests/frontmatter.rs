@@ -1722,6 +1722,65 @@ fn a_toml_pair_that_does_not_read_is_dropped_up_to_where_its_value_ends() {
 }
 
 #[test]
+fn a_dropped_toml_table_ends_at_the_next_header_after_a_bracket_left_open() {
+    let tree = "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=k
+        Scalar Integer 0
+      Pair key=u
+        Mapping
+          Pair key=z
+            Scalar Integer 3
+  MarkdownBlock
+";
+    let source = "+++\nk = 0\n[t\nx = [\ny = 1\n[u]\nz = 3\n+++\n";
+    check(source, tree);
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(
+            &["k", "u"],
+            "expected `]` to close the table header",
+            "[t\nx = [\ny = 1"
+        )
+    );
+    let header = format!("[{}t]", "a.".repeat(VALUE_CAP));
+    let past_cap = format!("+++\nk = 0\n{header}\nx = [\ny = 1\n[u]\nz = 3\n+++\n");
+    check(&past_cap, tree);
+    assert_eq!(
+        kept_and_dropped(&past_cap),
+        one_dropped(
+            &["k", "u"],
+            &format!("the value nests deeper than {VALUE_CAP} levels"),
+            &format!("{header}\nx = [\ny = 1")
+        )
+    );
+}
+
+#[test]
+fn a_toml_statement_that_does_not_read_passes_a_string_whole_past_a_bad_escape() {
+    let source = "+++\na = 1 2\n\"\\q\"\"\"\nb = 2\n+++\n";
+    check(
+        source,
+        "Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=b
+        Scalar Integer 2
+  MarkdownBlock
+",
+    );
+    assert_eq!(
+        kept_and_dropped(source),
+        one_dropped(
+            &["b"],
+            "expected the end of the line after the value",
+            "a = 1 2\n\"\\q\"\"\""
+        )
+    );
+}
+
+#[test]
 fn the_drops_of_a_key_a_tag_a_circular_or_undefined_alias_are_listed() {
     let key = "a key cannot be a list or a mapping";
     assert_eq!(

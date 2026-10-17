@@ -383,10 +383,11 @@ fn skip_broken_pair(cursor: &mut Cursor<'_>) {
     skip_statement(cursor);
 }
 
-/// Moves the cursor from the `=` of a pair that does not read to the line
-/// ending where every bracket after it is closed. When one never closes, it
-/// stops at the line ending before the first later line that starts a key
-/// followed by `=`. Strings and comments are passed over whole.
+/// Moves the cursor from the `=` of a pair that does not read, or from the
+/// start of a pair in a dropped table, to the line ending where every bracket
+/// after it is closed. When one never closes, it stops at the line ending
+/// before the first later line that starts a key followed by `=`. Strings and
+/// comments are passed over whole.
 fn skip_value(cursor: &mut Cursor<'_>) {
     let mut depth = 0_usize;
     let mut next_pair = None;
@@ -460,7 +461,7 @@ fn skip_string(cursor: &mut Cursor<'_>) {
 
 /// Moves the cursor from the start of a statement that does not read past
 /// it: to the next line that starts a key followed by `=`, or a `[`. Strings
-/// are passed over whole, so one left open runs to the end.
+/// are passed over as [`skip_string`] passes them.
 fn skip_statement(cursor: &mut Cursor<'_>) {
     loop {
         match cursor.peek() {
@@ -471,9 +472,7 @@ fn skip_statement(cursor: &mut Cursor<'_>) {
                     return;
                 }
             }
-            Some(b'"' | b'\'') => {
-                let _: Result<Value, ParseError> = quoted(cursor);
-            }
+            Some(b'"' | b'\'') => skip_string(cursor),
             Some(b'#') => skip_comment(cursor),
             Some(_) => cursor.bump(),
         }
@@ -502,11 +501,12 @@ fn starts_pair(cursor: &mut Cursor<'_>) -> bool {
 
 /// Moves the cursor from a header that is dropped past its table and the
 /// pairs in it: to the line ending before the next header, or to the end.
-/// The header's line is passed as text, as a broken one may leave a `[` open.
+/// The header's line is passed as text, as a broken one may leave a `[` open,
+/// and each pair as [`skip_value`] passes it.
 fn skip_table(cursor: &mut Cursor<'_>) {
     let _: &str = cursor.take_until(b"\n");
     loop {
-        skip_pair(cursor);
+        skip_value(cursor);
         let rest = cursor.rest();
         let header_follows = rest
             .strip_prefix('\n')
