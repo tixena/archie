@@ -305,6 +305,31 @@ fn a_line_indented_to_the_item_text_continues_the_item() {
 }
 
 #[test]
+fn a_line_left_of_the_item_text_ends_the_list_and_starts_a_paragraph() {
+    for source in ["- a\nb\n", "- a\n b\n"] {
+        check(
+            source,
+            r#"Document
+  MarkdownBlock
+    Section
+      Heading
+      List
+        Item
+          MarkdownBlock
+            Section
+              Heading
+              Paragraph
+                Line
+                  Text "a"
+      Paragraph
+        Line
+          Text "b"
+"#,
+        );
+    }
+}
+
+#[test]
 fn lists_nest_by_indentation_and_an_item_holds_several_blocks() {
     check(
         "\

@@ -471,6 +471,14 @@ fn lists_are_written_with_dashes_and_numbers_counted_up_from_the_first() {
 }
 
 #[test]
+fn a_line_left_of_the_item_text_is_written_as_a_paragraph_after_the_list() {
+    for source in ["- a\nb\n", "- a\n b\n"] {
+        assert_eq!(written(source), "- a\n\nb\n", "{source:?}");
+        assert_eq!(written(&written(source)), "- a\n\nb\n", "{source:?}");
+    }
+}
+
+#[test]
 fn emphasis_strong_and_code_take_archies_marks_and_fences() {
     assert_eq!(round_trip("_a_ __b__ `c`\n"), "*a* **b** `c`\n");
     assert_eq!(round_trip("``a`b``\n"), "``a`b``\n");
