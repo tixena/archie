@@ -13,9 +13,13 @@ use crate::parser::error::ParseError;
 use crate::parser::frontmatter::{Stop, caught, finish, insert, nest};
 use crate::parser::scalar;
 
-/// How many values the aliases of one frontmatter may copy: nested aliases
-/// grow a copy exponentially.
+/// How many values the anchors and aliases of one frontmatter may copy:
+/// nested aliases grow a copy exponentially.
 const COPY_CAP: usize = 100_000;
+
+/// How many bytes of text the anchors and aliases of one frontmatter may
+/// copy: an alias of a long string copies all of it.
+const TEXT_CAP: usize = 1_000_000;
 
 /// The core-schema tags archie reads, plus `!!timestamp`.
 const TAGS: [&str; 8] = [
@@ -88,24 +92,29 @@ impl Read {
     }
 }
 
-/// The values anchors name, the anchors still being read, and how many
-/// values the aliases have copied.
+/// The values anchors name, the anchors still being read, and how much the
+/// anchors and aliases have copied.
 #[derive(Default)]
 struct Anchors {
-    copied: usize,
+    copied: Size,
     named: HashMap<String, Value>,
     open: Vec<String>,
 }
 
 impl Anchors {
-    /// Adds `count` values to those the aliases copied, or raises the drop
-    /// of the alias at `span` when that passes `COPY_CAP`.
-    fn charge(&mut self, count: usize, span: &Range<usize>) -> Result<(), Stop> {
-        self.copied += count;
-        if self.copied <= COPY_CAP {
+    /// Adds `size` to what the anchors and aliases copied, or raises the drop
+    /// of the anchor or the alias at `span` when that passes `COPY_CAP` or
+    /// `TEXT_CAP`.
+    fn charge(&mut self, size: Size, span: &Range<usize>) -> Result<(), Stop> {
+        self.copied.bytes += size.bytes;
+        self.copied.values += size.values;
+        let message = if self.copied.values > COPY_CAP {
+            format!("the anchors and aliases copy more than {COPY_CAP} values")
+        } else if self.copied.bytes > TEXT_CAP {
+            format!("the anchors and aliases copy more than {TEXT_CAP} bytes of text")
+        } else {
             return Ok(());
-        }
-        let message = format!("the aliases copy more than {COPY_CAP} values");
+        };
         Err(Stop::Drop(ParseError::new(&message, span.clone())))
     }
 
@@ -121,6 +130,23 @@ impl Anchors {
             format!("no anchor `&{name}` is defined before this alias")
         };
         Err(Stop::Drop(ParseError::new(&message, span.clone())))
+    }
+
+    /// Keeps a copy of `value` under `anchor`, written at `span`, once the
+    /// copy is charged.
+    fn keep(&mut self, anchor: String, value: &Value, span: &Range<usize>) -> Result<(), Stop> {
+        let (size, _) = measure(value, self.left());
+        self.charge(size, span)?;
+        let _: Option<Value> = self.named.insert(anchor, value.clone());
+        Ok(())
+    }
+
+    /// What the anchors and aliases may still copy.
+    const fn left(&self) -> Size {
+        Size {
+            bytes: TEXT_CAP.saturating_sub(self.copied.bytes),
+            values: COPY_CAP.saturating_sub(self.copied.values),
+        }
     }
 }
 
@@ -176,6 +202,20 @@ impl Properties {
             separate(cursor)?;
         }
     }
+
+    /// Where the properties are written, from the first to the end of the
+    /// last.
+    const fn span(&self) -> Range<usize> {
+        self.first.start..self.end
+    }
+}
+
+/// How much a copy holds: its values, each list, mapping and scalar counting
+/// as one, and the bytes of the text of its keys and scalars.
+#[derive(Clone, Copy, Default)]
+struct Size {
+    bytes: usize,
+    values: usize,
 }
 
 /// A tag as written: the type it names, `None` when archie does not read
@@ -1582,7 +1622,8 @@ fn node_properties(
 }
 
 /// The value `read` gives under `properties`, once its anchor is no longer
-/// open: retagged as `!!name`, and kept under its anchor.
+/// open: retagged as `!!name`, and kept under its anchor, a copy that counts
+/// toward `COPY_CAP` and `TEXT_CAP`.
 fn finish_node(
     cursor: &mut Cursor<'_>,
     properties: Properties,
@@ -1596,8 +1637,9 @@ fn finish_node(
     if let (Some(tag), Some(type_name)) = (&properties.tag, name) {
         value = retag(cursor, type_name, &tag.span, value)?;
     }
+    let span = properties.span();
     if let Some(anchor) = properties.anchor {
-        let _: Option<Value> = cursor.state_mut().named.insert(anchor, value.clone());
+        cursor.state_mut().keep(anchor, &value, &span)?;
     }
     Ok(value)
 }
@@ -1695,8 +1737,9 @@ where
             value: scalar::yaml(&text),
         }),
     };
+    let at = properties.span();
     if let Some(anchor) = properties.anchor {
-        let _: Option<Value> = cursor.state_mut().named.insert(anchor, node);
+        cursor.state_mut().keep(anchor, &node, &at)?;
     }
     Ok(text)
 }
@@ -1813,14 +1856,14 @@ fn misfit(written: &str, name: &str, span: Range<usize>) -> ParseError {
 }
 
 /// A copy of the value the alias at the cursor names, inside `open` values,
-/// with every span in it on the alias. The copy counts toward `COPY_CAP`, and
-/// toward `VALUE_CAP` from where the alias stands.
+/// with every span in it on the alias. The copy counts toward `COPY_CAP` and
+/// `TEXT_CAP`, and toward `VALUE_CAP` from where the alias stands.
 fn alias(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
     let (name, span) = alias_name(cursor)?;
     let anchors = cursor.state_mut();
-    let limit = COPY_CAP.saturating_sub(anchors.copied);
-    let (count, levels) = measure(anchors.get(&name, &span)?, limit);
-    anchors.charge(count, &span)?;
+    let limit = anchors.left();
+    let (size, levels) = measure(anchors.get(&name, &span)?, limit);
+    anchors.charge(size, &span)?;
     // The deepest list or mapping of the copy opens inside the others.
     if let Some(inside) = levels.checked_sub(1) {
         let _: usize = nest(open + inside, span.clone())?;
@@ -1829,7 +1872,8 @@ fn alias(cursor: &mut Cursor<'_>, open: usize) -> Result<Value, Stop> {
 }
 
 /// The text of the scalar the alias at the cursor names, as a key, or `None`
-/// when it names a list or a mapping. The text counts as one copied value.
+/// when it names a list or a mapping. The text counts as one copied value
+/// and its bytes.
 fn alias_key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
     let (name, span) = alias_name(cursor)?;
     let anchors = cursor.state_mut();
@@ -1837,7 +1881,11 @@ fn alias_key(cursor: &mut Cursor<'_>) -> Result<Option<String>, Stop> {
         return Ok(None);
     };
     let original = scalar.clone();
-    anchors.charge(1, &span)?;
+    let size = Size {
+        bytes: text_length(&original),
+        values: 1,
+    };
+    anchors.charge(size, &span)?;
     Ok(Some(scalar_text(cursor, original.value, &original.span)))
 }
 
@@ -1868,30 +1916,49 @@ fn pass_name<'src>(cursor: &mut Cursor<'src>) -> &'src str {
     cursor.take_until(b" \t\r\n,[]{}")
 }
 
-/// How many values `value` holds, itself included, counted up to one past
+/// How much `value` holds, itself included, counted until it passes
 /// `limit`, and how many lists and mappings nest in it at its deepest.
-fn measure(value: &Value, limit: usize) -> (usize, usize) {
-    let mut count = 0;
+fn measure(value: &Value, limit: Size) -> (Size, usize) {
+    let mut size = Size::default();
     let mut levels = 0;
     let mut open = vec![(0, value)];
     while let Some((depth, held)) = open.pop() {
-        count += 1;
-        if count > limit {
+        size.values += 1;
+        if size.values > limit.values || size.bytes > limit.bytes {
             break;
         }
         match held {
             Value::Mapping(mapping) => {
                 levels = levels.max(depth + 1);
-                open.extend(mapping.pairs.values().map(|pair| (depth + 1, &pair.value)));
+                for (key, pair) in &mapping.pairs {
+                    size.bytes += key.len();
+                    open.push((depth + 1, &pair.value));
+                }
             }
-            Value::Scalar(_) => {}
+            Value::Scalar(scalar) => size.bytes += text_length(scalar),
             Value::Sequence(sequence) => {
                 levels = levels.max(depth + 1);
                 open.extend(sequence.items.iter().map(|item| (depth + 1, item)));
             }
         }
     }
-    (count, levels)
+    (size, levels)
+}
+
+/// The bytes of a scalar's text: a string's own, or those it is written as.
+const fn text_length(scalar: &Scalar) -> usize {
+    match &scalar.value {
+        ScalarValue::String(text) => text.len(),
+        ScalarValue::Boolean(_)
+        | ScalarValue::Date(_)
+        | ScalarValue::DateTime(_)
+        | ScalarValue::Float(_)
+        | ScalarValue::Integer(_)
+        | ScalarValue::LocalDateTime(_)
+        | ScalarValue::NonFinite(_)
+        | ScalarValue::Null
+        | ScalarValue::Time(_) => scalar.span.end - scalar.span.start,
+    }
 }
 
 /// `value` with every span in it set to `span`.

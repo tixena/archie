@@ -750,10 +750,17 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   alias whose anchor is not defined before it, with
   ``no anchor `&B` is defined before this alias``; the mapping keeps its other pairs.
   `a: &A [*A]` then `b: 2` is `{b: 2}`, and `a: *B` then `b: &B 1` is `{b: 1}`.
-- The aliases of one frontmatter copy at most 100000 values, each list, mapping and
-  scalar of a copy counting as one, and an alias as a key as one. The alias that
-  passes the cap, and each alias after it, drops the innermost key that holds it,
-  with `the aliases copy more than 100000 values`.
+- The anchors and aliases of one frontmatter copy at most 100000 values and at most
+  1000000 bytes of text. Each list, mapping and scalar of a copy counts as one value,
+  and each key and scalar of it counts the bytes of its text: a string's own, any
+  other scalar's as written. The copy each alias makes counts, and so does the copy
+  each anchor keeps of the node it names; an alias as a key counts as one value and
+  the bytes of its text. The anchor or the alias that passes either bound, and each
+  anchor and alias after it, drops the innermost key that holds it, with
+  `the anchors and aliases copy more than 100000 values` or
+  `the anchors and aliases copy more than 1000000 bytes of text`. `a: &s` and a
+  string of 10000 bytes, then `b:` and a list of 100 aliases `*s`, drops `b`: with
+  the anchor's own copy, the text copied comes to 1010000 bytes.
 - An alias with a tag or an anchor fails the file with
   `an alias holds no tag or anchor`, pointing at the first of them: `!!str *x` fails.
   A value has at most one anchor: `a: &x &y 1` fails with
@@ -1145,11 +1152,12 @@ with the text it reads from and the text it writes.
    The YAML 1.2.2 core schema has no date type and reads it as a string.
 2. An alias is a copy of the value its anchor names, and a write holds the copies and
    no anchor; in YAML both name one node. An alias inside the value its anchor names,
-   an alias whose anchor is not defined before it, and the aliases past 100000 copied
-   values drop the innermost key that holds them, with its value; YAML's graph may hold
-   a node inside itself, and an alias with no anchor before it is an error there. A
-   tag other than the eight above, and a value nested past 400 levels, drop the
-   innermost key that holds them too. YAML reads both.
+   an alias whose anchor is not defined before it, and the anchors and aliases past
+   100000 copied values or 1000000 copied bytes of text drop the innermost key that
+   holds them, with its value; YAML's graph may hold a node inside itself, and an
+   alias with no anchor before it is an error there. A tag other than the eight above,
+   and a value nested past 400 levels, drop the innermost key that holds them too.
+   YAML reads both.
 3. A key written more than once becomes one key holding a list of its values. YAML
    does not allow it.
 4. A pair whose key is a list or a mapping is dropped, and the mapping keeps its

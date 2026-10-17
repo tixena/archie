@@ -1304,12 +1304,92 @@ fn ten_anchors_of_ten_aliases() -> String {
 
 #[test]
 fn aliases_that_copy_more_than_the_cap_drop_the_key_that_passes_it_and_every_later_alias() {
-    let document = parse(&ten_anchors_of_ten_aliases()).unwrap();
-    let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
-    // `a3` brings the copies to 12330 values, and the eighth alias in `a4`
-    // passes 100000.
-    assert_eq!(
-        pairs.keys().collect::<Vec<_>>(),
-        ["a0", "a1", "a2", "a3", "b"]
-    );
+    on_two_megabytes(|| {
+        let document = parse(&ten_anchors_of_ten_aliases()).unwrap();
+        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        // With the copy each anchor keeps, `a3` brings the copies to 24674
+        // values, and the seventh alias in `a4` passes 100000.
+        assert_eq!(
+            pairs.keys().collect::<Vec<_>>(),
+            ["a0", "a1", "a2", "a3", "b"]
+        );
+    });
+}
+
+/// A frontmatter whose `a` holds 190 anchored lists, each inside the one
+/// before, around a list of `items` integers, then `b: 2`.
+fn nested_anchors(items: usize) -> String {
+    let opened: Vec<String> = (0_usize..190).map(|level| format!("&n{level} [")).collect();
+    let list = vec!["1"; items].join(", ");
+    let closed = "]".repeat(190);
+    format!("---\na: {}{list}{closed}\nb: 2\n---\n", opened.concat())
+}
+
+#[test]
+fn nested_anchors_that_keep_more_than_the_cap_drop_the_key_that_holds_them() {
+    on_two_megabytes(|| {
+        check(&nested_anchors(20_000), &only_b("Yaml"));
+        // Around 100 integers, the anchors keep 37145 values.
+        let document = parse(&nested_anchors(100)).unwrap();
+        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
+    });
+}
+
+/// A frontmatter whose `a` is an anchored string of 10000 bytes and whose
+/// `b` is a list of `aliases` aliases of it.
+fn aliases_of_a_long_string(aliases: usize) -> String {
+    let text = "x".repeat(10_000);
+    let list = vec!["*s"; aliases].join(", ");
+    format!("---\na: &s {text}\nb: [{list}]\n---\n")
+}
+
+#[test]
+fn aliases_that_copy_more_than_the_text_cap_drop_the_key_that_holds_them() {
+    on_two_megabytes(|| {
+        let only_a = format!(
+            "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String \"{}\"
+  MarkdownBlock
+",
+            "x".repeat(10_000)
+        );
+        // 10000 aliases copy 10000 values, under 100000: the bytes pass.
+        check(&aliases_of_a_long_string(10_000), &only_a);
+        // The anchor's own copy and 99 aliases come to 1000000 bytes, and a
+        // hundredth alias passes.
+        let document = parse(&aliases_of_a_long_string(99)).unwrap();
+        let pairs = &document.frontmatter.as_ref().unwrap().mapping.pairs;
+        assert_eq!(pairs.keys().collect::<Vec<_>>(), ["a", "b"]);
+        check(&aliases_of_a_long_string(100), &only_a);
+    });
+}
+
+#[test]
+fn anchors_and_aliases_under_the_copy_budget_read_as_before() {
+    on_two_megabytes(|| {
+        let copy = "        Mapping
+          Pair key=draft
+            Scalar Boolean false
+          Pair key=lang
+            Scalar String \"en\"
+";
+        check(
+            "---\ndefaults: &d {draft: false, lang: en}\npost: *d\npage: *d\nnote: *d\n---\n",
+            &format!(
+                "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=defaults
+{copy}      Pair key=post
+{copy}      Pair key=page
+{copy}      Pair key=note
+{copy}  MarkdownBlock
+"
+            ),
+        );
+    });
 }
