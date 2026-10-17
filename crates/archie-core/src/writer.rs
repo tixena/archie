@@ -240,11 +240,12 @@ impl Writer {
     }
 
     /// `#` marks, one per level of depth, then the heading's text, a line
-    /// break in it written `&#10;`. At depth 1 or 2, a heading that holds a
-    /// line break is written over lines instead, each but the last ended by
-    /// the break's `\`, guarded as a paragraph's lines, then `===` or `---`
-    /// on a line of its own, unless text is written before it in a tight
-    /// list, which those lines would join.
+    /// break in it written `&#10;` and a backslash before a final run of `#`s
+    /// the reader would take for its closing sequence. At depth 1 or 2, a
+    /// heading that holds a line break is written over lines instead, each
+    /// but the last ended by the break's `\`, guarded as a paragraph's lines,
+    /// then `===` or `---` on a line of its own, unless text is written
+    /// before it in a tight list, which those lines would join.
     fn heading<T>(&mut self, heading: &Heading<T>)
     where
         T: Extension,
@@ -273,8 +274,10 @@ impl Writer {
                 let mut segments = Segments::new(&pieces);
                 segments.line_breaks_as_references();
                 segments.nodes(self, &heading.children, false);
+                let mut text = segments.take(Near::Edge, Near::Edge);
+                inline::guard_closing_sequence(&mut text);
                 self.put(" ");
-                self.put(&segments.take(Near::Edge, Near::Edge));
+                self.put(&text);
             }
         }
         self.put("\n");

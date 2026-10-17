@@ -1117,14 +1117,71 @@ Some text
 }
 
 #[test]
-fn closing_hashes_of_a_heading_are_kept_as_text() {
+fn the_text_of_a_heading_ends_before_its_closing_hashes() {
     check(
         "# Title ##\n",
         r#"Document
   MarkdownBlock
     Section
       Heading
-        Text "Title ##"
+        Text "Title"
+"#,
+    );
+    check(
+        "### Title ###   \n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Section
+        Section
+          Heading
+            Text "Title"
+"#,
+    );
+}
+
+#[test]
+fn a_heading_of_closing_hashes_alone_has_no_text() {
+    check(
+        "# #\n",
+        "\
+Document
+  MarkdownBlock
+    Section
+      Heading
+",
+    );
+    check(
+        "### ###\n",
+        "\
+Document
+  MarkdownBlock
+    Section
+      Section
+        Section
+          Heading
+",
+    );
+}
+
+#[test]
+fn final_hashes_that_touch_the_text_or_follow_a_backslash_are_text() {
+    check(
+        "# Title#\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "Title#"
+"#,
+    );
+    check(
+        "# Title \\#\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Heading
+        Text "Title #"
 "#,
     );
 }

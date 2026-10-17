@@ -492,6 +492,19 @@ impl Segments {
     }
 }
 
+/// Puts a backslash before the first `#` of a final run of `#`s in `text`,
+/// a heading's text written after its `#` marks, when a space or a tab
+/// precedes the run or the run is the whole text, since the reader would
+/// take it for the heading's closing sequence.
+pub fn guard_closing_sequence(text: &mut String) {
+    let before_run = text.trim_end_matches('#');
+    let closes = before_run.len() < text.len()
+        && (before_run.is_empty() || before_run.ends_with([' ', '\t']));
+    if closes {
+        text.insert(before_run.len(), '\\');
+    }
+}
+
 /// Puts a backslash before the `[` that starts the first of `lines`, a
 /// paragraph that starts with text, when the paragraph would read as a link
 /// reference definition.

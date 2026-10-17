@@ -119,7 +119,7 @@ enum Start {
     },
     Heading {
         level: u8,
-        text_at: usize,
+        text: Range<usize>,
     },
     Html(html::Start),
     Item {
@@ -244,11 +244,11 @@ impl Lexer<'_> {
             Some(Start::Fence { length, mark }) => self.code_block(column, at, end, length, mark),
             Some(Start::Heading {
                 level: heading_level,
-                text_at,
+                text,
             }) => {
                 let kind = TokenKind::Heading {
                     level: heading_level,
-                    text: at + text_at..end,
+                    text: at + text.start..at + text.end,
                 };
                 self.push(kind, at..end);
             }
@@ -484,8 +484,8 @@ impl Lexer<'_> {
         if is_thematic_break(rest) {
             return Some(Start::Break);
         }
-        if let Some((level, text_at)) = heading(rest) {
-            return Some(Start::Heading { level, text_at });
+        if let Some((level, title)) = heading(rest) {
+            return Some(Start::Heading { level, text: title });
         }
         if rest.starts_with('>') {
             return Some(Start::Quote);
@@ -532,8 +532,11 @@ pub fn lex_from(source: &str, start: usize, base: usize, outer: usize) -> Vec<To
     lexer.tokens
 }
 
-/// The level of an ATX heading and the offset its text starts at.
-fn heading(rest: &str) -> Option<(u8, usize)> {
+/// The level of an ATX heading and the range of its text: from the first
+/// character after the spaces that follow the `#`s, up to the spaces and
+/// tabs before the closing sequence, a final run of `#`s that a space or a
+/// tab precedes or that is the whole text.
+fn heading(rest: &str) -> Option<(u8, Range<usize>)> {
     let text = rest.trim_start_matches('#');
     let level = u8::try_from(rest.len() - text.len())
         .ok()
@@ -542,7 +545,14 @@ fn heading(rest: &str) -> Option<(u8, usize)> {
         return None;
     }
     let title = text.trim_start_matches(' ');
-    Some((level, rest.len() - title.len()))
+    let start = rest.len() - title.len();
+    let before_run = title.trim_end_matches('#');
+    let end = if before_run.is_empty() || before_run.ends_with([' ', '\t']) {
+        start + trim_end_spaces(before_run).len()
+    } else {
+        rest.len()
+    };
+    Some((level, start..end))
 }
 
 /// The character and the length of an opening fence: three or more

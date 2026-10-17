@@ -101,7 +101,7 @@ only: a tab is a character of text.
 | `BLOCK_QUOTE` | A line whose text starts with `>`, and each line after it whose text starts with `>` within three columns of the enclosing item's text. It holds their text, each line without its `>` and one space after it, joined by `\n`. |
 | `CODE_BLOCK` | A fenced code block, from its opening fence to its closing fence, or an indented code block. It holds the lines between the fences, their range in the source, and the info string, the text after the opening fence with the white space around it trimmed, as a range of the source. An indented block has an empty info string. |
 | `DEFINITION` | A link reference definition: `[label]:`, a destination and an optional title, with nothing after them on their line, over as many lines as it needs. It holds the label as written and the target. |
-| `HEADING_n` | One to six `#`, `n` of them, followed by a space or by the end of the line. Its text runs from the first character after those spaces to the end of the line's text. |
+| `HEADING_n` | One to six `#`, `n` of them, followed by a space or by the end of the line. Its text runs from the first character after those spaces to the end of the line's text. A closing sequence, a final run of `#`s that a space or a tab precedes or that is the whole text, ends the text before the spaces and tabs in front of it: `# Title ##` holds `Title`, and `# #` no text. A final run that touches the text before it, a backslash included, is text: `# Title#` holds `Title#`, and `# Title \#` holds `Title #`. |
 | `HTML` | An HTML block, by the seven kinds of CommonMark's HTML blocks, from its first line to the line that ends it by its kind. It holds the lines as written, from the column of the enclosing item's text. |
 | `ITEM_END` | The end of a list item. |
 | `ITEM_START` | A list marker: `-`, `*` or `+`, or one to nine digits and `.` or `)`, followed by a space or by the end of the line. It holds the marker, so the block grammar knows the bullet character or the delimiter: an item whose bullet character or delimiter differs from the item's before it starts a new list. |
@@ -900,7 +900,7 @@ then read and written again, gives the same text the second time.
 |---|---|
 | Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; then its markdown block. The text ends with one line ending; an empty document is empty text. |
 | Blank lines | One between two blocks and after a heading. Inside a tight list, none between the blocks of an item. |
-| Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A heading line with no text is its marks alone. Every heading line is written. |
+| Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A final run of `#`s in its text that a space or a tab precedes, or that is the whole text, gets a backslash before its first `#`, because the reader would take the run for the closing sequence: `Title ##` is written `# Title \##`. A heading line with no text is its marks alone. Every heading line is written. |
 | A heading that holds a line break | At depth 1 or 2, written underlined: its lines, each but the last ended by the break's `\`, guarded as a paragraph's lines, then `===` at depth 1 or `---` at depth 2 on a line of its own, because a `#` heading is one line. At depth 3 to 6, and right after other text in a tight list item, where a blank line would make the list loose, the one-line form, with the break written `&#10;`. |
 | A section with no heading | No line where a later read builds it again: as the first section of a markdown block that holds blocks or subsections, or as the first subsection of its parent that holds subsections and no blocks, a skipped level. Any other section with no heading, which only a tree built in code holds, gets a heading line with no text, the `#` marks of its depth. |
 | A section seven or more levels deep | Inside its parent, as a ```` ```markdown ```` block where the levels start over at `#`. The rule repeats inside each block, and each block's fence is longer than any fence inside it. |
@@ -996,15 +996,14 @@ with the text it reads from and the text it writes.
    heading's `#`s, a list marker or the marks of a thematic break from what follows, so
    a tab and `code`, `#`, a tab and `Title`, and `-`, a tab and `item` are paragraph
    text.
-6. A heading's closing `#`s are part of its text: `# Title ##` holds `Title ##`.
-7. A closing fence may be indented any number of spaces past the enclosing item's
+6. A closing fence may be indented any number of spaces past the enclosing item's
    text. CommonMark allows up to three, and reads a fence indented further as content.
-8. An image's `alt` is the text between its brackets as written. CommonMark reads
+7. An image's `alt` is the text between its brackets as written. CommonMark reads
    inline nodes there.
-9. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
+8. `[[target|alias]]` is a wiki link and `![[target|alias]]` a wiki embed. CommonMark
    reads both as text.
-10. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
-    cells at most 40 deep together. Past either cap, the marks stay text.
+9. Inline nodes nest at most 1000 deep, and list items, markdown blocks and table
+   cells at most 40 deep together. Past either cap, the marks stay text.
 
 ### From GitHub's tables
 

@@ -465,6 +465,29 @@ fn a_heading_line_with_no_text_keeps_its_section() {
 }
 
 #[test]
+fn a_heading_is_written_without_its_closing_hashes_and_keeps_the_hashes_of_its_text() {
+    for (source, text) in [
+        ("# Title ##\n", "# Title\n"),
+        ("### Title ###   \n", "### Title\n"),
+        ("# #\n", "#\n"),
+        ("### ###\n", "###\n"),
+        ("# Title#\n", "# Title#\n"),
+        ("# Title \\#\n", "# Title \\#\n"),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
+fn a_built_heading_whose_text_ends_with_hashes_after_a_space_escapes_the_first_hash() {
+    let built = document(vec![headed(vec![text_node("Title ##")], Vec::new())]);
+    let text = write(&built, &WriteOptions::default()).unwrap();
+    assert_eq!(text, "# Title \\##\n");
+    assert_eq!(body(&text), built.body);
+    assert_eq!(written(&text), text);
+}
+
+#[test]
 fn a_section_with_no_heading_after_a_sibling_writes_an_empty_heading_line() {
     let untitled = |section: Section| Section {
         heading: None,
