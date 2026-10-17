@@ -1225,6 +1225,42 @@ fn args_with_a_key_written_twice_are_text() {
 }
 
 #[test]
+fn args_with_dotted_keys_that_share_a_prefix_are_toml() {
+    check(
+        "```md a.b=1,a.c=2\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Toml {a = { b = 1, c = 2 }} value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn args_with_a_table_written_twice_are_text() {
+    check(
+        "```md a={b=1},a={c=2}\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Text "a={b=1},a={c=2}" value="x" claimed
+"#,
+    );
+}
+
+#[test]
+fn args_with_a_dotted_key_written_twice_are_text() {
+    check(
+        "```md a.b=1,a.b=2\nx\n```\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      CodeBlock language="md" args=Text "a.b=1,a.b=2" value="x" claimed
+"#,
+    );
+}
+
+#[test]
 fn args_whose_inline_table_ends_before_the_last_brace_are_text() {
     check(
         "```md a=1} # x\nx\n```\n",

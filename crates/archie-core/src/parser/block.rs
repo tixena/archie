@@ -584,12 +584,13 @@ fn args(source: &str, rest: Range<usize>) -> Args {
 }
 
 /// Whether a key of `mapping`, or of a mapping it holds at any depth, is
-/// written more than once.
+/// written more than once. A key that recurs and holds a mapping is a
+/// prefix that dotted keys share, which TOML allows.
 fn repeats(mapping: &Mapping) -> bool {
-    mapping
-        .pairs
-        .values()
-        .any(|pair| !pair.repeats.is_empty() || value_repeats(&pair.value))
+    mapping.pairs.values().any(|pair| {
+        let twice = !pair.repeats.is_empty() && !matches!(pair.value, Value::Mapping(_));
+        twice || value_repeats(&pair.value)
+    })
 }
 
 fn value_repeats(value: &Value) -> bool {

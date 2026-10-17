@@ -817,6 +817,14 @@ fn toml_args_are_written_as_pairs_separated_by_commas() {
 }
 
 #[test]
+fn toml_args_with_dotted_keys_that_share_a_prefix_are_written_as_one_table() {
+    assert_eq!(
+        round_trip("```md a.b=1,a.c=2\nx\n```\n"),
+        "```md a = { b = 1, c = 2 }\nx\n```\n"
+    );
+}
+
+#[test]
 fn text_args_with_a_key_and_no_value_are_written_as_found() {
     let source = "```md title=\"README.md\" showLineNumbers\nx\n```\n";
     assert_eq!(round_trip(source), source);
