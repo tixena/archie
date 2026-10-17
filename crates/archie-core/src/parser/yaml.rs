@@ -601,11 +601,12 @@ fn scalar_key(cursor: &mut Cursor<'_>) -> Result<String, Stop> {
 }
 
 /// A plain key ends at the first `:` followed by a space or the end of the
-/// line.
+/// line, before the line's comment.
 fn plain_key_length(line: &str) -> Option<usize> {
-    line.match_indices(':')
+    let text = uncommented(line);
+    text.match_indices(':')
         .map(|(at, _)| at)
-        .find(|&at| matches!(line.as_bytes().get(at + 1), None | Some(b' ' | b'\t')))
+        .find(|&at| matches!(text.as_bytes().get(at + 1), None | Some(b' ' | b'\t')))
         .filter(|&at| at > 0)
 }
 

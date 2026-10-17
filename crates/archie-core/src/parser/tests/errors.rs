@@ -235,6 +235,14 @@ fn a_plain_value_cannot_hold_a_colon_and_a_tab() {
 }
 
 #[test]
+fn a_line_whose_text_before_its_comment_holds_no_key_is_refused_in_a_mapping() {
+    assert_eq!(
+        refusal("---\na: 1\nabc # c: d\n---\n"),
+        ("expected `key: value`".to_owned(), "abc # c: d")
+    );
+}
+
+#[test]
 fn an_empty_entry_of_a_flow_collection_is_refused_at_its_comma() {
     let refused = |source: &str| {
         let error = parse(source).unwrap_err();

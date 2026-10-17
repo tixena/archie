@@ -610,8 +610,10 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
 - A `:` line indented more than its `?` does not give the pair's value: `? k` then
   `  : v` fails the file with `this line is indented more than the keys above it`.
 - `PLAIN_KEY` runs to the first `:` followed by a space, a tab or the end of the
-  line. `FLOW_KEY` runs to the first `:` followed by a space, a tab, the end of the
-  line or one of `, [ ] { }`, to the first of `, [ ] { }`, or to a comment.
+  line, before the line's comment. `a: 1` then `abc # c: d` fails the file with
+  ``expected `key: value` ``, and `a#b: 1` is `{"a#b": 1}`. `FLOW_KEY` runs to the
+  first `:` followed by a space, a tab, the end of the line or one of `, [ ] { }`, to
+  the first of `, [ ] { }`, or to a comment.
 - Inside a flow mapping, and after a `?` inside a flow list, a `FLOW_KEY` that runs
   to the end of its line goes on over the following lines up to its `:`, or up to a
   `,`, `[`, `]`, `{` or `}`, as a `PLAIN` inside a flow collection does: a comment

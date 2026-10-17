@@ -875,6 +875,31 @@ fn the_empty_mapping_of_a_frontmatter_that_holds_one_value_spans_the_value() {
 }
 
 #[test]
+fn a_plain_key_ends_before_the_comment_of_its_line() {
+    check("---\nabc # c: d\n---\n", EMPTY_YAML);
+    check(
+        "---\na: b # c: d\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a
+        Scalar String "b"
+  MarkdownBlock
+"#,
+    );
+    check(
+        "---\na#b: 1\n---\n",
+        "Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=a#b
+        Scalar Integer 1
+  MarkdownBlock
+",
+    );
+}
+
+#[test]
 fn an_alias_reads_as_a_copy_of_the_scalar_its_anchor_names() {
     let source = "---\nauthor: &ada Ada\nreviewer: *ada\n---\n";
     check(
