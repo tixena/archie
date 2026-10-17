@@ -12,9 +12,17 @@ an object, neither tied to a path. Two capabilities stand on that abstraction: a
 path, and [version tracking over pluggable backends](backends-and-capabilities.md)
 only means something once a document can exist without a filesystem underneath it.
 
-*The representation of a document object — how a heading, a list, a table, a code
-fence, or a remargin comment block is held, and what identifies a document that
-has no path — is not yet specified.*
+A document is a tree. A `Document` holds a `Frontmatter`, if the file has one, and
+its body, a `MarkdownBlock`. The body holds sections by depth: each section holds
+its blocks and its subsections, and a heading when the file wrote a heading line
+for it. A paragraph holds its lines, and an inline node written across lines is
+cut into one piece per line, each with a `continues` that says whether the node
+goes on to the next line, from the previous one, or both. A code block holds its
+language and its args, read as TOML when they can be and kept as written
+otherwise. An extension can give any markdown node a type of its own. The full
+grammar is in `crates/archie-core/GRAMMAR.md`.
+
+*What identifies a document that has no path is not yet specified.*
 
 ## The frontmatter engine is the foundation
 
@@ -39,8 +47,8 @@ on top, rather than as a single program with internal modules.
 ## archie writes its own parser
 
 archie parses markdown with a parser of its own, covering both halves of a
-document: the YAML of the frontmatter and the markdown of the body. General-
-purpose crates are reference material rather than dependencies.
+document: the YAML or TOML of the frontmatter and the markdown of the body.
+General-purpose crates are reference material rather than dependencies.
 
 The parser has to serve searches that run over document bodies, over frontmatter
 when frontmatter is specified, and over both when clauses are given for both — one
@@ -51,19 +59,20 @@ claim about how fast anything is.*
 
 ## Whose formatting wins
 
-archie may respect the formatting it finds; remargin does not.
+archie writes each construct in a form of its own, whatever form the file used:
+`#` headings, `-` bullets, `*emphasis*`, `***` for a thematic break, backtick
+fences, inline links. It uses another form only where its own would read back as
+another tree, so a file read and written twice gives the same text the second
+time. The frontmatter's format is the one choice: YAML by default, TOML on
+request.
 
-The two halves land in different places. Writing a canonical form — a fixed key
-order, no preserved comments, one spelling for everything — is remargin's write
-path. Reading a document written in someone else's style and giving it back in
-that style is a capability of archie's own parser, available precisely because the
-parser is archie's own code rather than a general-purpose YAML library. Within a
-corpus that remargin governs, every resource still has to satisfy the lint rules
-configuration allows.
+Writing a canonical form — a fixed key order, no preserved comments, one spelling
+for everything — is remargin's write path. Within a corpus that remargin governs,
+every resource still has to satisfy the lint rules configuration allows.
 
-*The canonical form — key order, quoting, indentation, how a multi-line value is
-written — and the list of lint rules configuration may allow are not yet
-specified.*
+The form archie writes for each construct is stated in the "Writing" section of
+`crates/archie-core/GRAMMAR.md`. *The list of lint rules configuration may allow
+is not yet specified.*
 
 ## What schemas cover
 
