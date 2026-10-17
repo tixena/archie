@@ -4,9 +4,9 @@
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Kind, Line, Mapping,
-    MarkdownBlock, NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Table, Text,
-    Value,
+    Block, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Kind, Line, LineBreak,
+    Mapping, MarkdownBlock, NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence,
+    Table, TableFormat, Text, Value,
 };
 use crate::parser::extension::Markdown;
 use crate::parser::parse;
@@ -208,6 +208,7 @@ fn clear_block_node(block: &mut Block) {
 }
 
 fn clear_table(table: &mut Table) {
+    table.format = TableFormat::Pipe;
     table.span = 0..0;
     clear_kind(&mut table.kind);
     for row in table.head.iter_mut().chain(&mut table.rows) {
@@ -286,6 +287,21 @@ fn titled(title: &str, text: &str, subsections: Vec<Section>) -> Section {
         })],
         heading: Heading {
             children: vec![text_node(title)],
+            kind: Kind(None),
+            span: 0..0,
+        },
+        kind: Kind(None),
+        span: 0..0,
+        subsections,
+    }
+}
+
+/// A section with no blocks, headed by `children`, then `subsections`.
+fn headed(children: Vec<Inline>, subsections: Vec<Section>) -> Section {
+    Section {
+        blocks: Vec::new(),
+        heading: Heading {
+            children,
             kind: Kind(None),
             span: 0..0,
         },
@@ -385,14 +401,14 @@ Some **bold** and *em* text.
 print(1)
 ```
 
----
+***
 "
     );
 }
 
 #[test]
-fn a_thematic_break_of_underscores_or_stars_is_written_as_dashes() {
-    assert_eq!(round_trip("a\n\n___\n\n* * *\n"), "a\n\n---\n\n---\n");
+fn a_thematic_break_of_any_marks_is_written_as_stars() {
+    assert_eq!(round_trip("a\n\n___\n\n* * *\n"), "a\n\n***\n\n***\n");
 }
 
 #[test]
@@ -610,7 +626,7 @@ fn line_breaks_quotes_html_and_breaks_take_archies_form() {
         "<div>\n  <p>x</p>\n</div>\n"
     );
     assert_eq!(round_trip("a <span>b</span>\n"), "a <span>b</span>\n");
-    assert_eq!(round_trip("***\n"), "---\n");
+    assert_eq!(round_trip("***\n"), "***\n");
 }
 
 #[test]
@@ -642,6 +658,68 @@ fn blocks_are_separated_by_one_blank_line_and_the_text_ends_with_one_newline() {
         "# A\n\ntext\n\n- x\n\n> q\n\nlast\n"
     );
     assert_eq!(round_trip(""), "");
+}
+
+#[test]
+fn each_file_writes_the_same_text_the_second_time_and_keeps_its_tree() {
+    for (source, text) in [
+        ("- a\n* b\n", "- a\n\n* b\n"),
+        ("- a\n* b\n+ c\n", "- a\n\n* b\n\n- c\n"),
+        ("1. a\n1) b\n", "1. a\n\n1) b\n"),
+        ("- a\n  ***\n- b\n", "- a\n  ***\n- b\n"),
+        ("***\n\ntext\n\n***\n", "***\n\ntext\n\n***\n"),
+        ("&#32;a\n", "&#32;a\n"),
+        ("a&#32;\n", "a&#32;\n"),
+        ("&#9;a\n", "&#9;a\n"),
+        ("[a](u \"t&#10;x\")\n", "[a](u \"t&#10;x\")\n"),
+        ("a&#10;b\n", "a&#10;b\n"),
+        ("Setext a  \nb\n===\n", "Setext a\\\nb\n===\n"),
+    ] {
+        assert_eq!(round_trip(source), text, "{source:?}");
+    }
+}
+
+#[test]
+fn touching_spans_of_one_kind_are_written_as_one_span() {
+    for (source, text) in [("*a*_b_\n", "*ab*\n"), ("**a**__b__\n", "**ab**\n")] {
+        assert_eq!(written(source), text, "{source:?}");
+        assert_eq!(written(text), text, "{source:?}");
+    }
+}
+
+#[test]
+fn strong_around_emphasis_and_emphasis_inside_emphasis_keep_their_form() {
+    assert_eq!(written("__*a*__\n"), "***a***\n");
+    assert_eq!(written("_*a*_\n"), "**a**\n");
+}
+
+#[test]
+fn a_line_break_in_a_heading_deeper_than_two_is_written_as_a_reference() {
+    let line_break = Inline::LineBreak(LineBreak {
+        kind: Kind(None),
+        span: 0..0,
+    });
+    let third = headed(vec![text_node("a"), line_break, text_node("b")], Vec::new());
+    let built = document(vec![headed(
+        Vec::new(),
+        vec![headed(Vec::new(), vec![third])],
+    )]);
+    assert_eq!(
+        write(&built, &WriteOptions::default()).unwrap(),
+        "#\n\n##\n\n### a&#10;b\n"
+    );
+}
+
+#[test]
+fn a_simple_table_and_a_one_line_grid_table_read_back_to_the_same_body() {
+    assert_eq!(
+        round_trip("a   b\n--- ---\n1   2\n"),
+        "| a   | b   |\n| :-- | :-- |\n| 1   | 2   |\n"
+    );
+    assert_eq!(
+        round_trip("+---+---+\n| a | b |\n+===+===+\n| 1 | 2 |\n+---+---+\n"),
+        "| a   | b   |\n| --- | --- |\n| 1   | 2   |\n"
+    );
 }
 
 fn toml(source: &str) -> String {

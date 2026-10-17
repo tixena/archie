@@ -1,6 +1,9 @@
 //! Inline nodes written on a line: markup as archie writes it, and text with
 //! a backslash before each character that would otherwise read as markup.
 
+use core::fmt::{self, Write as _};
+use core::mem;
+
 use crate::parser::ast::{Code, Continues, Emphasis, Image, Inline, Link, LinkForm, Strong};
 use crate::parser::definition;
 use crate::parser::entity;
@@ -8,6 +11,17 @@ use crate::parser::extension::{Construct, Extension};
 use crate::parser::inline::{is_punctuation, is_whitespace};
 use crate::parser::table;
 use crate::writer::Writer;
+
+/// How a line break no extension claimed is written.
+#[derive(Clone, Copy)]
+enum Breaks {
+    /// `\`, where the line ends after it, as in a paragraph.
+    Backslash,
+    /// `\`, then the line ends: a heading written over several lines.
+    Cut,
+    /// `&#10;`: a heading written on one line.
+    Reference,
+}
 
 /// What is written next to a text: a character, the start or the end of its
 /// line, or nothing known, for a node written on its own.
@@ -47,6 +61,9 @@ enum Segment {
 /// The segments of the line being written, and the fence of each code span
 /// piece still to write, the next one last.
 pub struct Segments {
+    breaks: Breaks,
+    /// The lines that a line break ended, when lines are cut at them.
+    cut: Vec<String>,
     fences: Vec<Fence>,
     list: Vec<Segment>,
     /// Whether every `|` of the text is escaped.
@@ -184,6 +201,11 @@ impl Segments {
         self.markup(&written);
     }
 
+    /// Ends the line after the `\` of every line break written from now on.
+    pub const fn cut_at_line_breaks(&mut self) {
+        self.breaks = Breaks::Cut;
+    }
+
     /// `*emphasis*`.
     pub fn emphasis<T>(&mut self, writer: &Writer, emphasis: &Emphasis<T>, link: bool)
     where
@@ -238,6 +260,34 @@ impl Segments {
         (text, text_led)
     }
 
+    /// A line break: `\`, which ends the line when lines are cut at line
+    /// breaks, or `&#10;`.
+    fn line_break(&mut self) {
+        match self.breaks {
+            Breaks::Backslash => self.markup("\\"),
+            Breaks::Cut => {
+                self.markup("\\");
+                let (line, _) = self.line(self.cut.is_empty());
+                self.cut.push(line);
+            }
+            Breaks::Reference => self.markup("&#10;"),
+        }
+    }
+
+    /// Writes every line break from now on as `&#10;`.
+    pub const fn line_breaks_as_references(&mut self) {
+        self.breaks = Breaks::Reference;
+    }
+
+    /// The lines written, each ended by a line break but the last, with the
+    /// guard of a paragraph's lines, when lines are cut at line breaks.
+    pub fn lines(&mut self) -> Vec<String> {
+        let (last, _) = self.line(self.cut.is_empty());
+        let mut lines = mem::take(&mut self.cut);
+        lines.push(last);
+        lines
+    }
+
     /// `[text](target "title")`, also for a reference link or an autolink,
     /// or `[[target|text]]` for a wiki link. The `[` goes before the first
     /// piece of a link written over several lines, the rest after the last.
@@ -283,6 +333,8 @@ impl Segments {
 
     pub fn new(pieces: &Pieces) -> Self {
         Self {
+            breaks: Breaks::Backslash,
+            cut: Vec::new(),
             fences: pieces.fences(),
             list: Vec::new(),
             pipes: false,
@@ -311,12 +363,22 @@ impl Segments {
         }
     }
 
+    /// Adds `nodes`, each run of plain emphases or of plain strongs next to
+    /// each other and whole on their line inside one pair of marks.
     pub fn nodes<T>(&mut self, writer: &Writer, nodes: &[Inline<T>], link: bool)
     where
         T: Extension,
     {
-        for node in nodes {
-            self.node(writer, node, link);
+        let touching = |left: &Inline<T>, right: &Inline<T>| {
+            whole_span(left)
+                .zip(whole_span(right))
+                .is_some_and(|((left_mark, _), (right_mark, _))| left_mark == right_mark)
+        };
+        for run in nodes.chunk_by(touching) {
+            match run {
+                [node] => self.node(writer, node, link),
+                _ => self.touching(writer, run, link),
+            }
         }
     }
 
@@ -329,7 +391,7 @@ impl Segments {
             Inline::Emphasis(emphasis) => self.emphasis(writer, emphasis, link),
             Inline::Html(html) => self.markup(&html.value),
             Inline::Image(image) => self.image(image),
-            Inline::LineBreak(_) => self.markup("\\"),
+            Inline::LineBreak(_) => self.line_break(),
             Inline::Link(anchor) => self.link(writer, anchor),
             Inline::Strong(strong) => self.strong(writer, strong, link),
             Inline::Text(text) => self.text(&text.value, link),
@@ -386,6 +448,21 @@ impl Segments {
         }
     }
 
+    /// `run`, plain emphases or plain strongs next to each other, inside one
+    /// pair of their mark, the children of each one after the other.
+    fn touching<T>(&mut self, writer: &Writer, run: &[Inline<T>], link: bool)
+    where
+        T: Extension,
+    {
+        let spans = run.iter().filter_map(whole_span);
+        let mark = spans.clone().next().map_or("", |(mark, _)| mark);
+        self.markup(mark);
+        for (_, children) in spans {
+            self.nodes(writer, children, link);
+        }
+        self.markup(mark);
+    }
+
     /// `children` between two `mark`s: the opening one before the first
     /// piece of a node written over several lines, the closing one after
     /// the last.
@@ -418,6 +495,27 @@ pub fn guard_definition(lines: &mut [String]) {
     if defines && let Some(first) = lines.first_mut() {
         first.insert(0, '\\');
     }
+}
+
+/// Whether `nodes` hold a line break no extension claimed, among them or
+/// among the children of a plain emphasis, strong or link they hold.
+pub fn holds_line_break<T>(nodes: &[Inline<T>]) -> bool
+where
+    T: Extension,
+{
+    nodes.iter().any(|node| match node {
+        Inline::Emphasis(emphasis) => {
+            emphasis.kind.0.is_none() && holds_line_break(&emphasis.children)
+        }
+        Inline::LineBreak(line_break) => line_break.kind.0.is_none(),
+        Inline::Link(link) => {
+            link.kind.0.is_none()
+                && link.form == LinkForm::Markdown
+                && holds_line_break(&link.children)
+        }
+        Inline::Strong(strong) => strong.kind.0.is_none() && holds_line_break(&strong.children),
+        Inline::Code(_) | Inline::Html(_) | Inline::Image(_) | Inline::Text(_) => false,
+    })
 }
 
 /// Whether `lines`, a paragraph as written, would read as a table that
@@ -479,18 +577,43 @@ const fn closes(continues: Continues) -> bool {
 /// starts a reference, a `<` that could start a tag or an autolink, and the
 /// `!`, `[` and `]` that would start or end a link. Between a link's
 /// brackets, `link`, every bracket is escaped, and with `pipes`, every `|`.
+/// The spaces and tabs that start or end a line, which the reader drops,
+/// and every line ending are written as character references.
 fn escape(out: &mut String, value: &str, before: Near, after: Near, link: bool, pipes: bool) {
     let chars: Vec<(usize, char)> = value.char_indices().collect();
-    let near = |index: usize| {
-        chars
-            .get(index)
-            .map_or(after, |&(_, character)| Near::Char(character))
+    let blank = |&&(_, character): &&(usize, char)| matches!(character, ' ' | '\t');
+    let lead = if before == Near::Edge {
+        chars.iter().take_while(blank).count()
+    } else {
+        0
+    };
+    let trail = if after == Near::Edge {
+        chars.len() - chars[lead..].iter().rev().take_while(blank).count()
+    } else {
+        chars.len()
+    };
+    let referred = |index: usize| {
+        index < lead || index >= trail || matches!(chars.get(index), Some(&(_, '\n')))
+    };
+    let near = |index: usize| match chars.get(index) {
+        Some(_) if referred(index) => Near::Char('&'),
+        Some(&(_, character)) => Near::Char(character),
+        None => after,
     };
     let mut index = 0;
     while let Some(&(at, character)) = chars.get(index) {
-        let previous = index
-            .checked_sub(1)
-            .map_or(before, |back| Near::Char(chars[back].1));
+        if referred(index) {
+            let _: fmt::Result = write!(out, "&#{};", u32::from(character));
+            index += 1;
+            continue;
+        }
+        let previous = index.checked_sub(1).map_or(before, |back| {
+            if referred(back) {
+                Near::Char(';')
+            } else {
+                Near::Char(chars[back].1)
+            }
+        });
         let (end, escaped) = if matches!(character, '*' | '_') {
             let end = index
                 + chars[index..]
@@ -597,14 +720,14 @@ fn target(destination: &str, title: Option<&str>) -> String {
         || !paired(destination)
     {
         written.push('<');
-        escape_marks(&mut written, destination, &['<', '>']);
+        escape_marks(&mut written, destination, &['<', '>'], false);
         written.push('>');
     } else {
-        escape_marks(&mut written, destination, &[]);
+        escape_marks(&mut written, destination, &[], false);
     }
     if let Some(text) = title {
         written.push_str(" \"");
-        escape_marks(&mut written, text, &['"']);
+        escape_marks(&mut written, text, &['"'], true);
         written.push('"');
     }
     written.push(')');
@@ -613,14 +736,19 @@ fn target(destination: &str, title: Option<&str>) -> String {
 
 /// Writes `text`, a destination or a title, with a backslash before each of
 /// `marks`, each `&` that starts a reference, and each backslash before
-/// punctuation or the end.
-fn escape_marks(out: &mut String, text: &str, marks: &[char]) {
+/// punctuation or the end. In a title, `title`, a line ending is written
+/// `&#10;`.
+fn escape_marks(out: &mut String, text: &str, marks: &[char], title: bool) {
     let mut chars = text.char_indices().peekable();
     while let Some((at, character)) = chars.next() {
+        if title && character == '\n' {
+            out.push_str("&#10;");
+            continue;
+        }
         let escaped = match character {
             '\\' => chars
                 .peek()
-                .is_none_or(|&(_, next)| next.is_ascii_punctuation()),
+                .is_none_or(|&(_, next)| next.is_ascii_punctuation() || (title && next == '\n')),
             '&' => entity::reference(&text[at..]).is_some(),
             _ => marks.contains(&character),
         };
@@ -646,6 +774,34 @@ fn paired(destination: &str) -> bool {
         }
     }
     depth == 0
+}
+
+/// The mark and the children of `node`, when it is an emphasis or a strong
+/// that no extension claimed and that is whole on its line.
+fn whole_span<T>(node: &Inline<T>) -> Option<(&'static str, &[Inline<T>])>
+where
+    T: Extension,
+{
+    match node {
+        Inline::Emphasis(emphasis)
+            if emphasis.kind.0.is_none() && emphasis.continues == Continues::Neither =>
+        {
+            Some(("*", &emphasis.children))
+        }
+        Inline::Strong(strong)
+            if strong.kind.0.is_none() && strong.continues == Continues::Neither =>
+        {
+            Some(("**", &strong.children))
+        }
+        Inline::Code(_)
+        | Inline::Emphasis(_)
+        | Inline::Html(_)
+        | Inline::Image(_)
+        | Inline::LineBreak(_)
+        | Inline::Link(_)
+        | Inline::Strong(_)
+        | Inline::Text(_) => None,
+    }
 }
 
 /// The text of `node`, when it is text.

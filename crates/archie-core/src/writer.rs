@@ -21,6 +21,15 @@ use crate::writer::inline::{Near, Pieces, Segments};
 /// written inside its parent as a `markdown` block.
 const DEEPEST: usize = 6;
 
+/// The marker of a list's items: `-` for a bullet list and `.` after an
+/// ordered list's numbers, or the other one, `*` or `)`, for a list right
+/// after a list of its kind written with `-` or `.`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    First,
+    Other,
+}
+
 /// Why a document could not be written: the frontmatter key whose value the
 /// chosen syntax cannot hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +56,8 @@ pub struct Writer {
     /// Whether the text written starts the file, with no frontmatter before
     /// it.
     file_start: bool,
+    /// The marker the list written next takes.
+    marker: Marker,
     out: String,
     /// Whether blocks follow each other with no blank line, as in the items
     /// of a tight list.
@@ -169,17 +180,36 @@ impl Writer {
         self.out
     }
 
-    /// `#` marks, one per level of depth, then the heading's text.
+    /// `#` marks, one per level of depth, then the heading's text, a line
+    /// break in it written `&#10;`. At depth 1 or 2, a heading that holds a
+    /// line break is written over lines instead, each but the last ended by
+    /// the break's `\`, then `===` or `---` on a line of its own.
     fn heading<T>(&mut self, heading: &Heading<T>)
     where
         T: Extension,
     {
-        self.put(&"#".repeat(self.depth));
-        if !heading.children.is_empty() {
-            let mut segments = Segments::new(&Pieces::of(&heading.children));
+        let underline = match self.depth {
+            1 => "===",
+            2 => "---",
+            _ => "",
+        };
+        let mut segments = Segments::new(&Pieces::of(&heading.children));
+        if !underline.is_empty() && inline::holds_line_break(&heading.children) {
+            segments.cut_at_line_breaks();
             segments.nodes(self, &heading.children, false);
-            self.put(" ");
-            self.put(&segments.take(Near::Edge, Near::Edge));
+            for line in segments.lines() {
+                self.put(&line);
+                self.put("\n");
+            }
+            self.put(underline);
+        } else {
+            self.put(&"#".repeat(self.depth));
+            if !heading.children.is_empty() {
+                segments.line_breaks_as_references();
+                segments.nodes(self, &heading.children, false);
+                self.put(" ");
+                self.put(&segments.take(Near::Edge, Near::Edge));
+            }
         }
         self.put("\n");
     }
@@ -215,21 +245,26 @@ impl Writer {
 
     /// `-` and one space before each item of a bullet list, the number and
     /// `. ` before each of an ordered list, numbered up from its first
-    /// number. Each item's lines after the first are indented to its text.
+    /// number, or `*` and `)` in their place for the other marker. Each
+    /// item's lines after the first are indented to its text.
     fn list<T>(&mut self, list: &List<T>)
     where
         T: Extension,
     {
+        let (bullet, delimiter) = match self.marker {
+            Marker::First => ("-", '.'),
+            Marker::Other => ("*", ')'),
+        };
         for (index, item) in list.items.iter().enumerate() {
             if index > 0 {
                 self.separate_items(list.loose);
             }
             let marker = list.start.map_or_else(
-                || "-".to_owned(),
+                || bullet.to_owned(),
                 |start| {
                     let number =
                         u64::try_from(index).map_or(start, |step| start.saturating_add(step));
-                    format!("{number}.")
+                    format!("{number}{delimiter}")
                 },
             );
             let mut inner = Self {
@@ -294,6 +329,7 @@ impl Writer {
             blank: false,
             depth: 1,
             file_start: false,
+            marker: Marker::First,
             out: String::new(),
             tight: false,
         }
@@ -375,7 +411,9 @@ impl Writer {
 
     /// The heading, written when it has text or the section has
     /// subsections, then the blocks, then the subsections one level deeper.
-    /// Past the deepest level, each subsection is a `markdown` block.
+    /// Past the deepest level, each subsection is a `markdown` block. A
+    /// plain list right after a plain list of its kind takes the other
+    /// marker than that list, so the two read back as two lists.
     fn plain_section<T>(&mut self, section: &Section<T>)
     where
         T: Extension,
@@ -387,8 +425,19 @@ impl Writer {
         {
             self.node(&heading.kind, Construct::Heading(heading));
         }
+        let mut previous: Option<&List<T>> = None;
         for block in &section.blocks {
+            let list = plain_list(block);
+            let same_kind = previous
+                .zip(list)
+                .is_some_and(|(before, after)| before.start.is_some() == after.start.is_some());
+            self.marker = if same_kind && self.marker == Marker::First {
+                Marker::Other
+            } else {
+                Marker::First
+            };
             self.block(block);
+            previous = list;
         }
         let depth = self.depth;
         for subsection in &section.subsections {
@@ -491,7 +540,7 @@ where
             Self::TableCell(cell) => writer.markdown_node(&cell.body),
             Self::TableRow(row) => writer.put(&table::pipe_row(row)),
             Self::Text(text) => writer.inline(|segments, _| segments.text(&text.value, false)),
-            Self::ThematicBreak(_) => writer.put("---\n"),
+            Self::ThematicBreak(_) => writer.put("***\n"),
         }
     }
 }
@@ -571,6 +620,23 @@ fn push_finite(out: &mut String, float: f64) {
     let _: fmt::Result = write!(out, "{float}");
     if !out[start..].contains('.') {
         out.push_str(".0");
+    }
+}
+
+/// `block` when it is a list no extension claimed.
+const fn plain_list<T>(block: &Block<T>) -> Option<&List<T>>
+where
+    T: Extension,
+{
+    match block {
+        Block::List(list) if list.kind.0.is_none() => Some(list),
+        Block::BlockQuote(_)
+        | Block::CodeBlock(_)
+        | Block::Html(_)
+        | Block::List(_)
+        | Block::Paragraph(_)
+        | Block::Table(_)
+        | Block::ThematicBreak(_) => None,
     }
 }
 
