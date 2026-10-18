@@ -56,9 +56,16 @@ dependencies = [
 name = "archie-store"
 version = "0.1.0"
 dependencies = [
+ "archie-core",
+ "bson",
+ "chrono",
+ "mongodb",
  "os-shim",
+ "serde",
+ "serde_json",
  "sha2",
  "thiserror",
+ "tixschema",
  "tokio",
 ]
 

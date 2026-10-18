@@ -1,6 +1,13 @@
 //! Where archie keeps documents: the storage interface and its stores.
 
+#[cfg(feature = "mongodb")]
+tixschema::decode_with_foundation!();
+#[cfg(feature = "mongodb")]
+tixschema::mongodb_foundation!();
+
 pub mod file;
+#[cfg(feature = "mongodb")]
+pub mod mongo;
 
 use core::fmt;
 

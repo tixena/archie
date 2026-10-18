@@ -10,10 +10,31 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The MongoDB store's record: archie-core's MongoDB layer, the driver and its BSON.
+mongodb = [
+    "archie-core/mongodb",
+    "dep:mongodb",
+    "dep:bson",
+    "dep:chrono",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:tixschema",
+]
+
 [dependencies]
 os-shim.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+
+# The document model, its MongoDB layer and the driver, under the mongodb feature
+archie-core = { path = "../archie-core", optional = true }
+bson = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+mongodb = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tixschema = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
