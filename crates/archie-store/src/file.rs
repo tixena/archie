@@ -12,6 +12,9 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored};
 
+/// The count in a temporary name, shared by every store in the process.
+static WRITES: AtomicU64 = AtomicU64::new(0);
+
 /// Files under a root folder, read and written through os-shim. A revision
 /// is the SHA-256 of the file's bytes.
 pub struct FileStore<'system> {
@@ -19,7 +22,6 @@ pub struct FileStore<'system> {
     hidden: bool,
     root: PathBuf,
     system: &'system dyn System,
-    writes: AtomicU64,
 }
 
 impl<'system> FileStore<'system> {
@@ -95,7 +97,6 @@ impl<'system> FileStore<'system> {
             hidden: false,
             root,
             system,
-            writes: AtomicU64::new(0),
         }
     }
 
@@ -132,9 +133,9 @@ impl<'system> FileStore<'system> {
         StorePath::new(&text)
     }
 
-    /// A name beside the target, unique to this write.
-    fn temporary(&self, folder: &Path, name: &str) -> PathBuf {
-        let count = self.writes.fetch_add(1, Ordering::Relaxed);
+    /// A name beside the target, unique to this write in this process.
+    fn temporary(folder: &Path, name: &str) -> PathBuf {
+        let count = WRITES.fetch_add(1, Ordering::Relaxed);
         folder.join(format!(".{name}.archie-write-{}-{count}", process::id()))
     }
 
@@ -149,7 +150,7 @@ impl<'system> FileStore<'system> {
         self.system
             .create_dir_all(&folder)
             .map_err(|error| backend(path, &error))?;
-        let temporary = self.temporary(&folder, name);
+        let temporary = Self::temporary(&folder, name);
         let written = self
             .system
             .write(&temporary, bytes)

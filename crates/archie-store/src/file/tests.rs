@@ -236,15 +236,16 @@ fn a_listing_gives_every_file_under_the_prefix_in_byte_order() {
 }
 
 #[test]
-fn two_writes_use_two_temporary_names() {
-    let system = MemorySystem::new();
-    let store = FileStore::new(PathBuf::from("/vault"), &system);
+fn two_writes_in_one_process_use_two_temporary_names() {
     let folder = Path::new("/vault/notes");
-    let first = store.temporary(folder, "task.md");
-    let second = store.temporary(folder, "task.md");
-    let id = process::id();
-    let name = |count: u8| folder.join(format!(".task.md.archie-write-{id}-{count}"));
-    assert_eq!((first, second), (name(0), name(1)));
+    let first = FileStore::temporary(folder, "task.md");
+    let second = FileStore::temporary(folder, "task.md");
+    assert_ne!(first, second);
+    let prefix = format!(".task.md.archie-write-{}-", process::id());
+    for name in [&first, &second] {
+        let file = name.file_name().unwrap().to_str().unwrap();
+        assert!(file.starts_with(&prefix), "{file}");
+    }
 }
 
 #[tokio::test]
