@@ -5,6 +5,8 @@ tixschema::decode_with_foundation!();
 #[cfg(feature = "mongodb")]
 tixschema::mongodb_foundation!();
 
+pub mod any;
+pub mod document;
 pub mod file;
 #[cfg(feature = "mongodb")]
 pub mod mongo;

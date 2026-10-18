@@ -23,12 +23,12 @@ mongodb = [
 ]
 
 [dependencies]
+archie-core = { path = "../archie-core" }
 os-shim.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 
-# The document model, its MongoDB layer and the driver, under the mongodb feature
-archie-core = { path = "../archie-core", optional = true }
+# The MongoDB layer and the driver, under the mongodb feature
 bson = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
