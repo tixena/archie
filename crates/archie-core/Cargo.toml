@@ -39,5 +39,8 @@ serde_json.workspace = true
 serde_stacker.workspace = true
 stacker.workspace = true
 
+# Binary form, read in place
+rkyv.workspace = true
+
 # TypeScript type + Zod schema generation from Rust models
 tixschema.workspace = true

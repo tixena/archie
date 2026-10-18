@@ -9,6 +9,7 @@ mod extension;
 mod frontmatter;
 mod inlines;
 mod json;
+mod rkyv;
 mod spans;
 mod tables;
 mod toml;

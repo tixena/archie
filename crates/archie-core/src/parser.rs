@@ -1,6 +1,7 @@
 //! Markdown parsing: a source file into its document tree. The grammar it
 //! follows is written in `GRAMMAR.md` at the root of this crate.
 
+pub mod archive;
 pub mod ast;
 pub mod error;
 pub mod extension;
@@ -16,6 +17,7 @@ pub(crate) mod html;
 pub(crate) mod inline;
 pub(crate) mod lexer;
 pub(crate) mod line;
+mod mirror;
 pub(crate) mod scalar;
 pub(crate) mod table;
 mod toml;

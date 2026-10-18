@@ -5,10 +5,21 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
+use rkyv::rancor::Source;
+use rkyv::ser::{Allocator, Writer};
+use rkyv::validation::ArchiveContext;
+use rkyv::with::{Map, Skip};
+// tixschema takes every derive named `Deserialize` off a model whose read it
+// writes, rkyv's with serde's.
+use rkyv::Deserialize as RkyvDeserialize;
 use serde::{Deserialize, Deserializer, Serialize};
 use tixschema::model_schema;
 
 use crate::parser::extension::{Extension, Markdown, markdown_schema};
+use crate::parser::mirror::{
+    self, AlignmentMirror, ArgsMirror, BlockMirror, ContinuesMirror, FrontmatterFormatMirror,
+    InlineMirror, LinkFormMirror, MappingMirror, TableFormatMirror,
+};
 
 /// The stack left below which `grown` reads on a new segment. It holds the
 /// `validate()` that tixschema runs over the subtree each grown read returns.
@@ -53,10 +64,16 @@ where
     Valid(Document<E>),
 }
 
+/// A `RawDocument` as rkyv archives it.
+pub type ArchivedRawDocument<E = Markdown> = mirror::ArchivedRawDocumentMirror<E>;
+
 /// A document whose frontmatter no entry of reads: its body, claimed by
 /// archie's markdown extension alone, and the frontmatter as written.
 #[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct InvalidDocument {
     #[serde(rename = "bd")]
@@ -68,12 +85,24 @@ pub struct InvalidDocument {
 /// A frontmatter no entry of reads: the reader's message, its syntax, and its
 /// text as written, so that a write gives it back.
 #[model_schema()]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    rkyv::Archive,
+    rkyv::Serialize,
+    RkyvDeserialize,
+)]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct InvalidFrontmatter {
     #[serde(rename = "er")]
     pub error: String,
     #[serde(rename = "fo")]
+    #[rkyv(with = FrontmatterFormatMirror)]
     pub format: FrontmatterFormat,
     #[serde(rename = "tx")]
     pub text: String,
@@ -81,8 +110,11 @@ pub struct InvalidFrontmatter {
 
 /// A markdown file whose frontmatter, if it has one, reads.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Document<E = Markdown>
 where
@@ -92,8 +124,10 @@ where
     pub body: MarkdownBlock<E>,
     #[serde(rename = "data")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[rkyv(with = Map<MappingMirror>)]
     pub frontmatter: Option<Mapping>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
@@ -107,6 +141,9 @@ pub enum FrontmatterFormat {
     #[default]
     Yaml,
 }
+
+/// A `FrontmatterFormat` as rkyv archives it.
+pub type ArchivedFrontmatterFormat = mirror::ArchivedFrontmatterFormatMirror;
 
 /// Keys and their values, in the order they were written. A key appears once.
 #[model_schema()]
@@ -138,6 +175,9 @@ pub enum Value {
     Time(NaiveTime),
 }
 
+/// A `Value` as rkyv archives it.
+pub type ArchivedValue = mirror::ArchivedValueMirror;
+
 /// A float that is not a finite number: `.inf`, `-.inf` and `.nan` in
 /// YAML; `inf`, `-inf` and `nan` in TOML.
 #[model_schema()]
@@ -166,17 +206,24 @@ impl NonFinite {
     }
 }
 
+/// A `NonFinite` as rkyv archives it.
+pub type ArchivedNonFinite = mirror::ArchivedNonFiniteMirror;
+
 /// A stretch of markdown read by the same rules: the body, a list item's
 /// content, a table cell's content, a markdown code block's content.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct MarkdownBlock<E = Markdown>
 where
     E: Extension,
 {
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "se")]
     #[serde(deserialize_with = "grown")]
@@ -202,16 +249,23 @@ where
     ThematicBreak(ThematicBreak<E>),
 }
 
+/// A `Block` as rkyv archives it.
+pub type ArchivedBlock<E = Markdown> = mirror::ArchivedBlockMirror<E>;
+
 /// Quoted text, without its `>` marks. Nothing inside it is read.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct BlockQuote<E = Markdown>
 where
     E: Extension,
 {
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "v")]
     pub value: String,
@@ -220,16 +274,21 @@ where
 /// Raw HTML, as written: a block, or an inline node such as `<span>`. A
 /// block's `continues` is always `Continues::Neither`.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Html<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "v")]
     pub value: String,
@@ -237,14 +296,18 @@ where
 
 /// A line of three or more `-`, `*` or `_`, such as `---`.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct ThematicBreak<E = Markdown>
 where
     E: Extension,
 {
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
@@ -254,50 +317,68 @@ where
 /// `heading` is `None` when no heading line was written, and a heading line
 /// with no text is a heading with no children.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(serialize_bounds(__S: Writer + Allocator, __S::Error: Source))]
+#[rkyv(deserialize_bounds(__D::Error: Source))]
+#[rkyv(bytecheck(bounds(__C: ArchiveContext, __C::Error: Source)))]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Section<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "bl")]
+    #[rkyv(omit_bounds, with = Map<BlockMirror<E>>)]
     pub blocks: Vec<Block<E>>,
     #[serde(rename = "hd")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading: Option<Heading<E>>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "ss")]
     #[serde(deserialize_with = "grown")]
+    #[rkyv(omit_bounds)]
     pub subsections: Vec<Self>,
 }
 
 /// A heading line, such as `# Ship parser`. An empty heading has no children.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Heading<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "ch")]
+    #[rkyv(with = Map<InlineMirror<E>>)]
     pub children: Vec<Inline<E>>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
 /// A set of lines, ended by a blank line.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Paragraph<E = Markdown>
 where
     E: Extension,
 {
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "li")]
     pub lines: Vec<Line<E>>,
@@ -305,16 +386,21 @@ where
 
 /// One line of a paragraph and the inline nodes written on it.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Line<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "ch")]
+    #[rkyv(with = Map<InlineMirror<E>>)]
     pub children: Vec<Inline<E>>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
@@ -325,8 +411,11 @@ where
 /// bullet list. `loose` is set when a blank line separates two items, or two
 /// blocks of one item.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct List<E = Markdown>
 where
@@ -335,6 +424,7 @@ where
     #[serde(rename = "it")]
     pub items: Vec<Item<E>>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "lo")]
     pub loose: bool,
@@ -345,8 +435,11 @@ where
 
 /// One entry of a list.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Item<E = Markdown>
 where
@@ -355,6 +448,7 @@ where
     #[serde(rename = "bd")]
     pub body: MarkdownBlock<E>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
@@ -365,16 +459,21 @@ where
 /// text after the opening fence, is split into `language`, its first word,
 /// `None` when there is no info string, and `args`, the rest.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct CodeBlock<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "ar")]
+    #[rkyv(with = ArgsMirror)]
     pub args: Args,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "la")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -396,23 +495,32 @@ pub enum Args {
     Toml(Mapping),
 }
 
+/// An `Args` as rkyv archives it.
+pub type ArchivedArgs = mirror::ArchivedArgsMirror;
+
 /// A table read from pipe, grid or simple table syntax. `head` holds the
 /// header rows, `rows` the rest.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Table<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "al")]
+    #[rkyv(with = Map<AlignmentMirror>)]
     pub alignments: Vec<Alignment>,
     #[serde(rename = "fo")]
+    #[rkyv(with = TableFormatMirror)]
     pub format: TableFormat,
     #[serde(rename = "he")]
     pub head: Vec<TableRow<E>>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "ro")]
     pub rows: Vec<TableRow<E>>,
@@ -420,8 +528,11 @@ where
 
 /// One row of a table.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct TableRow<E = Markdown>
 where
@@ -430,13 +541,17 @@ where
     #[serde(rename = "ce")]
     pub cells: Vec<TableCell<E>>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
 /// One cell of a table row.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct TableCell<E = Markdown>
 where
@@ -445,6 +560,7 @@ where
     #[serde(rename = "bd")]
     pub body: MarkdownBlock<E>,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
@@ -460,6 +576,9 @@ pub enum Alignment {
     Right,
 }
 
+/// An `Alignment` as rkyv archives it.
+pub type ArchivedAlignment = mirror::ArchivedAlignmentMirror;
+
 /// The syntax a table is written in.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -473,6 +592,9 @@ pub enum TableFormat {
     /// Columns marked by groups of dashes under a header line.
     Simple,
 }
+
+/// A `TableFormat` as rkyv archives it.
+pub type ArchivedTableFormat = mirror::ArchivedTableFormatMirror;
 
 /// A node inside a line of text.
 #[model_schema(default_types(E = Markdown))]
@@ -494,6 +616,9 @@ where
     Text(Text<E>),
 }
 
+/// An `Inline` as rkyv archives it.
+pub type ArchivedInline<E = Markdown> = mirror::ArchivedInlineMirror<E>;
+
 /// Whether an inline node goes on from the line before or into the line
 /// after. A node written across lines of a paragraph is cut into one piece
 /// per line.
@@ -513,16 +638,23 @@ pub enum Continues {
     Previous,
 }
 
+/// A `Continues` as rkyv archives it.
+pub type ArchivedContinues = mirror::ArchivedContinuesMirror;
+
 /// Plain text.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Text<E = Markdown>
 where
     E: Extension,
 {
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "v")]
     pub value: String,
@@ -530,8 +662,14 @@ where
 
 /// Text between `*` or `_`, such as `*a*`.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(serialize_bounds(__S: Writer + Allocator, __S::Error: Source))]
+#[rkyv(deserialize_bounds(__D::Error: Source))]
+#[rkyv(bytecheck(bounds(__C: ArchiveContext, __C::Error: Source)))]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Emphasis<E = Markdown>
 where
@@ -539,17 +677,26 @@ where
 {
     #[serde(rename = "ch")]
     #[serde(deserialize_with = "grown")]
+    #[rkyv(omit_bounds, with = Map<InlineMirror<E>>)]
     pub children: Vec<Inline<E>>,
     #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
 /// Text between `**` or `__`, such as `**b**`.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(serialize_bounds(__S: Writer + Allocator, __S::Error: Source))]
+#[rkyv(deserialize_bounds(__D::Error: Source))]
+#[rkyv(bytecheck(bounds(__C: ArchiveContext, __C::Error: Source)))]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Strong<E = Markdown>
 where
@@ -557,24 +704,31 @@ where
 {
     #[serde(rename = "ch")]
     #[serde(deserialize_with = "grown")]
+    #[rkyv(omit_bounds, with = Map<InlineMirror<E>>)]
     pub children: Vec<Inline<E>>,
     #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
 /// A hard line break: the two or more spaces, or the backslash, that end a
 /// line followed by another line of its paragraph.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct LineBreak<E = Markdown>
 where
     E: Extension,
 {
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
 }
 
@@ -585,8 +739,14 @@ where
 /// reference link takes its target and title from its label's definition.
 /// `target` and `title` hold their escapes and references resolved.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(serialize_bounds(__S: Writer + Allocator, __S::Error: Source))]
+#[rkyv(deserialize_bounds(__D::Error: Source))]
+#[rkyv(bytecheck(bounds(__C: ArchiveContext, __C::Error: Source)))]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Link<E = Markdown>
 where
@@ -594,12 +754,16 @@ where
 {
     #[serde(rename = "ch")]
     #[serde(deserialize_with = "grown")]
+    #[rkyv(omit_bounds, with = Map<InlineMirror<E>>)]
     pub children: Vec<Inline<E>>,
     #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
     #[serde(rename = "fr")]
+    #[rkyv(with = LinkFormMirror)]
     pub form: LinkForm,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "tg")]
     pub target: String,
@@ -620,13 +784,19 @@ pub enum LinkForm {
     Wiki,
 }
 
+/// A `LinkForm` as rkyv archives it.
+pub type ArchivedLinkForm = mirror::ArchivedLinkFormMirror;
+
 /// An embed: `![alt](target "title")`, `![[target]]` or `![[target|alt]]`.
 ///
 /// `alt` is empty when none is written. `target` and `title` hold their
 /// escapes and references resolved.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Image<E = Markdown>
 where
@@ -635,10 +805,13 @@ where
     #[serde(rename = "at")]
     pub alt: String,
     #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
     #[serde(rename = "fr")]
+    #[rkyv(with = LinkFormMirror)]
     pub form: LinkForm,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "tg")]
     pub target: String,
@@ -649,16 +822,21 @@ where
 
 /// Text between backticks, such as `` `archie check` ``.
 #[model_schema(default_types(E = Markdown))]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
 #[serde(bound = "")]
+#[rkyv(attr(non_exhaustive))]
 #[non_exhaustive]
 pub struct Code<E = Markdown>
 where
     E: Extension,
 {
     #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
     #[serde(skip)]
+    #[rkyv(with = Skip)]
     pub kind: Kind<E>,
     #[serde(rename = "v")]
     pub value: String,
