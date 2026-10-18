@@ -11,7 +11,7 @@ mod extension;
 mod frontmatter;
 mod inlines;
 pub mod json;
-mod rkyv;
+pub mod rkyv;
 mod spans;
 mod tables;
 mod toml;

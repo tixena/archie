@@ -19,7 +19,7 @@ use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::mirror::RawDocumentMirror;
 use crate::parser::parse;
 
-pub(super) const FIXTURES: [&str; 21] = [
+pub const FIXTURES: [&str; 21] = [
     include_str!("fixtures/api_reference.md"),
     include_str!("fixtures/book_page.md"),
     include_str!("fixtures/changelog.md"),
