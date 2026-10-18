@@ -1,5 +1,6 @@
 //! One document checked node by node against a tree written out by hand,
-//! with the byte range of every node.
+//! with the byte range of every node and of every frontmatter value its
+//! reader reads.
 
 use core::ops::Range;
 
@@ -8,10 +9,10 @@ use indexmap::IndexMap;
 
 use crate::parser::ast::{
     Block, Continues, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line,
-    Link, LinkForm, List, Mapping, MarkdownBlock, Pair, Paragraph, Scalar, ScalarValue, Section,
-    Sequence, Text, Value,
+    Link, LinkForm, List, MarkdownBlock, Paragraph, Section, Text,
 };
-use crate::parser::parse;
+use crate::parser::located::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
+use crate::parser::{parse, toml};
 
 const SOURCE: &str = r#"+++
 type = "task"
@@ -96,7 +97,8 @@ fn content(start: usize, covered: &str, blocks: Vec<Block>) -> MarkdownBlock {
     }
 }
 
-fn frontmatter() -> Frontmatter {
+/// The frontmatter's mapping as its reader reads it.
+fn mapping() -> Mapping {
     let due = ScalarValue::Date(NaiveDate::from_ymd_opt(2026, 10, 10).unwrap());
     let tags = Value::Sequence(Sequence {
         items: vec![
@@ -133,13 +135,17 @@ fn frontmatter() -> Frontmatter {
             scalar(span(96, "false"), ScalarValue::Boolean(false)),
         ),
     ]);
+    Mapping {
+        pairs,
+        span: span(4, TOML_PAIRS),
+    }
+}
+
+fn frontmatter() -> Frontmatter {
     Frontmatter {
         dropped: Vec::new(),
         format: FrontmatterFormat::Toml,
-        mapping: Mapping {
-            pairs,
-            span: span(4, TOML_PAIRS),
-        },
+        mapping: mapping().into_model(),
         span: span(0, &format!("+++\n{TOML_PAIRS}\n+++")),
     }
 }
@@ -242,4 +248,6 @@ fn the_example_parses_into_the_tree_written_by_hand() {
     };
 
     assert_eq!(parse(SOURCE), document);
+    let content = span(4, &format!("{TOML_PAIRS}\n"));
+    assert_eq!(toml::read(SOURCE, content).unwrap().0, mapping());
 }

@@ -21,7 +21,7 @@ Document
       Pair key=recording
         Scalar Null
       Pair key=follow_up
-        Scalar DateTime 2026-10-09T10:00:00-04:00
+        Scalar OffsetDateTime 2026-10-09T10:00:00-04:00
   MarkdownBlock
     Section
       Heading

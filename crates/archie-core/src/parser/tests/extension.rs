@@ -5,7 +5,7 @@ use core::ops::Range;
 
 use super::{Rows, on_two_megabytes, outline};
 use crate::parser::ast::{
-    Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, ScalarValue, TableCell, Value,
+    Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, TableCell, Value,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, Plain, With};
@@ -41,6 +41,14 @@ fn main() {}
 ";
 
 const NO_HEADER: &str = "a comment opens with a header between `---` or `+++` lines";
+
+/// The outline `header_outline` gives for the header `id: abc`, `author: ada`.
+const HEADER: &str = r#"Mapping
+  Pair key=id
+    Scalar String "abc"
+  Pair key=author
+    Scalar String "ada"
+"#;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Comments;
@@ -83,10 +91,8 @@ impl Extension for Comments {
     {
         writer.fenced("remargin", |inner| {
             inner.push_str("---\n");
-            for (key, pair) in &node.header.pairs {
-                if let Value::Scalar(scalar) = &pair.value
-                    && let ScalarValue::String(text) = &scalar.value
-                {
+            for (key, value) in &node.header {
+                if let Value::String(text) = value {
                     inner.push_str(key);
                     inner.push_str(": ");
                     inner.push_str(text);
@@ -128,11 +134,7 @@ impl Extension for Tickets {
             return None;
         };
         let read = document.frontmatter.as_ref()?.as_ref().ok()?;
-        let pair = read.mapping.pairs.get("title")?;
-        let Value::Scalar(scalar) = &pair.value else {
-            return None;
-        };
-        let ScalarValue::String(title) = &scalar.value else {
+        let Value::String(title) = read.mapping.get("title")? else {
             return None;
         };
         let claimed = code_blocks(&document.body)
@@ -464,7 +466,7 @@ where
     rows.markdown_block(0, block);
     rows.rows
         .into_iter()
-        .map(|row| (row.label, &source[row.span]))
+        .map(|row| (row.label, &source[row.span.unwrap()]))
         .collect()
 }
 
@@ -486,12 +488,12 @@ where
     outline(&rows.rows)
 }
 
-/// Each node of the header of the first comment in the markdown block that
-/// `pick` takes from the body of `source`, with the source text it covers.
-fn header_spans(
+/// The outline of the header of the first comment in the markdown block
+/// that `pick` takes from the body of `source`.
+fn header_outline(
     source: &str,
     pick: fn(&MarkdownBlock<With<Comments>>) -> &MarkdownBlock<With<Comments>>,
-) -> Vec<(String, String)> {
+) -> String {
     let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
     let comment = code_blocks(pick(&document.body))[0]
         .kind
@@ -501,23 +503,14 @@ fn header_spans(
         .unwrap();
     let mut rows = Rows::default();
     rows.mapping(0, &comment.header);
-    rows.rows
-        .into_iter()
-        .map(|row| (row.label, source[row.span].to_owned()))
-        .collect()
+    outline(&rows.rows)
 }
 
-/// What `header_spans` gives for the header `id: abc`, `author: ada`, its
-/// second line indented by `indent`.
-fn header_rows(indent: &str) -> [(String, String); 5] {
-    [
-        ("Mapping", format!("id: abc\n{indent}author: ada")),
-        ("Pair key=id", "id: abc".to_owned()),
-        (r#"Scalar String "abc""#, "abc".to_owned()),
-        ("Pair key=author", "author: ada".to_owned()),
-        (r#"Scalar String "ada""#, "ada".to_owned()),
-    ]
-    .map(|(label, text)| (label.to_owned(), text))
+/// Checks that the strict parse of `source`, whose header writes `@ada` as
+/// a value, fails at that `@` in `source`.
+fn refused_at_sign(source: &str) {
+    let error = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap_err();
+    assert_eq!(error.span.start, source.find('@').unwrap(), "{source:?}");
 }
 
 /// `document` written to JSON, read back, and its extension nodes built
@@ -619,7 +612,7 @@ fn an_extension_turns_the_blocks_it_claims_into_its_own_typed_node() {
             Pair key=author
               Scalar String "grace"
             Pair key=ts
-              Scalar DateTime 2026-10-01T10:00:00Z
+              Scalar OffsetDateTime 2026-10-01T10:00:00Z
   Pair key=ack
     Sequence
       Scalar String "grace@2026-10-01T10:00:00Z"
@@ -1434,28 +1427,11 @@ fn a_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root() {
     let written = "```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```";
     let grid = in_grid_cell(written);
     assert_eq!(
-        header_spans(&grid, |body| &first_cell(body).body),
-        [
-            ("Mapping", "id: abc     | x |\n| author: ada"),
-            ("Pair key=id", "id: abc"),
-            (r#"Scalar String "abc""#, "abc"),
-            ("Pair key=author", "author: ada"),
-            (r#"Scalar String "ada""#, "ada"),
-        ]
-        .map(|(label, text)| (label.to_owned(), text.to_owned())),
+        header_outline(&grid, |body| &first_cell(body).body),
+        HEADER,
         "{grid}"
     );
-    assert_eq!(
-        header_spans(&format!("{written}\n"), |body| body),
-        [
-            ("Mapping", "id: abc\nauthor: ada"),
-            ("Pair key=id", "id: abc"),
-            (r#"Scalar String "abc""#, "abc"),
-            ("Pair key=author", "author: ada"),
-            (r#"Scalar String "ada""#, "ada"),
-        ]
-        .map(|(label, text)| (label.to_owned(), text.to_owned()))
-    );
+    assert_eq!(header_outline(&format!("{written}\n"), |body| body), HEADER);
     let refused = in_grid_cell("```remargin\n---\nid: abc\nauthor: @ada\n---\n```");
     let error = parse_with::<Comments>(&refused, &ParseOptions::strict()).unwrap_err();
     assert_eq!(error.span.start, refused.find('@').unwrap(), "{error}");
@@ -1467,49 +1443,26 @@ fn a_toml_comment_header_over_several_lines_of_a_grid_cell_reads_as_at_the_root(
     let written = "```remargin\n+++\nid = \"abc\"\nauthor = \"ada\"\n+++\nBody.\n```";
     let grid = in_grid_cell(written);
     assert_eq!(
-        header_spans(&grid, |body| &first_cell(body).body),
-        [
-            ("Mapping", "id = \"abc\"     | x |\n| author = \"ada\""),
-            ("Pair key=id", "id = \"abc\""),
-            (r#"Scalar String "abc""#, "\"abc\""),
-            ("Pair key=author", "author = \"ada\""),
-            (r#"Scalar String "ada""#, "\"ada\""),
-        ]
-        .map(|(label, text)| (label.to_owned(), text.to_owned())),
+        header_outline(&grid, |body| &first_cell(body).body),
+        HEADER,
         "{grid}"
     );
-    assert_eq!(
-        header_spans(&format!("{written}\n"), |body| body),
-        [
-            ("Mapping", "id = \"abc\"\nauthor = \"ada\""),
-            ("Pair key=id", "id = \"abc\""),
-            (r#"Scalar String "abc""#, "\"abc\""),
-            ("Pair key=author", "author = \"ada\""),
-            (r#"Scalar String "ada""#, "\"ada\""),
-        ]
-        .map(|(label, text)| (label.to_owned(), text.to_owned()))
-    );
+    assert_eq!(header_outline(&format!("{written}\n"), |body| body), HEADER);
+    refused_at_sign(&in_grid_cell(
+        "```remargin\n+++\nid = \"abc\"\nauthor = @ada\n+++\n```",
+    ));
 }
 
 #[test]
 fn a_comment_header_in_a_list_item_indented_with_tabs_reads_as_at_the_root() {
     let root = "```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```\n";
-    assert_eq!(header_spans(root, |body| body), header_rows(""));
-    for (source, indent) in [
-        (
-            "- ```remargin\n  ---\n  id: abc\n  author: ada\n  ---\n  Body.\n  ```\n",
-            "  ",
-        ),
-        (
-            "-\t```remargin\n\t---\n\tid: abc\n\tauthor: ada\n\t---\n\tBody.\n\t```\n",
-            "\t",
-        ),
+    assert_eq!(header_outline(root, |body| body), HEADER);
+    for source in [
+        "- ```remargin\n  ---\n  id: abc\n  author: ada\n  ---\n  Body.\n  ```\n",
+        "-\t```remargin\n\t---\n\tid: abc\n\tauthor: ada\n\t---\n\tBody.\n\t```\n",
     ] {
-        assert_eq!(
-            header_spans(source, first_item),
-            header_rows(indent),
-            "{source:?}"
-        );
+        assert_eq!(header_outline(source, first_item), HEADER, "{source:?}");
+        refused_at_sign(&source.replace("author: ada", "author: @ada"));
     }
 }
 
@@ -1518,7 +1471,7 @@ fn a_comment_in_a_markdown_block_in_a_list_item_has_the_same_header_as_at_the_ro
     let written = "````markdown\n```remargin\n---\nid: abc\nauthor: ada\n---\nBody.\n```\n````\n";
     for (marker, indent) in [("- ", "  "), ("-\t", "\t")] {
         let source = format!("{marker}{}", &indented(written, indent)[indent.len()..]);
-        let spans = header_spans(&source, |body| {
+        let header = header_outline(&source, |body| {
             code_blocks(first_item(body))[0]
                 .kind
                 .0
@@ -1526,7 +1479,8 @@ fn a_comment_in_a_markdown_block_in_a_list_item_has_the_same_header_as_at_the_ro
                 .and_then(first)
                 .unwrap()
         });
-        assert_eq!(spans, header_rows(indent), "{source:?}");
+        assert_eq!(header, HEADER, "{source:?}");
+        refused_at_sign(&source.replace("author: ada", "author: @ada"));
     }
 }
 

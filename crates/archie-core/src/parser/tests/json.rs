@@ -7,9 +7,8 @@ use super::extension::Comments;
 use super::on_two_megabytes;
 use crate::parser::ast::{
     Args, Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
-    Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, Mapping, MarkdownBlock,
-    NonFinite, Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Strong, Table, TableCell,
-    TableRow, Text, ThematicBreak, Value,
+    Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, MarkdownBlock,
+    NonFinite, Paragraph, Section, Strong, Table, TableCell, TableRow, Text, ThematicBreak, Value,
 };
 use crate::parser::error::RebuildError;
 use crate::parser::extension::{Plain, With};
@@ -59,9 +58,7 @@ fn the_sample_document_reads_back_from_json() {
             r#""span":{"start":25,"end":29}}}],"heading":{"children":[{"Text":"#,
             r#"{"span":{"start":23,"end":24},"value":"A"}}],"span":{"start":21,"end":24}},"#,
             r#""span":{"start":21,"end":29},"subsections":[]}],"span":{"start":21,"end":30}},"#,
-            r#""frontmatter":{"Ok":{"format":"Yaml","mapping":{"pairs":{"title":{"repeats":[],"#,
-            r#""span":{"start":4,"end":16},"value":{"Scalar":{"span":{"start":11,"end":16},"#,
-            r#""value":{"String":"Notes"}}}}},"span":{"start":4,"end":16}},"#,
+            r#""frontmatter":{"Ok":{"format":"Yaml","mapping":{"title":{"String":"Notes"}},"#,
             r#""span":{"start":0,"end":20}}},"span":{"start":0,"end":30}}"#,
         )
     );
@@ -170,10 +167,7 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
     let source = "+++\ntitle = \"Notes\"\n+++\n```markdown\n# A\n```\n";
     let mut parsed = parse_with::<Plain>(source, &options).unwrap();
     let frontmatter = parsed.frontmatter.as_mut().unwrap().as_mut().unwrap();
-    frontmatter.mapping.pairs["title"].value = Value::Scalar(Scalar {
-        span: 0..0,
-        value: ScalarValue::Null,
-    });
+    frontmatter.mapping["title"] = Value::Null;
     let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options).unwrap();
     let yaml = WriteOptions {
@@ -197,10 +191,7 @@ fn a_null_in_the_toml_args_of_a_code_block_fails_the_rebuild_naming_the_key() {
     if let Block::CodeBlock(code) = &mut parsed.body.sections[0].blocks[0]
         && let Args::Toml(mapping) = &mut code.args
     {
-        mapping.pairs["a"].value = Value::Scalar(Scalar {
-            span: 0..0,
-            value: ScalarValue::Null,
-        });
+        mapping["a"] = Value::Null;
     }
     let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options);
@@ -221,24 +212,21 @@ fn a_non_finite_float_reads_back_from_json() {
         let document = parse(source);
         let back: Document = from_json(&to_json(&document).unwrap()).unwrap();
         assert_eq!(back, document);
-        assert_eq!(scalar(&back, "x"), ScalarValue::NonFinite(value));
+        assert_eq!(scalar(&back, "x"), Value::NonFinite(value));
     }
 }
 
 #[test]
 fn a_non_finite_float_is_written_as_its_name() {
     let json = to_json(&parse("---\nx: .nan\n---\n")).unwrap();
-    assert!(json.contains(r#""value":{"NonFinite":"Nan"}"#), "{json}");
+    assert!(json.contains(r#""x":{"NonFinite":"Nan"}"#), "{json}");
 }
 
 #[test]
-fn the_typescript_of_a_scalar_names_the_non_finite_floats() {
-    let scalar_value = ScalarValue::ts_definition();
+fn the_typescript_of_a_value_names_the_non_finite_floats() {
+    let value = Value::ts_definition();
     let non_finite = NonFinite::ts_definition();
-    assert!(
-        scalar_value.contains(r#""NonFinite": NonFinite;"#),
-        "{scalar_value}"
-    );
+    assert!(value.contains(r#""NonFinite": NonFinite;"#), "{value}");
     assert!(
         non_finite.contains(
             "export type NonFinite =\n  | \"Infinity\"\n  | \"Nan\"\n  | \"NegativeInfinity\";"
@@ -265,10 +253,6 @@ fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
     let definitions = [
         <Document>::ts_definition(),
         Frontmatter::ts_definition(),
-        Mapping::ts_definition(),
-        Pair::ts_definition(),
-        Sequence::ts_definition(),
-        Scalar::ts_definition(),
         <MarkdownBlock>::ts_definition(),
         <BlockQuote>::ts_definition(),
         <Html>::ts_definition(),
@@ -298,10 +282,15 @@ fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
         );
         assert!(!definition.contains("kind"), "{definition}");
     }
+    let value = Value::ts_definition();
+    assert!(
+        !value.contains("span") && !value.contains("kind"),
+        "{value}"
+    );
 }
 
-/// The value under `key` in the frontmatter of `document`, a scalar.
-fn scalar(document: &Document, key: &str) -> ScalarValue {
+/// The value under `key` in the frontmatter of `document`.
+fn scalar(document: &Document, key: &str) -> Value {
     let mapping = &document
         .frontmatter
         .as_ref()
@@ -309,11 +298,7 @@ fn scalar(document: &Document, key: &str) -> ScalarValue {
         .as_ref()
         .unwrap()
         .mapping;
-    let found = match &mapping.pairs[key].value {
-        Value::Scalar(scalar) => Some(scalar.value.clone()),
-        Value::Mapping(_) | Value::Sequence(_) => None,
-    };
-    found.unwrap()
+    mapping[key].clone()
 }
 
 /// Empties the `kind` of every node of `document`.

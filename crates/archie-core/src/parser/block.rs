@@ -9,14 +9,15 @@ use std::collections::HashMap;
 
 use crate::parser::ast::{
     Args, Block, BlockQuote, CodeBlock, Continues, Heading, Html, Inline, Item, Kind, Line, List,
-    Mapping, MarkdownBlock, Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text,
-    ThematicBreak, Value,
+    MarkdownBlock, Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text,
+    ThematicBreak,
 };
 use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::inline::{self, children_mut};
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
 use crate::parser::line::Base;
+use crate::parser::located::{Mapping, Value};
 use crate::parser::table::{Cell, RowToken, TableToken};
 use crate::parser::toml;
 
@@ -559,16 +560,15 @@ fn split_info(source: &str, info: &Range<usize>) -> (Option<String>, Args) {
 /// The args written at `rest` of `source`: `Toml` when `args = {`, the
 /// rest, then `}` reads as TOML whose inline table ends at that last `}`,
 /// with nothing dropped and no key written twice at any depth, or else
-/// `Text`, as written. The mapping's spans count from the start of
-/// `source`, and its own span is `rest`.
+/// `Text`, as written.
 fn args(source: &str, rest: Range<usize>) -> Args {
-    let written = &source[rest.clone()];
+    let written = &source[rest];
     let text = format!("{ARGS_OPENING}{written}}}");
     let read = toml::read(&text, 0..text.len())
         .ok()
         .and_then(|(mut read, dropped)| {
             let pair = read.pairs.swap_remove("args")?;
-            let Value::Mapping(mut mapping) = pair.value else {
+            let Value::Mapping(mapping) = pair.value else {
                 return None;
             };
             let whole = dropped.is_empty()
@@ -576,11 +576,7 @@ fn args(source: &str, rest: Range<usize>) -> Args {
                 && pair.repeats.is_empty()
                 && mapping.span.end == text.len()
                 && !repeats(&mapping);
-            whole.then(|| {
-                moved_pairs(&mut mapping, rest.start);
-                mapping.span = rest;
-                mapping
-            })
+            whole.then(|| mapping.into_model())
         });
     read.map_or_else(|| Args::Text(written.to_owned()), Args::Toml)
 }
@@ -600,37 +596,6 @@ fn value_repeats(value: &Value) -> bool {
         Value::Mapping(mapping) => repeats(mapping),
         Value::Scalar(_) => false,
         Value::Sequence(sequence) => sequence.items.iter().any(value_repeats),
-    }
-}
-
-/// Moves `span`, a range of the text the args are read from, to the same
-/// characters of the rest, which starts at `at` in the source.
-const fn moved(span: &mut Range<usize>, at: usize) {
-    *span = span.start - ARGS_OPENING.len() + at..span.end - ARGS_OPENING.len() + at;
-}
-
-/// Moves the span of each pair of `mapping`, and every span of its value,
-/// as `moved` does.
-fn moved_pairs(mapping: &mut Mapping, at: usize) {
-    for pair in mapping.pairs.values_mut() {
-        moved(&mut pair.span, at);
-        moved_value(&mut pair.value, at);
-    }
-}
-
-fn moved_value(value: &mut Value, at: usize) {
-    match value {
-        Value::Mapping(mapping) => {
-            moved(&mut mapping.span, at);
-            moved_pairs(mapping, at);
-        }
-        Value::Scalar(scalar) => moved(&mut scalar.span, at),
-        Value::Sequence(sequence) => {
-            moved(&mut sequence.span, at);
-            for item in &mut sequence.items {
-                moved_value(item, at);
-            }
-        }
     }
 }
 

@@ -1,8 +1,8 @@
 //! The document tree a markdown file parses into.
 //!
 //! Every node carries `span`, the byte range it covers in the source file,
-//! and `kind`, the type an extension gave it. The frontmatter nodes hold
-//! values, whichever syntax they were written in.
+//! and `kind`, the type an extension gave it. The frontmatter's values hold
+//! no span, whichever syntax they were written in.
 
 use core::ops::Range;
 
@@ -91,82 +91,27 @@ pub enum FrontmatterFormat {
 
 /// Keys and their values, in the order they were written. A key appears once.
 #[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Mapping {
-    pub pairs: IndexMap<String, Pair>,
-    pub span: Range<usize>,
-}
+pub type Mapping = IndexMap<String, Value>;
 
-/// The value under one key of a mapping. Its span runs from the key to the
-/// end of the value, at the key's first occurrence. `repeats` holds the span
-/// of each later occurrence of the same key, in file order.
-#[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Pair {
-    pub repeats: Vec<Range<usize>>,
-    pub span: Range<usize>,
-    pub value: Value,
-}
-
-/// What a key maps to, or what a sequence holds.
+/// What a key maps to, or what a list holds.
 #[model_schema()]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Value {
-    Mapping(Mapping),
-    Scalar(Scalar),
-    Sequence(Sequence),
-}
-
-impl Value {
-    /// The byte range the value covers.
-    #[must_use]
-    pub const fn span(&self) -> &Range<usize> {
-        match self {
-            Self::Mapping(mapping) => &mapping.span,
-            Self::Scalar(scalar) => &scalar.span,
-            Self::Sequence(sequence) => &sequence.span,
-        }
-    }
-}
-
-/// An ordered list of values, such as `["parser", "design"]`.
-#[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Sequence {
-    pub items: Vec<Value>,
-    pub span: Range<usize>,
-}
-
-/// A single value, such as `2` or `"task"`.
-#[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Scalar {
-    pub span: Range<usize>,
-    pub value: ScalarValue,
-}
-
-/// The typed content of a scalar.
-#[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum ScalarValue {
     Boolean(bool),
     Date(NaiveDate),
-    /// A date and time with its offset from UTC.
-    DateTime(DateTime<FixedOffset>),
+    /// A date and time with no offset, such as `1979-05-27T07:32:00`.
+    DateTime(NaiveDateTime),
     /// A finite float.
     Float(f64),
     Integer(i64),
-    /// A date and time with no offset.
-    LocalDateTime(NaiveDateTime),
+    Mapping(Mapping),
     NonFinite(NonFinite),
     /// YAML only: TOML has no null.
     Null,
+    /// A date and time with an offset, such as `1979-05-27T07:32:00+02:00`.
+    OffsetDateTime(DateTime<FixedOffset>),
+    Sequence(Vec<Self>),
     String(String),
     Time(NaiveTime),
 }

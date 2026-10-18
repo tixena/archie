@@ -1,6 +1,6 @@
 use core::iter;
 
-use super::{Rows, check, on_two_megabytes};
+use super::{Rows, check, on_two_megabytes, outline};
 use crate::parser::ast::{Args, Block, Document, Inline, Mapping, MarkdownBlock, Section};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
@@ -1548,11 +1548,11 @@ fn a_fence_with_no_info_string_has_no_language_and_empty_toml_args() {
         | Block::Table(_)
         | Block::ThematicBreak(_) => None,
     };
-    assert!(matches!(read, Some((None, Args::Toml(mapping))) if mapping.pairs.is_empty()));
+    assert!(matches!(read, Some((None, Args::Toml(mapping))) if mapping.is_empty()));
 }
 
 #[test]
-fn every_span_of_toml_args_covers_its_text_in_the_source() {
+fn toml_args_in_a_grid_cell_read_as_after_a_fence_at_the_root() {
     let fence = "```md title=\"README.md\",showLineNumbers=true";
     let width = fence.len();
     let border = format!("+{}+", "-".repeat(width + 2));
@@ -1569,20 +1569,14 @@ fn every_span_of_toml_args_covers_its_text_in_the_source() {
         let document = parse(&source);
         let mut rows = Rows::default();
         rows.mapping(0, toml_args(&document.body).unwrap());
-        let spans: Vec<(&str, &str)> = rows
-            .rows
-            .iter()
-            .map(|row| (row.label.as_str(), &source[row.span.clone()]))
-            .collect();
         assert_eq!(
-            spans,
-            [
-                ("Mapping", "title=\"README.md\",showLineNumbers=true"),
-                ("Pair key=title", "title=\"README.md\""),
-                ("Scalar String \"README.md\"", "\"README.md\""),
-                ("Pair key=showLineNumbers", "showLineNumbers=true"),
-                ("Scalar Boolean true", "true"),
-            ],
+            outline(&rows.rows),
+            r#"Mapping
+  Pair key=title
+    Scalar String "README.md"
+  Pair key=showLineNumbers
+    Scalar Boolean true
+"#,
             "{source}"
         );
     }

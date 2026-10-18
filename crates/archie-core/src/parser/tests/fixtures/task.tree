@@ -16,7 +16,7 @@ Document
       Pair key=due
         Scalar Date 2026-10-10
       Pair key=created
-        Scalar DateTime 2026-10-03T14:29:13-04:00
+        Scalar OffsetDateTime 2026-10-03T14:29:13-04:00
       Pair key=standup_at
         Scalar Time 09:30:00
       Pair key=assignees

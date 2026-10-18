@@ -1,7 +1,7 @@
 use chrono::{Datelike as _, Timelike as _};
 
 use super::{broken, check};
-use crate::parser::ast::{ScalarValue, Value};
+use crate::parser::ast::Value;
 use crate::parser::parse;
 
 #[test]
@@ -47,11 +47,11 @@ seen = 2026-10-10 09:00:00Z
       Pair key=at
         Scalar Time 07:32:00
       Pair key=start
-        Scalar LocalDateTime 2026-10-10T07:32:00
+        Scalar DateTime 2026-10-10T07:32:00
       Pair key=sent
-        Scalar DateTime 2026-10-10T07:32:00.250000000-04:00
+        Scalar OffsetDateTime 2026-10-10T07:32:00.250000000-04:00
       Pair key=seen
-        Scalar DateTime 2026-10-10T09:00:00Z
+        Scalar OffsetDateTime 2026-10-10T09:00:00Z
   MarkdownBlock
 "#,
     );
@@ -169,8 +169,6 @@ fn a_non_finite_float_reads_as_its_name() {
 up = +inf
 nothing = nan
 signed_nothing = -nan
-huge = 1e999
-below = -1e999
 +++
 ",
         "\
@@ -183,12 +181,26 @@ Document
         Scalar NonFinite Nan
       Pair key=signed_nothing
         Scalar NonFinite Nan
-      Pair key=huge
-        Scalar NonFinite Infinity
-      Pair key=below
-        Scalar NonFinite NegativeInfinity
   MarkdownBlock
 ",
+    );
+}
+
+#[test]
+fn digits_too_large_for_a_float_read_as_their_text_as_written() {
+    check(
+        "+++\nhuge = 1e999\nbelow = -1e999\nunderscored = 1_0e400\n+++\n",
+        r#"Document
+  Frontmatter format=Toml
+    Mapping
+      Pair key=huge
+        Scalar String "1e999"
+      Pair key=below
+        Scalar String "-1e999"
+      Pair key=underscored
+        Scalar String "1_0e400"
+  MarkdownBlock
+"#,
     );
 }
 
@@ -1120,28 +1132,24 @@ pattern = '''
     );
 }
 
-/// The value under `key` in the frontmatter of `source`, when it is a scalar.
-fn scalar(source: &str, key: &str) -> Option<ScalarValue> {
-    let mapping = parse(source).frontmatter?.ok()?.mapping;
-    match &mapping.pairs.get(key)?.value {
-        Value::Scalar(scalar) => Some(scalar.value.clone()),
-        Value::Mapping(_) | Value::Sequence(_) => None,
-    }
+/// The value under `key` in the frontmatter of `source`.
+fn scalar(source: &str, key: &str) -> Option<Value> {
+    parse(source).frontmatter?.ok()?.mapping.swap_remove(key)
 }
 
 #[test]
-fn a_date_time_with_an_offset_holds_it_and_one_without_is_local() {
+fn a_date_time_with_an_offset_holds_it_and_one_without_has_none() {
     let sent = scalar("+++\nts = 2026-10-10T07:32:00-04:00\n+++\n", "ts");
-    assert!(matches!(sent, Some(ScalarValue::DateTime(ts))
+    assert!(matches!(sent, Some(Value::OffsetDateTime(ts))
         if ts.offset().local_minus_utc() == -4_i32 * 3_600_i32
             && (ts.year(), ts.hour()) == (2_026_i32, 7_u32)));
 
     let start = scalar("+++\nts = 2026-10-10T07:32:00\n+++\n", "ts");
-    assert!(matches!(start, Some(ScalarValue::LocalDateTime(ts))
+    assert!(matches!(start, Some(Value::DateTime(ts))
         if (ts.day(), ts.minute()) == (10_u32, 32_u32)));
 
     let at = scalar("+++\nat = 07:32:00\n+++\n", "at");
-    assert!(matches!(at, Some(ScalarValue::Time(time))
+    assert!(matches!(at, Some(Value::Time(time))
         if (time.hour(), time.minute(), time.second()) == (7_u32, 32_u32, 0_u32)));
 }
 
@@ -1187,21 +1195,21 @@ Document
   Frontmatter format=Toml
     Mapping
       Pair key=upper
-        Scalar DateTime 2026-10-10T07:32:00Z
+        Scalar OffsetDateTime 2026-10-10T07:32:00Z
       Pair key=lower
-        Scalar DateTime 2026-10-10T07:32:00Z
+        Scalar OffsetDateTime 2026-10-10T07:32:00Z
       Pair key=spaced
-        Scalar DateTime 2026-10-10T07:32:00+05:30
+        Scalar OffsetDateTime 2026-10-10T07:32:00+05:30
       Pair key=zero
-        Scalar DateTime 2026-10-10T07:32:00Z
+        Scalar OffsetDateTime 2026-10-10T07:32:00Z
       Pair key=local
-        Scalar LocalDateTime 2026-10-10T07:32:00.500000000
+        Scalar DateTime 2026-10-10T07:32:00.500000000
       Pair key=leap
         Scalar Time 23:59:60
       Pair key=leap_fraction
         Scalar Time 23:59:60.250000000
       Pair key=leap_date_time
-        Scalar DateTime 2026-12-31T18:59:60-05:00
+        Scalar OffsetDateTime 2026-12-31T18:59:60-05:00
   MarkdownBlock
 ",
     );

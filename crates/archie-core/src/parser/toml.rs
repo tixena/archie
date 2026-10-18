@@ -8,10 +8,10 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use indexmap::map::Entry;
 
-use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::{Cursor, Dropped};
 use crate::parser::error::ParseError;
 use crate::parser::frontmatter::{Stop, append, caught, extent, finish, insert, nest, undropped};
+use crate::parser::located::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::scalar;
 
 /// One part of a key, such as `name` in `owner.name`, and where it is

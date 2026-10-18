@@ -101,6 +101,11 @@ entry the frontmatter drops, or of a broken frontmatter, pointing at the place, 
 an extension's error (see [Extensions](#extensions)). The markdown never fails: what
 no rule recognizes is text.
 
+A `Frontmatter`'s `mapping` is a `Mapping`, each key and its `Value` in the order the
+keys were first written. A `Value` is a `Boolean`, a `Date`, a `DateTime` with no
+offset, a `Float`, an `Integer`, a `Mapping`, a `NonFinite`, a `Null`, an
+`OffsetDateTime`, a `Sequence` of values, a `String` or a `Time`, and holds no span.
+
 ## Markdown block
 
 A markdown block, `MarkdownBlock` in the tree, is any stretch of markdown read by the
@@ -531,11 +536,11 @@ A value's type comes from how it is written:
 | `true`, `false` | Boolean |
 | `2026-10-10`, when that day exists in the calendar; `2026-02-30` is not a value | Date |
 | `07:32:00`, optionally with a fraction such as `.250` | Time |
-| A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | DateTime |
-| A date, then `T`, `t` or one space, then a time, with no offset | LocalDateTime |
+| A date, then `T`, `t` or one space, then a time, then `Z`, `z` or an offset such as `-04:00` | OffsetDateTime |
+| A date, then `T`, `t` or one space, then a time, with no offset | DateTime |
 | An optional sign, then `0` or a digit from 1 to 9 followed by any digits; or, with no sign, `0x`, `0o` or `0b` and digits in that base. An underscore may stand between two digits, but not right after `0x`, `0o` or `0b`: `0`, `1_000` and `0xff_ff` are integers, and `01`, `1__0`, `_1`, `1_` and `0x_ff` are not values. An integer that does not fit 64 bits is the String of its text as written, underscores and prefix kept, such as `"9_999_999_999_999_999_999"`, and is written back as quoted text | Integer, 64 bits; String when it does not fit |
-| A whole part written as a decimal integer, with its optional sign, then a fraction of digits, an exponent or both. The exponent is `e` or `E`, an optional sign and digits, which may start with zeros. An underscore may stand between two digits of the whole part, of the fraction or of the exponent: `0.5`, `1e02` and `1e0_1` are floats, and `01.5` is not a value | Float, finite |
-| `inf` and `nan`, with an optional sign; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
+| A whole part written as a decimal integer, with its optional sign, then a fraction of digits, an exponent or both. The exponent is `e` or `E`, an optional sign and digits, which may start with zeros. An underscore may stand between two digits of the whole part, of the fraction or of the exponent: `0.5`, `1e02` and `1e0_1` are floats, and `01.5` is not a value. A float too large for a float to hold is the String of its text as written, such as `"1e400"`, and is written back as quoted text | Float, finite; String when it does not fit |
+| `inf` and `nan`, with an optional sign | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 
 ## YAML frontmatter
 
@@ -883,11 +888,12 @@ line under properties that end their line.
 
 - A tagged scalar's text is read again by the rules for an unquoted value of the
   tag's type in the table below: `!!str 01234` is the String `"01234"`, and
-  `!!timestamp` reads a Date, a DateTime or a LocalDateTime. `!!float` reads a Float
-  or a NonFinite, and also reads decimal digits of any size with an optional sign, so
-  `!!float 1` is the Float `1` and `!!float 99999999999999999999` is the Float
-  `1e20`. `!!int 99999999999999999999` is the String `"99999999999999999999"`, as
-  the same digits are untagged. `!!map` and `!!seq` only check that the value is a
+  `!!timestamp` reads a Date, an OffsetDateTime or a DateTime. `!!float` reads a
+  Float or a NonFinite, and also reads decimal digits of any size with an optional
+  sign, so `!!float 1` is the Float `1` and `!!float 99999999999999999999` is the
+  Float `1e20`. `!!float 1e400` is the String `"1e400"`, and
+  `!!int 99999999999999999999` is the String `"99999999999999999999"`, as the same
+  digits are untagged. `!!map` and `!!seq` only check that the value is a
   mapping or a list.
 - A value that does not fit its tag is refused, as
   ``"`abc` is not a value of the tag `!!int`"``, or
@@ -909,13 +915,17 @@ A `PLAIN` value's type comes from how it is written:
 | Nothing, `~`, `null`, `Null`, `NULL` | Null |
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
 | An optional sign and digits; or `0x`, `0o` and digits in that base. A decimal, octal or hexadecimal integer that does not fit 64 bits is the String of its text as written, such as `"0xFFFFFFFFFFFFFFFFFF"`, and is written back as quoted text | Integer, 64 bits; String when it does not fit |
-| An optional sign; then digits, a dot and optional digits, or a dot and digits, or digits alone when an exponent follows; then an optional exponent: `e` or `E`, an optional sign and digits. `.5`, `5.`, `-.5e3` and `1e3` are floats, and `.` is a string | Float, finite |
-| `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`; digits too large for a float | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
+| An optional sign; then digits, a dot and optional digits, or a dot and digits, or digits alone when an exponent follows; then an optional exponent: `e` or `E`, an optional sign and digits. `.5`, `5.`, `-.5e3` and `1e3` are floats, and `.` is a string. A float too large for a float to hold is the String of its text as written, such as `"1e400"`, and is written back as quoted text | Float, finite; String when it does not fit |
+| `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN` | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
 | `2026-10-10`, when that day exists in the calendar | Date |
-| A date-time, written as in TOML, whose date exists in the calendar | DateTime, or LocalDateTime when it has no offset |
+| A date-time, written as in TOML, whose date exists in the calendar | OffsetDateTime, or DateTime when it has no offset |
 | Anything else | String |
 
 ## What each node's span covers
+
+A frontmatter's values hold no span. The rows `Mapping`, `Pair`, `Sequence` and
+`Scalar` give the ranges the TOML and YAML readers keep for them while they read,
+which the error of a dropped entry or of a broken frontmatter points into.
 
 | Node | From | To |
 |---|---|---|
@@ -1043,15 +1053,15 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
 - A code block's `language` and `args`, `Args::Toml` or `Args::Text`, come from its
   info string by the rule under [Blocks](#blocks).
 - `read_toml(source, range)` and `read_yaml(source, range)` read the TOML or YAML
-  written at any range of a source into a `Mapping`, as the frontmatter is read, with
-  spans counting from the start of the source. Each drops nothing: it fails with the
-  error of the first entry or key the frontmatter would drop, as a strict parse does.
+  written at any range of a source into a `Mapping`, as the frontmatter is read. Each
+  drops nothing: it fails with the error of the first entry or key the frontmatter
+  would drop, as a strict parse does, its span counting from the start of the source.
 - `read_toml_lines(source, lines)` and `read_yaml_lines(source, lines)` read the TOML
   or YAML written on `lines`, ranges of the source, as consecutive lines of one text
-  joined by `\n`, and place every span of the `Mapping`, or of the error, back in the
-  source. `context.lines_of(range)` gives the parts of a range on the construct's own
-  lines: on each of its grid cell's lines, or else the range split at each `\n`, which
-  it leaves out, each line past the construct's indentation: past the frame, then past
+  joined by `\n`, and place the span of an error back in the source.
+  `context.lines_of(range)` gives the parts of a range on the construct's own lines:
+  on each of its grid cell's lines, or else the range split at each `\n`, which it
+  leaves out, each line past the construct's indentation: past the frame, then past
   at most `column` columns of its leading white space, a tab that `column` falls inside
   passed whole, as `context.markdown` reads it. A part that starts later on its line
   keeps its start. So an extension reads a header the same way inside a grid cell and
@@ -1147,14 +1157,15 @@ written once, with its list.
   Text plain, unless written plain it would read as something else: when it starts
   with a space or an indicator, one of `` ! " # % & ' * , - : > ? @ [ ] ` { | } ``,
   ends with a space or `:`, holds `: `, ` #` or a control character, holds `,`, `[`,
-  `]`, `{` or `}` inside a flow collection, has the form of a time of day or of an
-  integer that does not fit 64 bits, or reads as another type; then in double quotes,
-  with `\"`, `\\`, `\n`, `\r`, `\t` and `\xXX` escapes. `null` for a null; `true` and
-  `false`; a float as the shortest text that reads back as it, with `.0` when that
-  text would read as an integer, and `.inf`, `-.inf` and `.nan`; dates and date-times
-  after the tag `!!timestamp`, such as `!!timestamp 2026-10-10T07:32:00Z`, with `Z`
-  for UTC or an offset such as `+02:00`; a time of day as quoted text, such as
-  `at: "07:32:00"`, which reads back as text.
+  `]`, `{` or `}` inside a flow collection, has the form of a time of day, of an
+  integer that does not fit 64 bits or of a float too large for a float to hold, or
+  reads as another type; then in double quotes, with `\"`, `\\`, `\n`, `\r`, `\t`
+  and `\xXX` escapes. `null` for a null; `true` and `false`; a float as the shortest
+  text that reads back as it, with `.0` when that text would read as an integer, and
+  `.inf`, `-.inf` and `.nan`; dates and date-times after the tag `!!timestamp`, such
+  as `!!timestamp 2026-10-10T07:32:00Z`, with `Z` for UTC or an offset such as
+  `+02:00`; a time of day as quoted text, such as `at: "07:32:00"`, which reads back
+  as text.
 - **TOML**, between `+++` lines. The plain keys of a table first, then, in the order
   they were read, a `[path]` header for each mapping it holds and a `[[path]]` header
   for each mapping of a list that holds mappings and nothing else, each after a blank
@@ -1226,8 +1237,8 @@ with the text it reads from and the text it writes.
 ### From YAML
 
 1. Dates and date-times are in the schema: an unquoted date whose day exists in the
-   calendar, or a date-time whose date does, is a Date, a DateTime or a LocalDateTime.
-   The YAML 1.2.2 core schema has no date type and reads it as a string.
+   calendar, or a date-time whose date does, is a Date, an OffsetDateTime or a
+   DateTime. The YAML 1.2.2 core schema has no date type and reads it as a string.
 2. An alias is a copy of the value its anchor names, and a write holds the copies and
    no anchor; in YAML both name one node. An alias inside the value its anchor names,
    an alias whose anchor is not defined before it, and the anchors and aliases past

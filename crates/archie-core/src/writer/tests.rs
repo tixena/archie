@@ -5,8 +5,8 @@ use indexmap::IndexMap;
 
 use crate::parser::ast::{
     Alignment, Args, Block, CodeBlock, Document, Frontmatter, FrontmatterFormat, Heading, Inline,
-    Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Pair, Paragraph, Scalar,
-    ScalarValue, Section, Sequence, Table, TableCell, TableFormat, TableRow, Text, Value,
+    Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Paragraph, Section,
+    Table, TableCell, TableFormat, TableRow, Text, Value,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension, Markdown};
@@ -204,9 +204,6 @@ fn clear_block_node(block: &mut Block) {
             clear_kind(&mut quote.kind);
         }
         Block::CodeBlock(code) => {
-            if let Args::Toml(mapping) = &mut code.args {
-                clear_mapping(mapping);
-            }
             code.content = 0..0;
             code.span = 0..0;
             clear_kind(&mut code.kind);
@@ -1056,21 +1053,13 @@ fn a_markdown_block_keeps_its_info_string_and_its_claimed_content() {
 
 /// A code block whose language is `language` and whose `Toml` args map
 /// `title` to `value`, then `b` to 1.
-fn code_with_args(language: &str, value: ScalarValue, kind: Kind<Markdown>) -> Block {
-    let pair = |scalar| Pair {
-        repeats: Vec::new(),
-        span: 0..0,
-        value: Value::Scalar(Scalar {
-            span: 0..0,
-            value: scalar,
-        }),
-    };
-    let pairs = IndexMap::from([
-        ("title".to_owned(), pair(value)),
-        ("b".to_owned(), pair(ScalarValue::Integer(1))),
+fn code_with_args(language: &str, value: Value, kind: Kind<Markdown>) -> Block {
+    let mapping = IndexMap::from([
+        ("title".to_owned(), value),
+        ("b".to_owned(), Value::Integer(1)),
     ]);
     Block::CodeBlock(CodeBlock {
-        args: Args::Toml(Mapping { pairs, span: 0..0 }),
+        args: Args::Toml(mapping),
         content: 0..0,
         kind,
         language: Some(language.to_owned()),
@@ -1096,7 +1085,7 @@ fn holding(blocks: Vec<Block>) -> MarkdownBlock {
 
 #[test]
 fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
-    let null = || code_with_args("sh", ScalarValue::Null, Kind(None));
+    let null = || code_with_args("sh", Value::Null, Kind(None));
     let mut writer = Writer::new();
     if let Block::CodeBlock(code) = null() {
         assert_eq!(writer.info_string(&code), "sh b = 1");
@@ -1130,9 +1119,9 @@ fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
         span: 0..0,
     });
     let claimed = Kind(Some(Box::new(holding(vec![null()]))));
-    let in_markdown = code_with_args("md", ScalarValue::Integer(2), claimed);
+    let in_markdown = code_with_args("md", Value::Integer(2), claimed);
     let claimed_null = Kind(Some(Box::new(holding(Vec::new()))));
-    let markdown_null = code_with_args("md", ScalarValue::Null, claimed_null);
+    let markdown_null = code_with_args("md", Value::Null, claimed_null);
     for block in [null(), in_item, in_cell, in_markdown, markdown_null] {
         let built = Document {
             body: holding(vec![block]),
@@ -1214,56 +1203,31 @@ fn toml_error(source: &str) -> WriteError {
     write(&parse(source), &TOML).unwrap_err()
 }
 
-/// The frontmatter mapping `source` reads as, every span emptied.
+/// The frontmatter mapping `source` reads as.
 fn mapping(source: &str) -> Mapping {
-    let mut read = parse(source).frontmatter.unwrap().unwrap().mapping;
-    clear_mapping(&mut read);
-    read
-}
-
-fn clear_mapping(mapping: &mut Mapping) {
-    mapping.span = 0..0;
-    for pair in mapping.pairs.values_mut() {
-        pair.repeats.clear();
-        pair.span = 0..0;
-        clear_value(&mut pair.value);
-    }
-}
-
-fn clear_value(value: &mut Value) {
-    match value {
-        Value::Mapping(mapping) => clear_mapping(mapping),
-        Value::Scalar(scalar) => scalar.span = 0..0,
-        Value::Sequence(sequence) => {
-            sequence.span = 0..0;
-            for item in &mut sequence.items {
-                clear_value(item);
-            }
-        }
-    }
+    parse(source).frontmatter.unwrap().unwrap().mapping
 }
 
 /// `mapping` with each time of day turned into the text it is written as
 /// in YAML.
 fn times_as_text(mapping: &mut Mapping) {
-    for pair in mapping.pairs.values_mut() {
-        time_as_text(&mut pair.value);
-    }
+    mapping.values_mut().for_each(time_as_text);
 }
 
 fn time_as_text(value: &mut Value) {
     match value {
         Value::Mapping(mapping) => times_as_text(mapping),
-        Value::Scalar(scalar) => {
-            if let ScalarValue::Time(time) = scalar.value {
-                scalar.value = ScalarValue::String(time.to_string());
-            }
-        }
-        Value::Sequence(sequence) => {
-            for item in &mut sequence.items {
-                time_as_text(item);
-            }
-        }
+        Value::Sequence(items) => items.iter_mut().for_each(time_as_text),
+        Value::Time(time) => *value = Value::String(time.to_string()),
+        Value::Boolean(_)
+        | Value::Date(_)
+        | Value::DateTime(_)
+        | Value::Float(_)
+        | Value::Integer(_)
+        | Value::NonFinite(_)
+        | Value::Null
+        | Value::OffsetDateTime(_)
+        | Value::String(_) => {}
     }
 }
 
@@ -1275,19 +1239,16 @@ fn null_error(key: &str) -> WriteError {
 }
 
 fn text(value: &str) -> Value {
-    Value::Scalar(Scalar {
-        span: 0..0,
-        value: ScalarValue::String(value.to_owned()),
-    })
+    Value::String(value.to_owned())
 }
 
-/// A document whose frontmatter holds `pairs` and whose body is empty.
-fn with_frontmatter(pairs: IndexMap<String, Pair>) -> Document {
+/// A document whose frontmatter holds `mapping` and whose body is empty.
+fn with_frontmatter(mapping: Mapping) -> Document {
     Document {
         frontmatter: Some(Ok(Frontmatter {
             dropped: Vec::new(),
             format: FrontmatterFormat::Yaml,
-            mapping: Mapping { pairs, span: 0..0 },
+            mapping,
             span: 0..0,
         })),
         ..document(Vec::new())
@@ -1295,13 +1256,8 @@ fn with_frontmatter(pairs: IndexMap<String, Pair>) -> Document {
 }
 
 /// A document whose frontmatter maps `x` to `value`.
-fn with_frontmatter_value(value: ScalarValue) -> Document {
-    let pair = Pair {
-        repeats: Vec::new(),
-        span: 0..0,
-        value: Value::Scalar(Scalar { span: 0..0, value }),
-    };
-    with_frontmatter(IndexMap::from([("x".to_owned(), pair)]))
+fn with_frontmatter_value(value: Value) -> Document {
+    with_frontmatter(IndexMap::from([("x".to_owned(), value)]))
 }
 
 fn written_yaml(document: &Document) -> String {
@@ -1314,14 +1270,9 @@ fn written_toml(document: &Document) -> String {
 
 /// The value `x` reads back as from the YAML and the TOML that `document`
 /// is written as, which must agree.
-fn read_back_value(document: &Document) -> ScalarValue {
-    let [yaml, toml_value] = [written_yaml(document), written_toml(document)].map(|text| {
-        let read = match mapping(&text).pairs.swap_remove("x").unwrap().value {
-            Value::Scalar(scalar) => Some(scalar.value),
-            Value::Mapping(_) | Value::Sequence(_) => None,
-        };
-        read.unwrap()
-    });
+fn read_back_value(document: &Document) -> Value {
+    let [yaml, toml_value] = [written_yaml(document), written_toml(document)]
+        .map(|text| mapping(&text).swap_remove("x").unwrap());
     assert_eq!(yaml, toml_value);
     yaml
 }
@@ -1467,52 +1418,59 @@ fn a_hand_built_non_finite_float_is_written_as_its_non_finite_value() {
             NonFinite::NegativeInfinity,
         ),
     ] {
-        let document = with_frontmatter_value(ScalarValue::Float(float));
+        let document = with_frontmatter_value(Value::Float(float));
         assert!(written_yaml(&document).contains(&format!("x: {yaml}\n")));
         assert!(written_toml(&document).contains(&format!("x = {toml}\n")));
-        assert_eq!(read_back_value(&document), ScalarValue::NonFinite(read));
+        assert_eq!(read_back_value(&document), Value::NonFinite(read));
     }
 }
 
 #[test]
 fn a_hand_built_finite_float_is_written_as_the_shortest_text_that_reads_back_as_it() {
     for (float, text) in [(1.5_f64, "1.5"), (2.0_f64, "2.0")] {
-        let document = with_frontmatter_value(ScalarValue::Float(float));
+        let document = with_frontmatter_value(Value::Float(float));
         assert!(written_yaml(&document).contains(&format!("x: {text}\n")));
         assert!(written_toml(&document).contains(&format!("x = {text}\n")));
-        assert_eq!(read_back_value(&document), ScalarValue::Float(float));
+        assert_eq!(read_back_value(&document), Value::Float(float));
     }
 }
 
 #[test]
 fn text_holding_a_colon_and_a_tab_is_written_into_yaml_quoted_and_reads_back_as_itself() {
-    let document = with_frontmatter_value(ScalarValue::String("b:\tc".to_owned()));
+    let document = with_frontmatter_value(Value::String("b:\tc".to_owned()));
     assert!(written_yaml(&document).contains("x: \"b:\\tc\"\n"));
     assert_eq!(
         read_back_value(&document),
-        ScalarValue::String("b:\tc".to_owned())
+        Value::String("b:\tc".to_owned())
     );
 }
 
 #[test]
 fn text_that_reads_as_a_float_with_no_digit_before_its_dot_is_written_into_yaml_quoted() {
-    let document = with_frontmatter_value(ScalarValue::String(".5".to_owned()));
+    let document = with_frontmatter_value(Value::String(".5".to_owned()));
     assert!(written_yaml(&document).contains("x: \".5\"\n"));
-    assert_eq!(
-        read_back_value(&document),
-        ScalarValue::String(".5".to_owned())
-    );
+    assert_eq!(read_back_value(&document), Value::String(".5".to_owned()));
 }
 
 #[test]
 fn text_of_an_integer_too_large_for_64_bits_is_written_into_yaml_quoted_and_reads_back_as_itself() {
     let digits = "99999999999999999999";
-    let document = with_frontmatter_value(ScalarValue::String(digits.to_owned()));
+    let document = with_frontmatter_value(Value::String(digits.to_owned()));
     assert!(written_yaml(&document).contains(&format!("x: \"{digits}\"\n")));
-    assert_eq!(
-        read_back_value(&document),
-        ScalarValue::String(digits.to_owned())
-    );
+    assert_eq!(read_back_value(&document), Value::String(digits.to_owned()));
+}
+
+#[test]
+fn a_float_too_large_for_a_float_read_from_either_format_is_written_as_quoted_text() {
+    for source in ["---\nbig: 1e400\n---\n", "+++\nbig = 1e400\n+++\n"] {
+        assert_eq!(mapping(source)["big"], Value::String("1e400".to_owned()));
+        let yaml_text = written(source);
+        assert_eq!(yaml_text, "---\nbig: \"1e400\"\n---\n");
+        assert_eq!(mapping(&yaml_text), mapping(source));
+        let toml_text = toml(source);
+        assert_eq!(toml_text, "+++\nbig = \"1e400\"\n+++\n");
+        assert_eq!(mapping(&toml_text), mapping(source));
+    }
 }
 
 #[test]
@@ -1768,32 +1726,14 @@ fn text_reads_back_as_the_same_text_whether_it_is_quoted_or_not() {
         "...",
         "+++",
     ];
-    let mut pairs: IndexMap<String, Pair> = texts
+    let mut texts_by_key: Mapping = texts
         .iter()
-        .map(|value| {
-            let pair = Pair {
-                repeats: Vec::new(),
-                span: 0..0,
-                value: text(value),
-            };
-            ((*value).to_owned(), pair)
-        })
+        .map(|value| ((*value).to_owned(), text(value)))
         .collect();
-    let list = Value::Sequence(Sequence {
-        items: texts.iter().map(|value| text(value)).collect(),
-        span: 0..0,
-    });
-    pairs.insert(
-        "list".to_owned(),
-        Pair {
-            repeats: Vec::new(),
-            span: 0..0,
-            value: list,
-        },
-    );
-    let built = with_frontmatter(pairs);
-    let mut expected = built.frontmatter.clone().unwrap().unwrap().mapping;
-    clear_mapping(&mut expected);
+    let list = Value::Sequence(texts.iter().map(|value| text(value)).collect());
+    texts_by_key.insert("list".to_owned(), list);
+    let built = with_frontmatter(texts_by_key);
+    let expected = built.frontmatter.clone().unwrap().unwrap().mapping;
     for frontmatter in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
         let written_text = write(&built, &WriteOptions { frontmatter }).unwrap();
         assert_eq!(mapping(&written_text), expected, "{written_text}");

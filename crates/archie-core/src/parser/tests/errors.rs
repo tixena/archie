@@ -608,22 +608,15 @@ fn nested_frontmatter(depth: usize) -> [String; 6] {
 /// deepest one, and itself.
 fn value_depth(mapping: &Mapping) -> usize {
     let mut deepest = 0;
-    let mut open: Vec<(usize, &Value)> = mapping
-        .pairs
-        .values()
-        .map(|pair| (1, &pair.value))
-        .collect();
+    let mut open: Vec<(usize, &Value)> = mapping.values().map(|value| (1, value)).collect();
     while let Some((depth, value)) = open.pop() {
-        match value {
-            Value::Mapping(inner) => {
-                deepest = deepest.max(depth);
-                open.extend(inner.pairs.values().map(|pair| (depth + 1, &pair.value)));
-            }
-            Value::Scalar(_) => {}
-            Value::Sequence(sequence) => {
-                deepest = deepest.max(depth);
-                open.extend(sequence.items.iter().map(|item| (depth + 1, item)));
-            }
+        if let Value::Mapping(inner) = value {
+            deepest = deepest.max(depth);
+            open.extend(inner.values().map(|item| (depth + 1, item)));
+        }
+        if let Value::Sequence(items) = value {
+            deepest = deepest.max(depth);
+            open.extend(items.iter().map(|item| (depth + 1, item)));
         }
     }
     deepest
@@ -691,10 +684,7 @@ fn a_copy_counts_toward_the_value_cap_from_where_its_alias_stands() {
         let source = format!("---\na: &d {deep}\nb: [*d]\nc: [[*d]]\ne: 1\n---\n");
         let document = parse(&source);
         let read = document.frontmatter.as_ref().unwrap().as_ref().unwrap();
-        assert_eq!(
-            read.mapping.pairs.keys().collect::<Vec<_>>(),
-            ["a", "b", "e"]
-        );
+        assert_eq!(read.mapping.keys().collect::<Vec<_>>(), ["a", "b", "e"]);
         reads_and_writes_at_depth(&source, Some(VALUE_CAP));
     });
 }

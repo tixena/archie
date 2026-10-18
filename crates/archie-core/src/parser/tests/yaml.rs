@@ -1,9 +1,11 @@
 use core::ops::Range;
 
-use super::{check, check_spans};
-use crate::parser::ast::Mapping;
+use chrono::{DateTime, NaiveDate, NaiveTime};
+
+use super::{check, check_spans, located_frontmatter};
+use crate::parser::ast::{Mapping, NonFinite, Value};
 use crate::parser::error::ParseError;
-use crate::parser::{parse, read_toml, read_toml_lines, read_yaml, read_yaml_lines};
+use crate::parser::{read_toml, read_toml_lines, read_yaml, read_yaml_lines, toml, yaml};
 
 /// `read_toml` or `read_yaml`.
 type Reader = fn(&str, Range<usize>) -> Result<Mapping, ParseError>;
@@ -40,7 +42,7 @@ aliases: [Parser, "The parser"]
       Pair key=date
         Scalar Date 2026-09-26
       Pair key=created
-        Scalar DateTime 2026-09-26T17:08:20.162234780Z
+        Scalar OffsetDateTime 2026-09-26T17:08:20.162234780Z
       Pair key=priority
         Scalar Integer 2
       Pair key=weight
@@ -276,7 +278,7 @@ reactions:
                 Pair key=author
                   Scalar String "ada"
                 Pair key=ts
-                  Scalar DateTime 2026-10-01T10:00:00Z
+                  Scalar OffsetDateTime 2026-10-01T10:00:00Z
   MarkdownBlock
 "#,
     );
@@ -286,13 +288,60 @@ reactions:
 fn the_readers_take_a_range_of_a_larger_text_and_keep_its_offsets() {
     let source = "intro\nname: Ada\nrole: host\nmore";
     let mapping = read_yaml(source, 6..27).unwrap();
-    let keys: Vec<&str> = mapping.pairs.keys().map(String::as_str).collect();
+    let keys: Vec<&str> = mapping.keys().map(String::as_str).collect();
     assert_eq!(keys, ["name", "role"]);
-    assert_eq!(&source[mapping.span.clone()], "name: Ada\nrole: host");
+    let (located_yaml, _) = yaml::read(source, 6..27).unwrap();
+    assert_eq!(&source[located_yaml.span.clone()], "name: Ada\nrole: host");
+    assert_eq!(located_yaml.into_model(), mapping);
 
-    let toml = "x\nname = \"Ada\"\ny";
-    let table = read_toml(toml, 2..15).unwrap();
-    assert_eq!(&toml[table.pairs["name"].span.clone()], "name = \"Ada\"");
+    let text = "x\nname = \"Ada\"\ny";
+    let table = read_toml(text, 2..15).unwrap();
+    let (located_toml, _) = toml::read(text, 2..15).unwrap();
+    assert_eq!(
+        &text[located_toml.pairs["name"].span.clone()],
+        "name = \"Ada\""
+    );
+    assert_eq!(located_toml.into_model(), table);
+}
+
+#[test]
+fn the_readers_give_plain_values_with_a_key_written_twice_as_one_list() {
+    let source = "status: open\npriority: 2\nbig: 1e400\nx: .inf\ntag: a\ntag: b\n";
+    let mapping = read_yaml(source, 0..source.len()).unwrap();
+    assert_eq!(
+        mapping,
+        Mapping::from([
+            ("status".to_owned(), Value::String("open".to_owned())),
+            ("priority".to_owned(), Value::Integer(2)),
+            ("big".to_owned(), Value::String("1e400".to_owned())),
+            ("x".to_owned(), Value::NonFinite(NonFinite::Infinity)),
+            (
+                "tag".to_owned(),
+                Value::Sequence(vec![
+                    Value::String("a".to_owned()),
+                    Value::String("b".to_owned()),
+                ])
+            ),
+        ])
+    );
+
+    let text =
+        "a = 2026-10-20\nb = 2026-10-20T09:00:00\nc = 2026-10-20T09:00:00+02:00\nd = 07:32:00";
+    let date = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+    let nine = date.and_hms_opt(9, 0, 0).unwrap();
+    let offset = DateTime::parse_from_rfc3339("2026-10-20T09:00:00+02:00").unwrap();
+    assert_eq!(
+        read_toml(text, 0..text.len()).unwrap(),
+        Mapping::from([
+            ("a".to_owned(), Value::Date(date)),
+            ("b".to_owned(), Value::DateTime(nine)),
+            ("c".to_owned(), Value::OffsetDateTime(offset)),
+            (
+                "d".to_owned(),
+                Value::Time(NaiveTime::from_hms_opt(7, 32, 0).unwrap())
+            ),
+        ])
+    );
 }
 
 #[test]
@@ -484,8 +533,7 @@ fn a_key_written_again_keeps_its_first_place() {
 #[test]
 fn each_later_occurrence_of_a_key_is_recorded_from_its_key_to_its_value() {
     let source = "---\ntitle: Draft\nonce: 1\ntitle: Final\ntitle:\n  - x\n---\n";
-    let document = parse(source);
-    let mapping = document.frontmatter.unwrap().unwrap().mapping;
+    let mapping = located_frontmatter(source);
     let title = &mapping.pairs["title"];
     assert_eq!(&source[title.span.clone()], "title: Draft");
     let repeats: Vec<&str> = title
@@ -688,8 +736,6 @@ up: .Inf
 plus: +.INF
 down: -.inf
 nothing: .NaN
-huge: 1e999
-below: -1e999
 ---
 ",
         "Document
@@ -703,12 +749,26 @@ below: -1e999
         Scalar NonFinite NegativeInfinity
       Pair key=nothing
         Scalar NonFinite Nan
-      Pair key=huge
-        Scalar NonFinite Infinity
-      Pair key=below
-        Scalar NonFinite NegativeInfinity
   MarkdownBlock
 ",
+    );
+}
+
+#[test]
+fn digits_too_large_for_a_float_read_as_their_text_under_a_float_tag_too() {
+    check(
+        "---\nhuge: 1e999\nbelow: -1e999\ntagged: !!float 1e400\n---\n",
+        r#"Document
+  Frontmatter format=Yaml
+    Mapping
+      Pair key=huge
+        Scalar String "1e999"
+      Pair key=below
+        Scalar String "-1e999"
+      Pair key=tagged
+        Scalar String "1e400"
+  MarkdownBlock
+"#,
     );
 }
 
@@ -766,7 +826,7 @@ listed: [!!str 1, !!int "2"]
       Pair key=when
         Scalar Date 2026-10-10
       Pair key=at
-        Scalar DateTime 2026-10-10T07:32:00Z
+        Scalar OffsetDateTime 2026-10-10T07:32:00Z
       Pair key=verbatim
         Scalar String "12"
       Pair key=listed
@@ -852,7 +912,7 @@ local: 2026-10-10 07:32:00
       Pair key=at
         Scalar String "2026-02-30T10:00:00Z"
       Pair key=local
-        Scalar LocalDateTime 2026-10-10T07:32:00
+        Scalar DateTime 2026-10-10T07:32:00
   MarkdownBlock
 "#,
     );
@@ -1075,7 +1135,7 @@ text: !!str 2026-10-10
   Frontmatter format=Yaml
     Mapping
       Pair key=at
-        Scalar LocalDateTime 2026-10-10T07:32:00
+        Scalar DateTime 2026-10-10T07:32:00
       Pair key=text
         Scalar String "2026-10-10 07:32:00"
   MarkdownBlock

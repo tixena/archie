@@ -4,9 +4,9 @@ Document
       Pair key=title
         Scalar String "Shipping the parser"
       Pair key=date
-        Scalar DateTime 2026-10-03T09:15:00-04:00
+        Scalar OffsetDateTime 2026-10-03T09:15:00-04:00
       Pair key=lastmod
-        Scalar DateTime 2026-10-04T08:00:00Z
+        Scalar OffsetDateTime 2026-10-04T08:00:00Z
       Pair key=draft
         Scalar Boolean false
       Pair key=weight

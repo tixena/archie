@@ -3,8 +3,8 @@
 
 use core::fmt::{self, Write as _};
 
-use crate::parser::ast::{Mapping, NonFinite, ScalarValue, Value};
-use crate::writer::{WriteError, push_date_time, push_finite, push_local_date_time};
+use crate::parser::ast::{Mapping, NonFinite, Value};
+use crate::writer::{WriteError, push_date_time, push_finite, push_offset_date_time};
 
 /// The pairs of `mapping` on one line, `key = value` separated by `, `: a
 /// code block's args. A pair holding a null, which TOML cannot hold, is left
@@ -12,9 +12,9 @@ use crate::writer::{WriteError, push_date_time, push_finite, push_local_date_tim
 pub fn args(mapping: &Mapping) -> (String, Option<WriteError>) {
     let mut out = String::new();
     let mut error = None;
-    for (key, pair) in &mapping.pairs {
+    for (key, written) in mapping {
         let mut value = String::new();
-        match inline(&mut value, &pair.value, &[key]) {
+        match inline(&mut value, written, &[key]) {
             Ok(()) => {
                 if !out.is_empty() {
                     out.push_str(", ");
@@ -43,28 +43,23 @@ pub fn frontmatter(mapping: &Mapping) -> Result<String, WriteError> {
 /// `[path]` header for each mapping it holds and a `[[path]]` header for
 /// each mapping of a list of mappings. `path` holds the keys of the table.
 fn table(out: &mut String, mapping: &Mapping, path: &[&str]) -> Result<(), WriteError> {
-    for (key, pair) in &mapping.pairs {
-        if !is_header(&pair.value) {
+    for (key, value) in mapping {
+        if !is_header(value) {
             push_key(out, key);
             out.push_str(" = ");
-            inline(out, &pair.value, &joined(path, key))?;
+            inline(out, value, &joined(path, key))?;
             out.push('\n');
         }
     }
-    for (key, pair) in &mapping.pairs {
+    for (key, value) in mapping {
         let inner = joined(path, key);
-        match &pair.value {
-            Value::Mapping(nested) => {
-                header(out, &inner, false);
-                table(out, nested, &inner)?;
-            }
-            Value::Sequence(_) => {
-                for item in tables(&pair.value).unwrap_or_default() {
-                    header(out, &inner, true);
-                    table(out, item, &inner)?;
-                }
-            }
-            Value::Scalar(_) => {}
+        if let Value::Mapping(nested) = value {
+            header(out, &inner, false);
+            table(out, nested, &inner)?;
+        }
+        for item in tables(value).unwrap_or_default() {
+            header(out, &inner, true);
+            table(out, item, &inner)?;
         }
     }
     Ok(())
@@ -81,15 +76,24 @@ fn tables(value: &Value) -> Option<Vec<&Mapping>> {
     let Value::Sequence(sequence) = value else {
         return None;
     };
-    if sequence.items.is_empty() {
+    if sequence.is_empty() {
         return None;
     }
     sequence
-        .items
         .iter()
         .map(|item| match item {
             Value::Mapping(mapping) => Some(mapping),
-            Value::Scalar(_) | Value::Sequence(_) => None,
+            Value::Boolean(_)
+            | Value::Date(_)
+            | Value::DateTime(_)
+            | Value::Float(_)
+            | Value::Integer(_)
+            | Value::NonFinite(_)
+            | Value::Null
+            | Value::OffsetDateTime(_)
+            | Value::Sequence(_)
+            | Value::String(_)
+            | Value::Time(_) => None,
         })
         .collect()
 }
@@ -105,54 +109,35 @@ fn header(out: &mut String, path: &[&str], array: bool) {
     out.push_str(if array { "]]\n" } else { "]\n" });
 }
 
-/// `value` on one line: an inline table, an array, or a scalar. `path`
-/// names its key.
+/// `value` on one line: an inline table, an array, or a scalar, with text in
+/// double quotes and booleans, numbers, dates and times bare. A null is an
+/// error naming `path`, its key.
 fn inline(out: &mut String, value: &Value, path: &[&str]) -> Result<(), WriteError> {
     match value {
-        Value::Mapping(mapping) => {
-            out.push('{');
-            for (index, (key, pair)) in mapping.pairs.iter().enumerate() {
-                out.push_str(if index > 0 { ", " } else { " " });
-                push_key(out, key);
-                out.push_str(" = ");
-                inline(out, &pair.value, &joined(path, key))?;
-            }
-            out.push_str(if mapping.pairs.is_empty() { "}" } else { " }" });
-        }
-        Value::Scalar(scalar) => push_scalar(out, &scalar.value, path)?,
-        Value::Sequence(sequence) => {
-            out.push('[');
-            for (index, item) in sequence.items.iter().enumerate() {
-                if index > 0 {
-                    out.push_str(", ");
-                }
-                inline(out, item, path)?;
-            }
-            out.push(']');
-        }
-    }
-    Ok(())
-}
-
-/// Text in double quotes; booleans, numbers, dates and times bare. A null
-/// is an error naming `path`.
-fn push_scalar(out: &mut String, value: &ScalarValue, path: &[&str]) -> Result<(), WriteError> {
-    match value {
-        ScalarValue::Boolean(boolean) => out.push_str(if *boolean { "true" } else { "false" }),
-        ScalarValue::Date(date) => {
+        Value::Boolean(boolean) => out.push_str(if *boolean { "true" } else { "false" }),
+        Value::Date(date) => {
             let _: fmt::Result = write!(out, "{date}");
         }
-        ScalarValue::DateTime(date_time) => push_date_time(out, date_time),
-        ScalarValue::Float(float) => match NonFinite::of(*float) {
+        Value::DateTime(date_time) => push_date_time(out, date_time),
+        Value::Float(float) => match NonFinite::of(*float) {
             Some(non_finite) => push_non_finite(out, non_finite),
             None => push_finite(out, *float),
         },
-        ScalarValue::Integer(integer) => {
+        Value::Integer(integer) => {
             let _: fmt::Result = write!(out, "{integer}");
         }
-        ScalarValue::LocalDateTime(date_time) => push_local_date_time(out, date_time),
-        ScalarValue::NonFinite(non_finite) => push_non_finite(out, *non_finite),
-        ScalarValue::Null => {
+        Value::Mapping(mapping) => {
+            out.push('{');
+            for (index, (key, item)) in mapping.iter().enumerate() {
+                out.push_str(if index > 0 { ", " } else { " " });
+                push_key(out, key);
+                out.push_str(" = ");
+                inline(out, item, &joined(path, key))?;
+            }
+            out.push_str(if mapping.is_empty() { "}" } else { " }" });
+        }
+        Value::NonFinite(non_finite) => push_non_finite(out, *non_finite),
+        Value::Null => {
             let mut key = String::new();
             push_path(&mut key, path);
             return Err(WriteError {
@@ -160,8 +145,19 @@ fn push_scalar(out: &mut String, value: &ScalarValue, path: &[&str]) -> Result<(
                 message: "TOML cannot hold a null".to_owned(),
             });
         }
-        ScalarValue::String(text) => push_string(out, text),
-        ScalarValue::Time(time) => {
+        Value::OffsetDateTime(date_time) => push_offset_date_time(out, date_time),
+        Value::Sequence(sequence) => {
+            out.push('[');
+            for (index, item) in sequence.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                inline(out, item, path)?;
+            }
+            out.push(']');
+        }
+        Value::String(text) => push_string(out, text),
+        Value::Time(time) => {
             let _: fmt::Result = write!(out, "{time}");
         }
     }

@@ -4,13 +4,15 @@ use core::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 
-use crate::parser::ast::{NonFinite, ScalarValue};
+use crate::parser::ast::NonFinite;
+use crate::parser::located::ScalarValue;
 
 const TOML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8), ("0b", 2)];
 const YAML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8)];
 
 /// The value of an unquoted TOML token, or `None` when it is not one. An
-/// integer that 64 bits cannot hold is its text as written.
+/// integer that 64 bits cannot hold, or a float that a float cannot hold, is
+/// its text as written.
 pub fn toml(text: &str) -> Option<ScalarValue> {
     match text {
         "true" => Some(ScalarValue::Boolean(true)),
@@ -28,13 +30,13 @@ pub fn toml(text: &str) -> Option<ScalarValue> {
                     is_oversized_toml_integer(number.as_deref()?)
                         .then(|| ScalarValue::String(text.to_owned()))
                 })
-                .or_else(|| float(number.as_deref()?).map(finite_or_infinite))
+                .or_else(|| float(number.as_deref()?).map(|value| finite_or_text(value, text)))
         }
     }
 }
 
 /// The value of a plain YAML scalar: whatever is not a null, a boolean, a
-/// number or a date is a string.
+/// number or a date is a string, and so are digits too large for a float.
 pub fn yaml(text: &str) -> ScalarValue {
     match text {
         "" | "~" | "null" | "Null" | "NULL" => ScalarValue::Null,
@@ -47,7 +49,7 @@ pub fn yaml(text: &str) -> ScalarValue {
         ".nan" | ".NaN" | ".NAN" => ScalarValue::NonFinite(NonFinite::Nan),
         _ => integer(text, YAML_RADIXES)
             .map(ScalarValue::Integer)
-            .or_else(|| yaml_float(text).map(finite_or_infinite))
+            .or_else(|| yaml_float(text).map(|value| finite_or_text(value, text)))
             .or_else(|| date_time(text))
             .or_else(|| date(text).map(ScalarValue::Date))
             .unwrap_or_else(|| ScalarValue::String(text.to_owned())),
@@ -58,6 +60,12 @@ pub fn yaml(text: &str) -> ScalarValue {
 /// or `0o` or `0x` and digits in that base, that 64 bits cannot hold.
 pub fn is_oversized_integer(text: &str) -> bool {
     is_oversized(text, YAML_RADIXES)
+}
+
+/// Whether `text` is written as a YAML float that a float cannot hold, such
+/// as `1e400`.
+pub fn is_oversized_float(text: &str) -> bool {
+    yaml_float(text).is_some_and(f64::is_infinite)
 }
 
 /// [`is_oversized_integer`] for a TOML number with its underscores dropped,
@@ -79,13 +87,14 @@ fn is_oversized(text: &str, radixes: &[(&str, u32)]) -> bool {
         && integer(text, radixes).is_none()
 }
 
-/// Decimal digits with an optional sign, of any size, read as a float.
+/// Decimal digits with an optional sign, of any size, read as a float, or as
+/// their text when a float cannot hold them.
 pub fn decimal_float(text: &str) -> Option<ScalarValue> {
     let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
     if !is_digits(unsigned) {
         return None;
     }
-    text.parse().ok().map(finite_or_infinite)
+    text.parse().ok().map(|value| finite_or_text(value, text))
 }
 
 pub fn is_date(text: &str) -> bool {
@@ -148,8 +157,8 @@ fn nanoseconds(fraction: &str) -> Option<u32> {
     padded.parse().ok()
 }
 
-/// A date, then `T`, `t` or a space, then a time: a `DateTime` when an offset
-/// follows, a `LocalDateTime` when none does.
+/// A date, then `T`, `t` or a space, then a time: an `OffsetDateTime` when an
+/// offset follows, a `DateTime` when none does.
 fn date_time(text: &str) -> Option<ScalarValue> {
     if !text.is_ascii() || text.len() < 19 || !matches!(text.as_bytes()[10], b'T' | b't' | b' ') {
         return None;
@@ -157,13 +166,13 @@ fn date_time(text: &str) -> Option<ScalarValue> {
     let (clock, minutes) = split_offset(&text[11..])?;
     let local = NaiveDateTime::new(date(&text[..10])?, time(clock)?);
     let Some(east) = minutes else {
-        return Some(ScalarValue::LocalDateTime(local));
+        return Some(ScalarValue::DateTime(local));
     };
     let offset = FixedOffset::east_opt(i32::from(east) * 60)?;
     local
         .and_local_timezone(offset)
         .single()
-        .map(ScalarValue::DateTime)
+        .map(ScalarValue::OffsetDateTime)
 }
 
 /// Splits `07:32:00-04:00` into the time and its offset in minutes.
@@ -278,11 +287,13 @@ fn float_parts(text: &str) -> Option<(&str, Option<&str>)> {
     Some((whole, fraction))
 }
 
-/// A `Float`, or an infinity for digits too large for a float to hold.
-const fn finite_or_infinite(float: f64) -> ScalarValue {
-    match NonFinite::of(float) {
-        Some(non_finite) => ScalarValue::NonFinite(non_finite),
-        None => ScalarValue::Float(float),
+/// A `Float`, or the `String` of `text` when its digits are too large for a
+/// float to hold.
+fn finite_or_text(float: f64, text: &str) -> ScalarValue {
+    if float.is_finite() {
+        ScalarValue::Float(float)
+    } else {
+        ScalarValue::String(text.to_owned())
     }
 }
 

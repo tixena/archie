@@ -790,13 +790,13 @@ where
 
 /// A date and time with no offset, such as `2026-10-10T07:32:00`, with the
 /// fraction of a second when it has one.
-fn push_local_date_time(out: &mut String, date_time: &NaiveDateTime) {
+fn push_date_time(out: &mut String, date_time: &NaiveDateTime) {
     let _: fmt::Result = write!(out, "{}T{}", date_time.date(), date_time.time());
 }
 
 /// A date and time with its offset: `Z` for UTC, such as `+02:00` otherwise.
-fn push_date_time(out: &mut String, date_time: &DateTime<FixedOffset>) {
-    push_local_date_time(out, &date_time.naive_local());
+fn push_offset_date_time(out: &mut String, date_time: &DateTime<FixedOffset>) {
+    push_date_time(out, &date_time.naive_local());
     let offset = date_time.offset();
     if offset.local_minus_utc() == 0_i32 {
         out.push('Z');

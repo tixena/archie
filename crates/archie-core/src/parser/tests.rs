@@ -23,28 +23,31 @@ use chrono::{
 };
 
 use crate::parser::ast::{
-    Args, Block, BrokenFrontmatter, CodeBlock, Continues, Document, Inline, Mapping, MarkdownBlock,
-    ScalarValue, Section, Value,
+    Args, Block, BrokenFrontmatter, CodeBlock, Continues, Document, Frontmatter, FrontmatterFormat,
+    Inline, Mapping, MarkdownBlock, Section, Value,
 };
 use crate::parser::extension::Extension;
-use crate::parser::parse;
+use crate::parser::line::line_at;
+use crate::parser::{located, parse};
 use crate::writer::Writer;
 
 /// One node of a parsed tree: how deep it sits, how it reads, what it covers.
 /// `merged` marks a pair whose key is written more than once, and `spread` a
-/// cell of a table row written over several lines.
+/// cell of a table row written over several lines. A value of the model's
+/// `Mapping` covers nothing: it holds no span.
 struct Row {
     depth: usize,
     label: String,
     merged: bool,
-    span: Range<usize>,
+    span: Option<Range<usize>>,
     spread: bool,
 }
 
 #[derive(Default)]
 struct Rows<'src> {
     rows: Vec<Row>,
-    /// The text the tree was parsed from, or empty for an outline alone.
+    /// The text the tree was parsed from, or empty for an outline alone. The
+    /// frontmatter is read from it again for the spans of its values.
     source: &'src str,
 }
 
@@ -121,7 +124,7 @@ impl Rows<'_> {
                             depth: depth + 2,
                             label: "TableCell".to_owned(),
                             merged: false,
-                            span: cell.span.clone(),
+                            span: Some(cell.span.clone()),
                             spread,
                         });
                         self.markdown_block(depth + 3, &cell.body);
@@ -143,7 +146,13 @@ impl Rows<'_> {
             Some(Ok(frontmatter)) => {
                 let label = format!("Frontmatter format={:?}", frontmatter.format);
                 self.push(1, label, &frontmatter.span);
-                self.mapping(2, &frontmatter.mapping);
+                if self.source.is_empty() {
+                    self.mapping(2, &frontmatter.mapping);
+                } else {
+                    let read = read_again(self.source, frontmatter);
+                    assert_eq!(read.clone().into_model(), frontmatter.mapping);
+                    self.located_mapping(2, &read);
+                }
             }
             Some(Err(broken)) => {
                 let label = format!(
@@ -217,7 +226,9 @@ impl Rows<'_> {
         }
     }
 
-    fn mapping(&mut self, depth: usize, mapping: &Mapping) {
+    /// The rows of the readers' `mapping`, each with its span, and a pair
+    /// whose key is written more than once with how many more times.
+    fn located_mapping(&mut self, depth: usize, mapping: &located::Mapping) {
         self.push(depth, "Mapping".to_owned(), &mapping.span);
         for (key, pair) in &mapping.pairs {
             let merged = !pair.repeats.is_empty();
@@ -230,10 +241,35 @@ impl Rows<'_> {
                 depth: depth + 1,
                 label,
                 merged,
-                span: pair.span.clone(),
+                span: Some(pair.span.clone()),
                 spread: false,
             });
-            self.value(depth + 2, &pair.value);
+            self.located_value(depth + 2, &pair.value);
+        }
+    }
+
+    fn located_value(&mut self, depth: usize, value: &located::Value) {
+        match value {
+            located::Value::Mapping(mapping) => self.located_mapping(depth, mapping),
+            located::Value::Scalar(scalar) => {
+                let label = value_label(&scalar.value.clone().into_model());
+                self.push(depth, label, &scalar.span);
+            }
+            located::Value::Sequence(sequence) => {
+                self.push(depth, "Sequence".to_owned(), &sequence.span);
+                for item in &sequence.items {
+                    self.located_value(depth + 1, item);
+                }
+            }
+        }
+    }
+
+    /// The rows of the model's `mapping`, which covers nothing.
+    fn mapping(&mut self, depth: usize, mapping: &Mapping) {
+        self.push_unlocated(depth, "Mapping".to_owned());
+        for (key, value) in mapping {
+            self.push_unlocated(depth + 1, format!("Pair key={key}"));
+            self.value(depth + 2, value);
         }
     }
 
@@ -252,7 +288,17 @@ impl Rows<'_> {
             depth,
             label,
             merged: false,
-            span: span.clone(),
+            span: Some(span.clone()),
+            spread: false,
+        });
+    }
+
+    fn push_unlocated(&mut self, depth: usize, label: String) {
+        self.rows.push(Row {
+            depth,
+            label,
+            merged: false,
+            span: None,
             spread: false,
         });
     }
@@ -275,17 +321,14 @@ impl Rows<'_> {
     }
 
     fn value(&mut self, depth: usize, value: &Value) {
-        match value {
-            Value::Mapping(mapping) => self.mapping(depth, mapping),
-            Value::Scalar(scalar) => {
-                let label = format!("Scalar {}", scalar_label(&scalar.value));
-                self.push(depth, label, &scalar.span);
-            }
-            Value::Sequence(sequence) => {
-                self.push(depth, "Sequence".to_owned(), &sequence.span);
-                for item in &sequence.items {
-                    self.value(depth + 1, item);
-                }
+        if let Value::Mapping(mapping) = value {
+            self.mapping(depth, mapping);
+            return;
+        }
+        self.push_unlocated(depth, value_label(value));
+        if let Value::Sequence(items) = value {
+            for item in items {
+                self.value(depth + 1, item);
             }
         }
     }
@@ -313,7 +356,7 @@ fn check_spans(source: &str, expected: &[(&str, &str)]) {
     let found = rows(source);
     let actual: Vec<(&str, &str)> = found
         .iter()
-        .map(|row| (row.label.as_str(), &source[row.span.clone()]))
+        .map(|row| (row.label.as_str(), &source[row.span.clone().unwrap()]))
         .collect();
     assert_eq!(actual, expected);
 }
@@ -362,7 +405,7 @@ fn assert_nested(source: &str, rows: &[Row]) {
     let mut open: Vec<Range<usize>> = Vec::new();
     let mut merged: Option<(usize, Range<usize>)> = None;
     for row in rows {
-        let span = &row.span;
+        let span = row.span.as_ref().unwrap();
         let label = &row.label;
         assert!(
             span.start <= span.end
@@ -403,6 +446,23 @@ fn assert_nested(source: &str, rows: &[Row]) {
     }
 }
 
+/// The frontmatter `source` opens with as its reader reads it, with spans.
+fn located_frontmatter(source: &str) -> located::Mapping {
+    let frontmatter = parse(source).frontmatter.unwrap().unwrap();
+    read_again(source, &frontmatter)
+}
+
+/// The frontmatter of `source` read again by its reader, which keeps the
+/// span of each value and every place each key is written.
+fn read_again(source: &str, frontmatter: &Frontmatter) -> located::Mapping {
+    let content = line_at(source, frontmatter.span.start).next..frontmatter.span.end - 3;
+    let read = match frontmatter.format {
+        FrontmatterFormat::Toml => super::toml::read(source, content),
+        FrontmatterFormat::Yaml => super::yaml::read(source, content),
+    };
+    read.unwrap().0
+}
+
 /// ` args=Text "..."`, or ` args=Toml {...}` with the pairs as the writer
 /// writes them, else nothing when the args are an empty mapping.
 fn args_label<E>(code_block: &CodeBlock<E>) -> String
@@ -411,7 +471,7 @@ where
 {
     match &code_block.args {
         Args::Text(text) => format!(" args=Text {text:?}"),
-        Args::Toml(mapping) if mapping.pairs.is_empty() => String::new(),
+        Args::Toml(mapping) if mapping.is_empty() => String::new(),
         Args::Toml(_) => {
             let info = Writer::new().info_string(code_block);
             let language = code_block.language.as_deref().unwrap_or_default();
@@ -435,18 +495,27 @@ fn title_label(title: Option<&str>) -> String {
     title.map_or_else(String::new, |written| format!(" title={written:?}"))
 }
 
-fn scalar_label(value: &ScalarValue) -> String {
+/// `Mapping`, `Sequence`, or `Scalar` and the variant and value of any other
+/// value.
+fn value_label(value: &Value) -> String {
     match value {
-        ScalarValue::Boolean(boolean) => format!("Boolean {boolean}"),
-        ScalarValue::Date(date) => format!("Date {}", date_label(*date)),
-        ScalarValue::DateTime(date_time) => format!("DateTime {}", date_time_label(date_time)),
-        ScalarValue::Float(float) => format!("Float {float}"),
-        ScalarValue::Integer(integer) => format!("Integer {integer}"),
-        ScalarValue::LocalDateTime(local) => format!("LocalDateTime {}", local_label(*local)),
-        ScalarValue::NonFinite(non_finite) => format!("NonFinite {non_finite:?}"),
-        ScalarValue::Null => "Null".to_owned(),
-        ScalarValue::String(string) => format!("String {string:?}"),
-        ScalarValue::Time(time) => format!("Time {}", time_label(*time)),
+        Value::Boolean(boolean) => format!("Scalar Boolean {boolean}"),
+        Value::Date(date) => format!("Scalar Date {}", date_label(*date)),
+        Value::DateTime(date_time) => format!("Scalar DateTime {}", date_time_label(*date_time)),
+        Value::Float(float) => format!("Scalar Float {float}"),
+        Value::Integer(integer) => format!("Scalar Integer {integer}"),
+        Value::Mapping(_) => "Mapping".to_owned(),
+        Value::NonFinite(non_finite) => format!("Scalar NonFinite {non_finite:?}"),
+        Value::Null => "Scalar Null".to_owned(),
+        Value::OffsetDateTime(date_time) => {
+            format!(
+                "Scalar OffsetDateTime {}",
+                offset_date_time_label(date_time)
+            )
+        }
+        Value::Sequence(_) => "Sequence".to_owned(),
+        Value::String(string) => format!("Scalar String {string:?}"),
+        Value::Time(time) => format!("Scalar Time {}", time_label(*time)),
     }
 }
 
@@ -472,11 +541,15 @@ fn time_label(time: NaiveTime) -> String {
     }
 }
 
-fn local_label(local: NaiveDateTime) -> String {
-    format!("{}T{}", date_label(local.date()), time_label(local.time()))
+fn date_time_label(date_time: NaiveDateTime) -> String {
+    format!(
+        "{}T{}",
+        date_label(date_time.date()),
+        time_label(date_time.time())
+    )
 }
 
-fn date_time_label(date_time: &DateTime<FixedOffset>) -> String {
+fn offset_date_time_label(date_time: &DateTime<FixedOffset>) -> String {
     let seconds = date_time.offset().local_minus_utc();
     let offset = if seconds == 0_i32 {
         "Z".to_owned()
@@ -485,5 +558,5 @@ fn date_time_label(date_time: &DateTime<FixedOffset>) -> String {
         let minutes = seconds.unsigned_abs() / 60;
         format!("{sign}{:02}:{:02}", minutes / 60, minutes % 60)
     };
-    format!("{}{offset}", local_label(date_time.naive_local()))
+    format!("{}{offset}", date_time_label(date_time.naive_local()))
 }

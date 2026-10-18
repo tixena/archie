@@ -4,9 +4,10 @@
 
 use core::fmt::{self, Write as _};
 
-use crate::parser::ast::{Mapping, NonFinite, ScalarValue, Sequence, Value};
+use crate::parser::ast::{Mapping, NonFinite, Value};
+use crate::parser::located::ScalarValue;
 use crate::parser::scalar;
-use crate::writer::{push_date_time, push_finite, push_local_date_time};
+use crate::writer::{push_date_time, push_finite, push_offset_date_time};
 
 /// The characters that make a plain scalar starting with them something
 /// else: the YAML indicators.
@@ -28,20 +29,20 @@ pub fn frontmatter(mapping: &Mapping) -> String {
 /// The pairs of `mapping`, each key at column `indent`. With `on_entry`, the
 /// first key goes on the line a list entry's `-` started.
 fn block_mapping(out: &mut String, mapping: &Mapping, indent: usize, on_entry: bool) {
-    for (index, (key, pair)) in mapping.pairs.iter().enumerate() {
+    for (index, (key, value)) in mapping.iter().enumerate() {
         if index > 0 || !on_entry {
             push_indent(out, indent);
         }
         push_text(out, key, false);
         out.push(':');
-        after_indicator(out, &pair.value, indent + 2, false);
+        after_indicator(out, value, indent + 2, false);
     }
 }
 
 /// The items of `sequence`, each `-` at column `indent`. With `on_entry`,
 /// the first `-` goes on the line a list entry's `-` started.
-fn block_sequence(out: &mut String, sequence: &Sequence, indent: usize, on_entry: bool) {
-    for (index, item) in sequence.items.iter().enumerate() {
+fn block_sequence(out: &mut String, sequence: &[Value], indent: usize, on_entry: bool) {
+    for (index, item) in sequence.iter().enumerate() {
         if index > 0 || !on_entry {
             push_indent(out, indent);
         }
@@ -56,7 +57,7 @@ fn block_sequence(out: &mut String, sequence: &Sequence, indent: usize, on_entry
 fn after_indicator(out: &mut String, value: &Value, indent: usize, on_entry: bool) {
     let opening = if on_entry { ' ' } else { '\n' };
     match value {
-        Value::Mapping(mapping) if !mapping.pairs.is_empty() => {
+        Value::Mapping(mapping) if !mapping.is_empty() => {
             out.push(opening);
             block_mapping(out, mapping, indent, on_entry);
         }
@@ -64,7 +65,18 @@ fn after_indicator(out: &mut String, value: &Value, indent: usize, on_entry: boo
             out.push(opening);
             block_sequence(out, sequence, indent, on_entry);
         }
-        Value::Mapping(_) | Value::Scalar(_) | Value::Sequence(_) => {
+        Value::Boolean(_)
+        | Value::Date(_)
+        | Value::DateTime(_)
+        | Value::Float(_)
+        | Value::Integer(_)
+        | Value::Mapping(_)
+        | Value::NonFinite(_)
+        | Value::Null
+        | Value::OffsetDateTime(_)
+        | Value::Sequence(_)
+        | Value::String(_)
+        | Value::Time(_) => {
             out.push(' ');
             flow(out, value, false);
             out.push('\n');
@@ -73,34 +85,54 @@ fn after_indicator(out: &mut String, value: &Value, indent: usize, on_entry: boo
 }
 
 /// Whether `sequence` holds a mapping, in itself or in a list inside it.
-fn holds_mapping(sequence: &Sequence) -> bool {
-    sequence.items.iter().any(|item| match item {
-        Value::Mapping(_) => true,
-        Value::Scalar(_) => false,
-        Value::Sequence(inner) => holds_mapping(inner),
+fn holds_mapping(sequence: &[Value]) -> bool {
+    sequence.iter().any(|item| {
+        matches!(item, Value::Mapping(_))
+            || matches!(item, Value::Sequence(inner) if holds_mapping(inner))
     })
 }
 
 /// `value` on one line, in flow form, inside a flow collection when
-/// `in_flow`.
+/// `in_flow`: a date or a date-time after the tag `!!timestamp`, a time of
+/// day as quoted text, `null` for a null.
 fn flow(out: &mut String, value: &Value, in_flow: bool) {
     match value {
+        Value::Boolean(boolean) => out.push_str(if *boolean { "true" } else { "false" }),
+        Value::Date(date) => {
+            let _: fmt::Result = write!(out, "!!timestamp {date}");
+        }
+        Value::DateTime(date_time) => {
+            out.push_str("!!timestamp ");
+            push_date_time(out, date_time);
+        }
+        Value::Float(float) => match NonFinite::of(*float) {
+            Some(non_finite) => push_non_finite(out, non_finite),
+            None => push_finite(out, *float),
+        },
+        Value::Integer(integer) => {
+            let _: fmt::Result = write!(out, "{integer}");
+        }
         Value::Mapping(mapping) => {
             out.push('{');
-            for (index, (key, pair)) in mapping.pairs.iter().enumerate() {
+            for (index, (key, item)) in mapping.iter().enumerate() {
                 if index > 0 {
                     out.push_str(", ");
                 }
                 push_text(out, key, true);
                 out.push_str(": ");
-                flow(out, &pair.value, true);
+                flow(out, item, true);
             }
             out.push('}');
         }
-        Value::Scalar(scalar) => push_scalar(out, &scalar.value, in_flow),
+        Value::NonFinite(non_finite) => push_non_finite(out, *non_finite),
+        Value::Null => out.push_str("null"),
+        Value::OffsetDateTime(date_time) => {
+            out.push_str("!!timestamp ");
+            push_offset_date_time(out, date_time);
+        }
         Value::Sequence(sequence) => {
             out.push('[');
-            for (index, item) in sequence.items.iter().enumerate() {
+            for (index, item) in sequence.iter().enumerate() {
                 if index > 0 {
                     out.push_str(", ");
                 }
@@ -108,36 +140,8 @@ fn flow(out: &mut String, value: &Value, in_flow: bool) {
             }
             out.push(']');
         }
-    }
-}
-
-/// A date or a date-time after the tag `!!timestamp`, a time of day as
-/// quoted text, `null` for a null.
-fn push_scalar(out: &mut String, value: &ScalarValue, in_flow: bool) {
-    match value {
-        ScalarValue::Boolean(boolean) => out.push_str(if *boolean { "true" } else { "false" }),
-        ScalarValue::Date(date) => {
-            let _: fmt::Result = write!(out, "!!timestamp {date}");
-        }
-        ScalarValue::DateTime(date_time) => {
-            out.push_str("!!timestamp ");
-            push_date_time(out, date_time);
-        }
-        ScalarValue::Float(float) => match NonFinite::of(*float) {
-            Some(non_finite) => push_non_finite(out, non_finite),
-            None => push_finite(out, *float),
-        },
-        ScalarValue::Integer(integer) => {
-            let _: fmt::Result = write!(out, "{integer}");
-        }
-        ScalarValue::LocalDateTime(date_time) => {
-            out.push_str("!!timestamp ");
-            push_local_date_time(out, date_time);
-        }
-        ScalarValue::NonFinite(non_finite) => push_non_finite(out, *non_finite),
-        ScalarValue::Null => out.push_str("null"),
-        ScalarValue::String(text) => push_text(out, text, in_flow),
-        ScalarValue::Time(time) => {
+        Value::String(text) => push_text(out, text, in_flow),
+        Value::Time(time) => {
             let _: fmt::Result = write!(out, "\"{time}\"");
         }
     }
@@ -179,7 +183,8 @@ fn push_text(out: &mut String, text: &str, in_flow: bool) {
 /// a key, a comment, an indicator, a flow collection's end, or text without
 /// the spaces around it or its control characters. Text in the form of a time
 /// of day is quoted as a time of day is, so a second write keeps it. Text of
-/// an integer too large for 64 bits is quoted too: archie reads one as text.
+/// an integer too large for 64 bits, or of a float too large for a float, is
+/// quoted too: archie reads one as text.
 fn needs_quotes(text: &str, in_flow: bool) -> bool {
     text.starts_with(INDICATORS)
         || text.starts_with(' ')
@@ -190,6 +195,7 @@ fn needs_quotes(text: &str, in_flow: bool) -> bool {
         || (in_flow && text.contains(FLOW_INDICATORS))
         || scalar::is_time(text)
         || scalar::is_oversized_integer(text)
+        || scalar::is_oversized_float(text)
         || !matches!(scalar::yaml(text), ScalarValue::String(_))
 }
 

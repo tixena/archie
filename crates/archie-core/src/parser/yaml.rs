@@ -7,10 +7,10 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use crate::parser::ast::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::cursor::{self, Dropped, Mark};
 use crate::parser::error::ParseError;
 use crate::parser::frontmatter::{Stop, caught, finish, insert, nest, undropped};
+use crate::parser::located::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
 use crate::parser::scalar;
 
 /// How many values the anchors and aliases of one frontmatter may copy:
@@ -2087,9 +2087,9 @@ fn scalar_text(cursor: &Cursor<'_>, value: ScalarValue, span: &Range<usize>) -> 
         | ScalarValue::DateTime(_)
         | ScalarValue::Float(_)
         | ScalarValue::Integer(_)
-        | ScalarValue::LocalDateTime(_)
         | ScalarValue::NonFinite(_)
         | ScalarValue::Null
+        | ScalarValue::OffsetDateTime(_)
         | ScalarValue::Time(_) => folded(cursor.slice(span.clone())),
     }
 }
@@ -2099,6 +2099,9 @@ fn scalar_text(cursor: &Cursor<'_>, value: ScalarValue, span: &Range<usize>) -> 
 fn typed(name: &str, text: &str) -> Option<ScalarValue> {
     match (name, scalar::yaml(text)) {
         ("str", _) => Some(ScalarValue::String(text.to_owned())),
+        ("float", oversized @ ScalarValue::String(_)) if scalar::is_oversized_float(text) => {
+            Some(oversized)
+        }
         ("float", ScalarValue::Integer(_) | ScalarValue::String(_)) => scalar::decimal_float(text),
         ("int", oversized @ ScalarValue::String(_)) if scalar::is_oversized_integer(text) => {
             Some(oversized)
@@ -2111,7 +2114,7 @@ fn typed(name: &str, text: &str) -> Option<ScalarValue> {
             "timestamp",
             fitting @ (ScalarValue::Date(_)
             | ScalarValue::DateTime(_)
-            | ScalarValue::LocalDateTime(_)),
+            | ScalarValue::OffsetDateTime(_)),
         ) => Some(fitting),
         _ => None,
     }
@@ -2250,9 +2253,9 @@ const fn text_length(scalar: &Scalar) -> usize {
         | ScalarValue::DateTime(_)
         | ScalarValue::Float(_)
         | ScalarValue::Integer(_)
-        | ScalarValue::LocalDateTime(_)
         | ScalarValue::NonFinite(_)
         | ScalarValue::Null
+        | ScalarValue::OffsetDateTime(_)
         | ScalarValue::Time(_) => scalar.span.end - scalar.span.start,
     }
 }
