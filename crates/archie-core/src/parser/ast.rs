@@ -5,10 +5,17 @@
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tixschema::model_schema;
 
 use crate::parser::extension::{Extension, Markdown, markdown_schema};
+
+/// The stack left below which `grown` reads on a new segment. It holds the
+/// `validate()` that tixschema runs over the subtree each grown read returns.
+const RED_ZONE: usize = 3 * 1024 * 1024;
+
+/// The size of each segment `grown` adds.
+const GROWTH: usize = 4 * 1024 * 1024;
 
 /// The type an extension gave a node, or `None`. Boxed, because a markdown
 /// block can hold a markdown block.
@@ -36,6 +43,7 @@ where
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
+#[serde(tag = "t", rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum RawDocument<E = Markdown>
 where
@@ -51,7 +59,9 @@ where
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct InvalidDocument {
+    #[serde(rename = "bd")]
     pub body: MarkdownBlock<Markdown>,
+    #[serde(rename = "data")]
     pub frontmatter: InvalidFrontmatter,
 }
 
@@ -61,8 +71,11 @@ pub struct InvalidDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct InvalidFrontmatter {
+    #[serde(rename = "er")]
     pub error: String,
+    #[serde(rename = "fo")]
     pub format: FrontmatterFormat,
+    #[serde(rename = "tx")]
     pub text: String,
 }
 
@@ -75,7 +88,9 @@ pub struct Document<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "bd")]
     pub body: MarkdownBlock<E>,
+    #[serde(rename = "data")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frontmatter: Option<Mapping>,
     #[serde(skip)]
@@ -85,6 +100,7 @@ where
 /// The syntax a frontmatter block is written in.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum FrontmatterFormat {
     Toml,
@@ -99,6 +115,7 @@ pub type Mapping = IndexMap<String, Value>;
 /// What a key maps to, or what a list holds.
 #[model_schema()]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "t", content = "v", rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Value {
     Boolean(bool),
@@ -108,12 +125,14 @@ pub enum Value {
     /// A finite float.
     Float(f64),
     Integer(i64),
+    #[serde(deserialize_with = "grown")]
     Mapping(Mapping),
     NonFinite(NonFinite),
     /// YAML only: TOML has no null.
     Null,
     /// A date and time with an offset, such as `1979-05-27T07:32:00+02:00`.
     OffsetDateTime(DateTime<FixedOffset>),
+    #[serde(deserialize_with = "grown")]
     Sequence(Vec<Self>),
     String(String),
     Time(NaiveTime),
@@ -123,6 +142,7 @@ pub enum Value {
 /// YAML; `inf`, `-inf` and `nan` in TOML.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum NonFinite {
     Infinity,
@@ -158,6 +178,8 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "se")]
+    #[serde(deserialize_with = "grown")]
     pub sections: Vec<Section<E>>,
 }
 
@@ -165,6 +187,7 @@ where
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
+#[serde(tag = "t", rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Block<E = Markdown>
 where
@@ -190,6 +213,7 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "v")]
     pub value: String,
 }
 
@@ -203,9 +227,11 @@ pub struct Html<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "co")]
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "v")]
     pub value: String,
 }
 
@@ -235,11 +261,15 @@ pub struct Section<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "bl")]
     pub blocks: Vec<Block<E>>,
+    #[serde(rename = "hd")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading: Option<Heading<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "ss")]
+    #[serde(deserialize_with = "grown")]
     pub subsections: Vec<Self>,
 }
 
@@ -252,6 +282,7 @@ pub struct Heading<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ch")]
     pub children: Vec<Inline<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -268,6 +299,7 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "li")]
     pub lines: Vec<Line<E>>,
 }
 
@@ -280,6 +312,7 @@ pub struct Line<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ch")]
     pub children: Vec<Inline<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -299,10 +332,13 @@ pub struct List<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "it")]
     pub items: Vec<Item<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "lo")]
     pub loose: bool,
+    #[serde(rename = "st")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<u64>,
 }
@@ -316,6 +352,7 @@ pub struct Item<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "bd")]
     pub body: MarkdownBlock<E>,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -335,17 +372,21 @@ pub struct CodeBlock<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ar")]
     pub args: Args,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "la")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    #[serde(rename = "v")]
     pub value: String,
 }
 
 /// The rest of a fenced code block's info string, after its language.
 #[model_schema()]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "t", content = "v", rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Args {
     /// The rest as written, when it is not the inside of a TOML inline table.
@@ -365,11 +406,15 @@ pub struct Table<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "al")]
     pub alignments: Vec<Alignment>,
+    #[serde(rename = "fo")]
     pub format: TableFormat,
+    #[serde(rename = "he")]
     pub head: Vec<TableRow<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "ro")]
     pub rows: Vec<TableRow<E>>,
 }
 
@@ -382,6 +427,7 @@ pub struct TableRow<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ce")]
     pub cells: Vec<TableCell<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -396,6 +442,7 @@ pub struct TableCell<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "bd")]
     pub body: MarkdownBlock<E>,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -404,6 +451,7 @@ where
 /// How a column's cells are aligned.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Alignment {
     Center,
@@ -415,6 +463,7 @@ pub enum Alignment {
 /// The syntax a table is written in.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum TableFormat {
     /// `+---+` borders and `|` walls.
@@ -429,6 +478,7 @@ pub enum TableFormat {
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
+#[serde(tag = "t", rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Inline<E = Markdown>
 where
@@ -449,6 +499,7 @@ where
 /// per line.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Continues {
     /// A middle piece: it goes on from the line before and into the line after.
@@ -473,6 +524,7 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "v")]
     pub value: String,
 }
 
@@ -485,7 +537,10 @@ pub struct Emphasis<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ch")]
+    #[serde(deserialize_with = "grown")]
     pub children: Vec<Inline<E>>,
+    #[serde(rename = "co")]
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -500,7 +555,10 @@ pub struct Strong<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ch")]
+    #[serde(deserialize_with = "grown")]
     pub children: Vec<Inline<E>>,
+    #[serde(rename = "co")]
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
@@ -534,12 +592,18 @@ pub struct Link<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "ch")]
+    #[serde(deserialize_with = "grown")]
     pub children: Vec<Inline<E>>,
+    #[serde(rename = "co")]
     pub continues: Continues,
+    #[serde(rename = "fr")]
     pub form: LinkForm,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "tg")]
     pub target: String,
+    #[serde(rename = "ti")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -547,6 +611,7 @@ where
 /// How a link or an image is written.
 #[model_schema()]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum LinkForm {
     /// `[text](target)`, or `![alt](target)` for an image.
@@ -567,12 +632,17 @@ pub struct Image<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "at")]
     pub alt: String,
+    #[serde(rename = "co")]
     pub continues: Continues,
+    #[serde(rename = "fr")]
     pub form: LinkForm,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "tg")]
     pub target: String,
+    #[serde(rename = "ti")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -586,8 +656,20 @@ pub struct Code<E = Markdown>
 where
     E: Extension,
 {
+    #[serde(rename = "co")]
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
+    #[serde(rename = "v")]
     pub value: String,
+}
+
+/// Reads a field with the stack grown when little is left: serde reads an
+/// internally tagged enum from a buffer that `serde_stacker` does not guard.
+fn grown<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    stacker::maybe_grow(RED_ZONE, GROWTH, || T::deserialize(deserializer))
 }

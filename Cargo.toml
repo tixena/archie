@@ -23,6 +23,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["alloc", "s
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["unbounded_depth"] }
 serde_stacker = "0.1"
+stacker = "0.1.25"
 
 # TypeScript type + Zod schema generation from Rust models
 tixschema = { git = "https://github.com/tixena/tixschema.git", features = ["chrono", "indexmap"] }

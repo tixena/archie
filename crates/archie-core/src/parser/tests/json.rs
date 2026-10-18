@@ -46,9 +46,25 @@ fn the_sample_document_reads_back_from_json() {
     assert_eq!(
         json,
         concat!(
-            r#"{"Valid":{"body":{"sections":[{"blocks":[{"Paragraph":{"lines":[{"children":"#,
-            r#"[{"Text":{"value":"text"}}]}]}}],"heading":{"children":[{"Text":"#,
-            r#"{"value":"A"}}]},"subsections":[]}]},"frontmatter":{"title":{"String":"Notes"}}}}"#,
+            r#"{"t":"valid","bd":{"se":[{"bl":[{"t":"paragraph","li":[{"ch":[{"t":"text","#,
+            r#""v":"text"}]}]}],"hd":{"ch":[{"t":"text","v":"A"}]},"ss":[]}]},"#,
+            r#""data":{"title":{"t":"string","v":"Notes"}}}"#,
+        )
+    );
+    let back: RawDocument = from_json(&json).unwrap();
+    assert_eq!(back, document);
+}
+
+#[test]
+fn the_json_names_each_field_short_and_each_tag_in_full() {
+    let document = parse("---\nstatus: open\n---\n# Task\n\ntext\n").document;
+    let json = to_json(&document).unwrap();
+    assert_eq!(
+        json,
+        concat!(
+            r#"{"t":"valid","bd":{"se":[{"bl":[{"t":"paragraph","li":[{"ch":[{"t":"text","#,
+            r#""v":"text"}]}]}],"hd":{"ch":[{"t":"text","v":"Task"}]},"ss":[]}]},"#,
+            r#""data":{"status":{"t":"string","v":"open"}}}"#,
         )
     );
     let back: RawDocument = from_json(&json).unwrap();
@@ -82,10 +98,10 @@ fn an_invalid_document_is_written_to_json_and_read_back() {
     let document = parse(source).document;
     let json = to_json(&document).unwrap();
     assert!(
-        json.starts_with(r#"{"Invalid":{"body":"#)
+        json.starts_with(r#"{"t":"invalid","bd":"#)
             && json.contains(concat!(
-                r#""frontmatter":{"error":"expected `,` or `]` in the list","#,
-                r#""format":"Yaml","text":"{a: 1, b: [}"}"#,
+                r#""data":{"er":"expected `,` or `]` in the list","#,
+                r#""fo":"yaml","tx":"{a: 1, b: [}"}"#,
             )),
         "{json}"
     );
@@ -95,9 +111,22 @@ fn an_invalid_document_is_written_to_json_and_read_back() {
     rebuilds_from_json(source);
     let definition = <RawDocument>::ts_definition();
     assert!(
-        definition.contains(r#""Invalid": InvalidDocument;"#)
-            && definition.contains(r#""Valid": Document<E>;"#),
+        definition.contains("t: \"invalid\";\n} & InvalidDocument")
+            && definition.contains("t: \"valid\";\n} & Document<E>;"),
         "{definition}"
+    );
+    let invalid = InvalidDocument::ts_definition();
+    let frontmatter = InvalidFrontmatter::ts_definition();
+    assert!(
+        invalid.contains("bd: MarkdownBlock<Markdown>;")
+            && invalid.contains("data: InvalidFrontmatter;"),
+        "{invalid}"
+    );
+    assert!(
+        frontmatter.contains("er: string;")
+            && frontmatter.contains("fo: FrontmatterFormat;")
+            && frontmatter.contains("tx: string;"),
+        "{frontmatter}"
     );
 }
 
@@ -123,19 +152,19 @@ fn a_tree_at_the_caps_reads_back_from_json() {
 
 #[test]
 fn json_that_is_not_a_document_does_not_read() {
-    for text in ["{}", r#"{"Valid":{}}"#] {
+    for text in ["{}", r#"{"t":"valid"}"#] {
         let read: Result<RawDocument, _> = from_json(text);
         assert!(read.is_err(), "{text}");
     }
-    let read: Result<RawDocument, _> = from_json(r#"{"Valid":{}}"#);
+    let read: Result<RawDocument, _> = from_json(r#"{"t":"valid"}"#);
     let error = read.unwrap_err().to_string();
-    assert!(error.starts_with("missing field `body`"), "{error}");
+    assert!(error.starts_with("missing field `bd`"), "{error}");
 }
 
 #[test]
 fn no_node_is_written_with_a_span() {
     let json = to_json(&parse("  text\n").document).unwrap();
-    assert!(json.contains(r#"{"Text":{"value":"text"}}"#), "{json}");
+    assert!(json.contains(r#"{"t":"text","v":"text"}"#), "{json}");
     assert!(!json.contains("span"), "{json}");
 }
 
@@ -211,18 +240,28 @@ fn a_non_finite_float_reads_back_from_json() {
 
 #[test]
 fn a_non_finite_float_is_written_as_its_name() {
-    let json = to_json(&parse("---\nx: .nan\n---\n").document).unwrap();
-    assert!(json.contains(r#""x":{"NonFinite":"Nan"}"#), "{json}");
+    for (source, name) in [
+        ("---\nx: .nan\n---\n", "nan"),
+        ("---\nx: .inf\n---\n", "infinity"),
+        ("---\nx: -.inf\n---\n", "negative-infinity"),
+    ] {
+        let json = to_json(&parse(source).document).unwrap();
+        let written = format!(r#""x":{{"t":"non-finite","v":"{name}"}}"#);
+        assert!(json.contains(&written), "{json}");
+    }
 }
 
 #[test]
 fn the_typescript_of_a_value_names_the_non_finite_floats() {
     let value = Value::ts_definition();
     let non_finite = NonFinite::ts_definition();
-    assert!(value.contains(r#""NonFinite": NonFinite;"#), "{value}");
+    assert!(
+        value.contains("t: \"non-finite\";\n  /** Tuple value */\n  v: NonFinite;"),
+        "{value}"
+    );
     assert!(
         non_finite.contains(
-            "export type NonFinite =\n  | \"Infinity\"\n  | \"Nan\"\n  | \"NegativeInfinity\";"
+            "export type NonFinite =\n  | \"infinity\"\n  | \"nan\"\n  | \"negative-infinity\";"
         ),
         "{non_finite}"
     );
@@ -233,13 +272,33 @@ fn the_typescript_of_a_document_names_its_nodes() {
     let raw = <RawDocument>::ts_definition();
     let document = <Document>::ts_definition();
     let block = <MarkdownBlock>::ts_definition();
-    assert!(raw.contains(r#""Valid": Document<E>;"#), "{raw}");
-    assert!(document.contains("body: MarkdownBlock<E>;"), "{document}");
+    assert!(raw.contains("t: \"valid\";\n} & Document<E>;"), "{raw}");
+    assert!(document.contains("bd: MarkdownBlock<E>;"), "{document}");
     assert!(
-        document.contains("frontmatter: Mapping | undefined;"),
+        document.contains("data: Mapping | undefined;"),
         "{document}"
     );
-    assert!(block.contains("sections: Array<Section<E>>;"), "{block}");
+    assert!(block.contains("se: Array<Section<E>>;"), "{block}");
+}
+
+#[test]
+fn the_zod_schema_of_a_document_names_its_fields_short_and_its_tags_in_full() {
+    let raw = <RawDocument>::zod_schema();
+    let document = <Document>::zod_schema();
+    let value = Value::zod_schema();
+    assert!(
+        raw.contains("t: z.literal(\"invalid\"),") && raw.contains("t: z.literal(\"valid\"),"),
+        "{raw}"
+    );
+    assert!(
+        document.contains("get bd() {") && document.contains("get data() {"),
+        "{document}"
+    );
+    assert!(
+        value.contains("z.discriminatedUnion(\"t\", [")
+            && value.contains("t: z.literal(\"string\"),\n  v: z.string(),"),
+        "{value}"
+    );
 }
 
 #[test]
