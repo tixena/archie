@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use archie_core::forms::{DecodeError, Form, FormError, RKYV_MAGIC, RKYV_VERSION};
-use archie_core::parser::ast::FrontmatterFormat;
-use archie_core::parser::parse;
+use archie_core::parser::ast::{FrontmatterFormat, RawDocument};
+use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
 use os_shim::System as _;
 use os_shim::mock::MemorySystem;
@@ -101,7 +101,10 @@ async fn the_sample_copies_a_list_through_json() {
 
 async fn each_fixture_copied(store: &AnyStore<'_>) {
     for (index, source) in FIXTURES.iter().enumerate() {
-        let archie = write(&parse(source).document, &WriteOptions::default()).unwrap();
+        let document = parse(source).document;
+        let archie = write(&document, &WriteOptions::default()).unwrap();
+        let kept: RawDocument = from_json(&to_json(&document).unwrap()).unwrap();
+        let through_json = write(&kept, &WriteOptions::default()).unwrap();
         let file = StorePath::new(&format!("fixtures/{index}.md")).unwrap();
         store
             .write(&file, source.as_bytes(), &Precondition::None)
@@ -112,7 +115,12 @@ async fn each_fixture_copied(store: &AnyStore<'_>) {
             let second = StorePath::new(&format!("{form:?}/again/{index}.md")).unwrap();
             let revision = copy(store, &file, &first, form).await;
             let copied = store.read(&first).await.unwrap().bytes;
-            assert_eq!(copied, archie.as_bytes(), "{form:?}: {source}");
+            let expected = if form == Form::Json {
+                &through_json
+            } else {
+                &archie
+            };
+            assert_eq!(copied, expected.as_bytes(), "{form:?}: {source}");
             assert_eq!(copy(store, &first, &second, form).await, revision);
             let again = store.read(&second).await.unwrap().bytes;
             assert_eq!(again, copied, "{form:?}: {source}");

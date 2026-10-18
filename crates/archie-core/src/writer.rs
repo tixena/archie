@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::parser::ast::{
     ArchivedRawDocument, Args, Block, CodeBlock, FrontmatterFormat, Heading, Kind, Line, List,
-    Mapping, MarkdownBlock, NonFinite, Paragraph, RawDocument, Section, Value,
+    Mapping, MarkdownBlock, Paragraph, RawDocument, Section, Value,
 };
 use crate::parser::extension::{Extension, Written};
 use crate::parser::frontmatter;
@@ -62,7 +62,6 @@ enum Scalar<'value> {
     DateTime(NaiveDateTime),
     Float(f64),
     Integer(i64),
-    NonFinite(NonFinite),
     Null,
     OffsetDateTime(DateTime<FixedOffset>),
     String(&'value str),
@@ -930,6 +929,21 @@ fn push_offset_date_time(out: &mut String, date_time: &DateTime<FixedOffset>) {
     }
 }
 
+/// The literal of a float that is not a finite number, of `literals`, its
+/// syntax's `nan`, `inf` and `-inf`; `None` for a finite float.
+const fn non_finite(float: f64, literals: [&str; 3]) -> Option<&str> {
+    let [nan, infinity, negative_infinity] = literals;
+    if float.is_nan() {
+        Some(nan)
+    } else if float.is_finite() {
+        None
+    } else if float.is_sign_negative() {
+        Some(negative_infinity)
+    } else {
+        Some(infinity)
+    }
+}
+
 /// A finite float as the shortest text that reads back as it, with `.0`
 /// when that text would read as an integer.
 fn push_finite(out: &mut String, float: f64) {
@@ -949,8 +963,7 @@ fn shape(value: &Value) -> Shape<'_, Mapping, Value> {
         Value::Float(float) => Shape::Scalar(Scalar::Float(*float)),
         Value::Integer(integer) => Shape::Scalar(Scalar::Integer(*integer)),
         Value::Mapping(mapping) => Shape::Mapping(mapping),
-        Value::NonFinite(non_finite) => Shape::Scalar(Scalar::NonFinite(*non_finite)),
-        Value::Null => Shape::Scalar(Scalar::Null),
+        Value::Null(()) => Shape::Scalar(Scalar::Null),
         Value::OffsetDateTime(date_time) => Shape::Scalar(Scalar::OffsetDateTime(*date_time)),
         Value::Sequence(sequence) => Shape::Sequence(sequence),
         Value::String(text) => Shape::Scalar(Scalar::String(text)),

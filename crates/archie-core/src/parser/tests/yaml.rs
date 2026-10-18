@@ -3,7 +3,7 @@ use core::ops::Range;
 use chrono::{DateTime, NaiveDate, NaiveTime};
 
 use super::{check, check_spans, located_frontmatter};
-use crate::parser::ast::{Mapping, NonFinite, Value};
+use crate::parser::ast::{Mapping, Value};
 use crate::parser::error::ParseError;
 use crate::parser::{read_toml, read_toml_lines, read_yaml, read_yaml_lines, toml, yaml};
 
@@ -314,7 +314,7 @@ fn the_readers_give_plain_values_with_a_key_written_twice_as_one_list() {
             ("status".to_owned(), Value::String("open".to_owned())),
             ("priority".to_owned(), Value::Integer(2)),
             ("big".to_owned(), Value::String("1e400".to_owned())),
-            ("x".to_owned(), Value::NonFinite(NonFinite::Infinity)),
+            ("x".to_owned(), Value::String(".inf".to_owned())),
             (
                 "tag".to_owned(),
                 Value::Sequence(vec![
@@ -728,7 +728,7 @@ quoted: {"a b": 1, 'c': "d"}
 }
 
 #[test]
-fn a_non_finite_float_reads_as_its_name() {
+fn a_non_finite_float_reads_as_its_text() {
     check(
         "\
 ---
@@ -738,19 +738,19 @@ down: -.inf
 nothing: .NaN
 ---
 ",
-        "Document
+        r#"Document
   Frontmatter format=Yaml
     Mapping
       Pair key=up
-        Scalar NonFinite Infinity
+        Scalar String ".Inf"
       Pair key=plus
-        Scalar NonFinite Infinity
+        Scalar String "+.INF"
       Pair key=down
-        Scalar NonFinite NegativeInfinity
+        Scalar String "-.inf"
       Pair key=nothing
-        Scalar NonFinite Nan
+        Scalar String ".NaN"
   MarkdownBlock
-",
+"#,
     );
 }
 
@@ -769,22 +769,6 @@ fn digits_too_large_for_a_float_read_as_their_text_under_a_float_tag_too() {
         Scalar String "1e400"
   MarkdownBlock
 "#,
-    );
-}
-
-#[test]
-fn a_float_tag_reads_a_non_finite_float() {
-    check(
-        "---\nup: !!float .inf\nnothing: !!float .nan\n---\n",
-        "Document
-  Frontmatter format=Yaml
-    Mapping
-      Pair key=up
-        Scalar NonFinite Infinity
-      Pair key=nothing
-        Scalar NonFinite Nan
-  MarkdownBlock
-",
     );
 }
 

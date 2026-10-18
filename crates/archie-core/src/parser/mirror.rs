@@ -127,8 +127,7 @@ pub enum ValueMirror {
     Float(f64),
     Integer(i64),
     Mapping(#[rkyv(omit_bounds, with = MappingMirror)] ast::Mapping),
-    NonFinite(#[rkyv(with = NonFiniteMirror)] ast::NonFinite),
-    Null,
+    Null(()),
     OffsetDateTime(#[rkyv(with = AsLocalAndOffset)] DateTime<FixedOffset>),
     Sequence(#[rkyv(omit_bounds, with = Map<ValueMirror>)] Vec<ast::Value>),
     String(String),
@@ -144,31 +143,11 @@ impl From<ValueMirror> for ast::Value {
             ValueMirror::Float(float) => Self::Float(float),
             ValueMirror::Integer(integer) => Self::Integer(integer),
             ValueMirror::Mapping(mapping) => Self::Mapping(mapping),
-            ValueMirror::NonFinite(non_finite) => Self::NonFinite(non_finite),
-            ValueMirror::Null => Self::Null,
+            ValueMirror::Null(()) => Self::Null(()),
             ValueMirror::OffsetDateTime(date_time) => Self::OffsetDateTime(date_time),
             ValueMirror::Sequence(sequence) => Self::Sequence(sequence),
             ValueMirror::String(string) => Self::String(string),
             ValueMirror::Time(time) => Self::Time(time),
-        }
-    }
-}
-
-#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
-#[rkyv(remote = ast::NonFinite)]
-#[rkyv(attr(non_exhaustive))]
-pub enum NonFiniteMirror {
-    Infinity,
-    Nan,
-    NegativeInfinity,
-}
-
-impl From<NonFiniteMirror> for ast::NonFinite {
-    fn from(mirror: NonFiniteMirror) -> Self {
-        match mirror {
-            NonFiniteMirror::Infinity => Self::Infinity,
-            NonFiniteMirror::Nan => Self::Nan,
-            NonFiniteMirror::NegativeInfinity => Self::NegativeInfinity,
         }
     }
 }

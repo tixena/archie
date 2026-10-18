@@ -2,13 +2,15 @@
 //! publish. The JSON holds the markdown's own tree: no node writes its
 //! `kind`, and `rebuild_with` builds it again.
 
+use chrono::{DateTime, NaiveDate, NaiveTime};
+
 use super::blocks::{nested_grid_tables, nested_markdown_blocks};
 use super::extension::Comments;
 use super::{on_two_megabytes, valid_body};
 use crate::parser::ast::{
     Args, Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Inline,
-    InvalidDocument, InvalidFrontmatter, Item, Kind, Line, LineBreak, Link, List, MarkdownBlock,
-    NonFinite, Paragraph, RawDocument, Section, Strong, Table, TableCell, TableRow, Text,
+    InvalidDocument, InvalidFrontmatter, Item, Kind, Line, LineBreak, Link, List, Mapping,
+    MarkdownBlock, Paragraph, RawDocument, Section, Strong, Table, TableCell, TableRow, Text,
     ThematicBreak, Value,
 };
 use crate::parser::error::RebuildError;
@@ -17,6 +19,25 @@ use crate::parser::inline::INLINE_CAP;
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{ParseOptions, from_json, parse, parse_with, rebuild_with, to_json};
 use crate::writer::{WriteOptions, write};
+
+/// A TOML frontmatter holding each kind of value a record stores.
+const SAMPLE: &str = r#"+++
+title = "Notes"
+status = "open"
+due = 2026-10-20
+priority = 2
+ratio = 0.5
+draft = false
+big = inf
+tags = ["parser", "design"]
+starts = 07:32:00
+offset = 2026-10-20T09:00:00+02:00
+local = 2026-10-20T09:00:00
+
+[owner]
+name = "Ada"
++++
+"#;
 
 /// Parses `source`, writes the tree to JSON and reads it back: the same
 /// tree, every `kind` empty.
@@ -48,7 +69,7 @@ fn the_sample_document_reads_back_from_json() {
         concat!(
             r#"{"t":"valid","bd":{"se":[{"bl":[{"t":"paragraph","li":[{"ch":[{"t":"text","#,
             r#""v":"text"}]}]}],"hd":{"ch":[{"t":"text","v":"A"}]},"ss":[]}]},"#,
-            r#""data":{"title":{"t":"string","v":"Notes"}}}"#,
+            r#""data":{"title":"Notes"}}"#,
         )
     );
     let back: RawDocument = from_json(&json).unwrap();
@@ -64,7 +85,7 @@ fn the_json_names_each_field_short_and_each_tag_in_full() {
         concat!(
             r#"{"t":"valid","bd":{"se":[{"bl":[{"t":"paragraph","li":[{"ch":[{"t":"text","#,
             r#""v":"text"}]}]}],"hd":{"ch":[{"t":"text","v":"Task"}]},"ss":[]}]},"#,
-            r#""data":{"status":{"t":"string","v":"open"}}}"#,
+            r#""data":{"status":"open"}}"#,
         )
     );
     let back: RawDocument = from_json(&json).unwrap();
@@ -193,7 +214,7 @@ fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
     if let RawDocument::Valid(valid) = &mut parsed
         && let Some(mapping) = &mut valid.frontmatter
     {
-        mapping["title"] = Value::Null;
+        mapping["title"] = Value::Null(());
     }
     let back: RawDocument<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options).unwrap();
@@ -213,7 +234,7 @@ fn a_null_in_the_toml_args_of_a_code_block_fails_the_rebuild_naming_the_key() {
         && let Block::CodeBlock(code) = &mut valid.body.sections[0].blocks[0]
         && let Args::Toml(mapping) = &mut code.args
     {
-        mapping["a"] = Value::Null;
+        mapping["a"] = Value::Null(());
     }
     let back: RawDocument<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options);
@@ -224,47 +245,118 @@ fn a_null_in_the_toml_args_of_a_code_block_fails_the_rebuild_naming_the_key() {
 }
 
 #[test]
-fn a_non_finite_float_reads_back_from_json() {
-    for (source, value) in [
-        ("---\nx: .nan\n---\n", NonFinite::Nan),
-        ("---\nx: .inf\n---\n", NonFinite::Infinity),
-        ("---\nx: -.inf\n---\n", NonFinite::NegativeInfinity),
-        ("+++\nx = nan\n+++\n", NonFinite::Nan),
+fn the_sample_frontmatter_is_written_to_json_as_plain_values_and_read_back() {
+    let document = parse(SAMPLE).document;
+    let json = to_json(&document).unwrap();
+    assert_eq!(
+        json,
+        concat!(
+            r#"{"t":"valid","bd":{"se":[]},"data":{"title":"Notes","status":"open","#,
+            r#""due":{"$date":{"$numberLong":"1792454400000"}},"priority":2,"ratio":0.5,"#,
+            r#""draft":false,"big":"inf","tags":["parser","design"],"#,
+            r#""starts":{"t":"time","v":"07:32:00"},"#,
+            r#""offset":{"$date":{"$numberLong":"1792479600000"}},"#,
+            r#""local":{"$date":{"$numberLong":"1792486800000"}},"owner":{"name":"Ada"}}}"#,
+        )
+    );
+    let back: RawDocument = from_json(&json).unwrap();
+    let in_utc = |text: &str| Value::OffsetDateTime(DateTime::parse_from_rfc3339(text).unwrap());
+    let read = mapping(vec![
+        ("title", text("Notes")),
+        ("status", text("open")),
+        (
+            "due",
+            Value::Date(NaiveDate::from_ymd_opt(2026, 10, 20).unwrap()),
+        ),
+        ("priority", Value::Integer(2)),
+        ("ratio", Value::Float(0.5)),
+        ("draft", Value::Boolean(false)),
+        ("big", text("inf")),
+        (
+            "tags",
+            Value::Sequence(vec![text("parser"), text("design")]),
+        ),
+        (
+            "starts",
+            Value::Time(NaiveTime::from_hms_opt(7, 32, 0).unwrap()),
+        ),
+        ("offset", in_utc("2026-10-20T07:00:00Z")),
+        ("local", in_utc("2026-10-20T09:00:00Z")),
+        (
+            "owner",
+            Value::Mapping(mapping(vec![("name", text("Ada"))])),
+        ),
+    ]);
+    let frontmatter = frontmatter(&back);
+    assert_eq!(frontmatter, &read);
+    for key in ["offset", "local"] {
+        assert!(
+            matches!(&frontmatter[key], Value::OffsetDateTime(at) if at.offset().local_minus_utc() == 0_i32),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn a_null_is_written_to_json_as_null_and_read_back() {
+    let document = parse("---\nnothing: null\n---\n").document;
+    let json = to_json(&document).unwrap();
+    assert!(json.ends_with(r#""data":{"nothing":null}}"#), "{json}");
+    let back: RawDocument = from_json(&json).unwrap();
+    assert_eq!(scalar(&back, "nothing"), Value::Null(()));
+}
+
+#[test]
+fn a_non_finite_literal_is_written_to_json_as_its_text_and_read_back() {
+    for (source, literal) in [
+        ("---\nx: .nan\n---\n", ".nan"),
+        ("---\nx: .inf\n---\n", ".inf"),
+        ("---\nx: -.inf\n---\n", "-.inf"),
+        ("+++\nx = nan\n+++\n", "nan"),
+        ("+++\nx = -inf\n+++\n", "-inf"),
     ] {
         let document = parse(source).document;
-        let back: RawDocument = from_json(&to_json(&document).unwrap()).unwrap();
+        let json = to_json(&document).unwrap();
+        assert!(json.contains(&format!(r#""x":"{literal}""#)), "{json}");
+        let back: RawDocument = from_json(&json).unwrap();
         assert_eq!(back, document);
-        assert_eq!(scalar(&back, "x"), Value::NonFinite(value));
+        assert_eq!(scalar(&back, "x"), text(literal));
     }
 }
 
 #[test]
-fn a_non_finite_float_is_written_as_its_name() {
-    for (source, name) in [
-        ("---\nx: .nan\n---\n", "nan"),
-        ("---\nx: .inf\n---\n", "infinity"),
-        ("---\nx: -.inf\n---\n", "negative-infinity"),
-    ] {
-        let json = to_json(&parse(source).document).unwrap();
-        let written = format!(r#""x":{{"t":"non-finite","v":"{name}"}}"#);
-        assert!(json.contains(&written), "{json}");
+fn a_lookalike_of_a_time_or_a_date_reads_back_from_json_as_itself() {
+    let seven = Value::Time(NaiveTime::from_hms_opt(7, 32, 0).unwrap());
+    let nine = mapping(vec![("t", text("time")), ("v", text("nine"))]);
+    let extra = mapping(vec![
+        ("t", text("time")),
+        ("v", text("07:32:00")),
+        ("w", text("x")),
+    ]);
+    let pair = Value::Sequence(vec![text("time"), text("07:32:00")]);
+    let instant = Value::Sequence(vec![text("2026-10-20T00:00:00Z")]);
+    let mut document = parse("---\nx: 1\n---\n").document;
+    if let RawDocument::Valid(valid) = &mut document {
+        valid.frontmatter = Some(mapping(vec![
+            ("clock", seven),
+            ("nine", Value::Mapping(nine)),
+            ("extra", Value::Mapping(extra)),
+            ("pair", pair),
+            ("instant", instant),
+        ]));
     }
+    let back: RawDocument = from_json(&to_json(&document).unwrap()).unwrap();
+    assert_eq!(back, document);
 }
 
 #[test]
-fn the_typescript_of_a_value_names_the_non_finite_floats() {
+fn the_typescript_of_a_value_is_an_untagged_union_with_no_non_finite_float() {
     let value = Value::ts_definition();
-    let non_finite = NonFinite::ts_definition();
     assert!(
-        value.contains("t: \"non-finite\";\n  /** Tuple value */\n  v: NonFinite;"),
+        value.contains("export type Value = boolean | number | number | string | "),
         "{value}"
     );
-    assert!(
-        non_finite.contains(
-            "export type NonFinite =\n  | \"infinity\"\n  | \"nan\"\n  | \"negative-infinity\";"
-        ),
-        "{non_finite}"
-    );
+    assert!(!value.contains("NonFinite"), "{value}");
 }
 
 #[test]
@@ -295,8 +387,7 @@ fn the_zod_schema_of_a_document_names_its_fields_short_and_its_tags_in_full() {
         "{document}"
     );
     assert!(
-        value.contains("z.discriminatedUnion(\"t\", [")
-            && value.contains("t: z.literal(\"string\"),\n  v: z.string(),"),
+        value.contains("z.union([z.boolean(), z.number().int(), z.number(), z.string(), "),
         "{value}"
     );
 }
@@ -340,13 +431,29 @@ fn no_node_writes_a_span_or_its_kind() {
     }
 }
 
-/// The value under `key` in the frontmatter of `document`.
-fn scalar(document: &RawDocument, key: &str) -> Value {
+/// The frontmatter of `document`, a valid document with one.
+fn frontmatter(document: &RawDocument) -> &Mapping {
     let mapping = match document {
         RawDocument::Invalid(_) => None,
         RawDocument::Valid(valid) => valid.frontmatter.as_ref(),
     };
-    mapping.unwrap()[key].clone()
+    mapping.unwrap()
+}
+
+fn mapping(pairs: Vec<(&str, Value)>) -> Mapping {
+    pairs
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+}
+
+/// The value under `key` in the frontmatter of `document`.
+fn scalar(document: &RawDocument, key: &str) -> Value {
+    frontmatter(document)[key].clone()
+}
+
+fn text(text: &str) -> Value {
+    Value::String(text.to_owned())
 }
 
 /// Empties the `kind` of every node of `document`.

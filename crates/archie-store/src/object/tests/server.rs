@@ -5,7 +5,8 @@ use std::env;
 use std::path::PathBuf;
 
 use archie_core::forms::Form;
-use archie_core::parser::parse;
+use archie_core::parser::ast::RawDocument;
+use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
 use os_shim::bucket::MinioBucket;
 use os_shim::mock::MemorySystem;
@@ -81,7 +82,10 @@ async fn each_fixture_through_rustfs_and_back_is_archies_form_and_a_second_copy_
     let system = MemorySystem::new();
     let files = AnyStore::File(FileStore::new(PathBuf::from("/vault"), &system));
     for (index, source) in FIXTURES.iter().enumerate() {
-        let archie = write(&parse(source).document, &WriteOptions::default()).unwrap();
+        let document = parse(source).document;
+        let archie = write(&document, &WriteOptions::default()).unwrap();
+        let kept: RawDocument = from_json(&to_json(&document).unwrap()).unwrap();
+        let through_json = write(&kept, &WriteOptions::default()).unwrap();
         let fixture = path(&format!("fixtures/{index}.md"));
         files
             .write(&fixture, source.as_bytes(), &Precondition::None)
@@ -93,7 +97,12 @@ async fn each_fixture_through_rustfs_and_back_is_archies_form_and_a_second_copy_
             copy(&files, &fixture, &minio, &first, form).await;
             copy(&minio, &first, &files, &first, form).await;
             let back = files.read(&first).await.unwrap();
-            assert_eq!(back.bytes, archie.as_bytes(), "{form:?}: {source}");
+            let expected = if form == Form::Json {
+                &through_json
+            } else {
+                &archie
+            };
+            assert_eq!(back.bytes, expected.as_bytes(), "{form:?}: {source}");
             copy(&files, &first, &minio, &second, form).await;
             copy(&minio, &second, &files, &second, form).await;
             let again = files.read(&second).await.unwrap();

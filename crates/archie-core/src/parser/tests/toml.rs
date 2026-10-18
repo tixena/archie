@@ -139,8 +139,7 @@ exponent = 5e2
 infinite = -inf
 +++
 ",
-        "\
-Document
+        r#"Document
   Frontmatter format=Toml
     Mapping
       Pair key=negative
@@ -154,14 +153,14 @@ Document
       Pair key=exponent
         Scalar Float 500
       Pair key=infinite
-        Scalar NonFinite NegativeInfinity
+        Scalar String "-inf"
   MarkdownBlock
-",
+"#,
     );
 }
 
 #[test]
-fn a_non_finite_float_reads_as_its_name() {
+fn a_non_finite_float_reads_as_its_text() {
     check(
         "\
 +++
@@ -170,18 +169,17 @@ nothing = nan
 signed_nothing = -nan
 +++
 ",
-        "\
-Document
+        r#"Document
   Frontmatter format=Toml
     Mapping
       Pair key=up
-        Scalar NonFinite Infinity
+        Scalar String "+inf"
       Pair key=nothing
-        Scalar NonFinite Nan
+        Scalar String "nan"
       Pair key=signed_nothing
-        Scalar NonFinite Nan
+        Scalar String "-nan"
   MarkdownBlock
-",
+"#,
     );
 }
 

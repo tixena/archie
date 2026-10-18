@@ -6,8 +6,8 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 
-use archie_core::parser::ast::FrontmatterFormat;
-use archie_core::parser::parse;
+use archie_core::parser::ast::{FrontmatterFormat, RawDocument};
+use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
 use assert_cmd::Command;
 use assert_cmd::assert::{Assert, OutputAssertExt as _};
@@ -82,6 +82,14 @@ fn archies_form(source: &str, frontmatter: FrontmatterFormat) -> String {
     write(&parse(source).document, &options).unwrap()
 }
 
+/// archie's form of what the JSON form keeps of the markdown `source`: its
+/// date-times in UTC.
+fn archies_form_through_json(source: &str) -> String {
+    let json = to_json(&parse(source).document).unwrap();
+    let kept: RawDocument = from_json(&json).unwrap();
+    write(&kept, &WriteOptions::default()).unwrap()
+}
+
 /// Asserts the run failed with `code` and one line on standard error that
 /// opens with `line`, and wrote nothing to standard output.
 fn failed(ran: Assert, code: i32, line: &str) {
@@ -151,7 +159,13 @@ fn the_copy_of_each_fixture_in_each_form_is_archies_form_and_a_second_copy_chang
     for (name, source) in fixtures() {
         fs::write(root.join(&name), &source).unwrap();
         let archie_form = archies_form(&source, FrontmatterFormat::Yaml);
+        let json_form = archies_form_through_json(&source);
         for form in FORMS {
+            let expected = if form == "json" {
+                &json_form
+            } else {
+                &archie_form
+            };
             let first = format!("{form}/{name}");
             let second = format!("{form}/again/{name}");
             let got = archie(root, &["get", &name, "-f", form], b"").success();
@@ -160,7 +174,7 @@ fn the_copy_of_each_fixture_in_each_form_is_archies_form_and_a_second_copy_chang
                 .stdout(is_empty())
                 .stderr(is_empty());
             let copied = fs::read_to_string(root.join(&first)).unwrap();
-            assert_eq!(copied, archie_form, "{form}: {name}");
+            assert_eq!(&copied, expected, "{form}: {name}");
             let again = archie(root, &["get", &first, "-f", form], b"").success();
             archie(root, &["write", &second, "-f", form], &stdout(&again)).success();
             assert_eq!(fs::read_to_string(root.join(&second)).unwrap(), copied);
@@ -192,11 +206,12 @@ fn a_pipe_between_two_runs_copies_the_file_in_each_form() {
         assert!(get.wait().unwrap().success());
         assert!(written.success());
         let copied = fs::read_to_string(root.join(&target)).unwrap();
-        assert_eq!(
-            copied,
-            archies_form(&source, FrontmatterFormat::Yaml),
-            "{form}"
-        );
+        let expected = if form == "json" {
+            archies_form_through_json(&source)
+        } else {
+            archies_form(&source, FrontmatterFormat::Yaml)
+        };
+        assert_eq!(copied, expected, "{form}");
     }
 }
 

@@ -3,9 +3,10 @@
 
 use core::fmt::{self, Write as _};
 
-use crate::parser::ast::{Mapping, NonFinite, Value};
+use crate::parser::ast::{Mapping, Value};
 use crate::writer::{
-    Scalar, Shape, WriteError, push_date_time, push_finite, push_offset_date_time, shape,
+    Scalar, Shape, WriteError, non_finite, push_date_time, push_finite, push_offset_date_time,
+    shape,
 };
 
 /// The pairs of `mapping` on one line, `key = value` separated by `, `: a
@@ -95,8 +96,7 @@ fn tables(value: &Value) -> Option<Vec<&Mapping>> {
             | Value::DateTime(_)
             | Value::Float(_)
             | Value::Integer(_)
-            | Value::NonFinite(_)
-            | Value::Null
+            | Value::Null(())
             | Value::OffsetDateTime(_)
             | Value::Sequence(_)
             | Value::String(_)
@@ -152,14 +152,6 @@ pub fn key_of(path: &[&str]) -> String {
     key
 }
 
-fn push_non_finite(out: &mut String, non_finite: NonFinite) {
-    out.push_str(match non_finite {
-        NonFinite::Infinity => "inf",
-        NonFinite::Nan => "nan",
-        NonFinite::NegativeInfinity => "-inf",
-    });
-}
-
 /// A bare key when it is one, or else a quoted one.
 pub fn push_key(out: &mut String, key: &str) {
     let bare = !key.is_empty()
@@ -183,8 +175,9 @@ fn push_path(out: &mut String, path: &[&str]) {
     }
 }
 
-/// `scalar` on one line, with text in double quotes and booleans, numbers,
-/// dates and times bare. A null is an error naming `path`, its key.
+/// `scalar` on one line, with text and a float that is not a finite number in
+/// double quotes, and booleans, numbers, dates and times bare. A null is an
+/// error naming `path`, its key.
 pub fn push_scalar(out: &mut String, scalar: Scalar<'_>, path: &[&str]) -> Result<(), WriteError> {
     match scalar {
         Scalar::Boolean(boolean) => out.push_str(if boolean { "true" } else { "false" }),
@@ -192,14 +185,13 @@ pub fn push_scalar(out: &mut String, scalar: Scalar<'_>, path: &[&str]) -> Resul
             let _: fmt::Result = write!(out, "{date}");
         }
         Scalar::DateTime(date_time) => push_date_time(out, &date_time),
-        Scalar::Float(float) => match NonFinite::of(float) {
-            Some(non_finite) => push_non_finite(out, non_finite),
+        Scalar::Float(float) => match non_finite(float, ["nan", "inf", "-inf"]) {
+            Some(text) => push_string(out, text),
             None => push_finite(out, float),
         },
         Scalar::Integer(integer) => {
             let _: fmt::Result = write!(out, "{integer}");
         }
-        Scalar::NonFinite(non_finite) => push_non_finite(out, non_finite),
         Scalar::Null => {
             return Err(WriteError {
                 key: key_of(path),

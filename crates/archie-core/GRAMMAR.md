@@ -106,8 +106,8 @@ recognizes is text.
 
 A `Document`'s `frontmatter` is a `Mapping`, each key and its `Value` in the order the
 keys were first written. A `Value` is a `Boolean`, a `Date`, a `DateTime` with no
-offset, a `Float`, an `Integer`, a `Mapping`, a `NonFinite`, a `Null`, an
-`OffsetDateTime`, a `Sequence` of values, a `String` or a `Time`, and holds no span.
+offset, a finite `Float`, an `Integer`, a `Mapping`, a `Null`, an `OffsetDateTime`,
+a `Sequence` of values, a `String` or a `Time`, and holds no span.
 
 ## Markdown block
 
@@ -543,7 +543,7 @@ A value's type comes from how it is written:
 | A date, then `T`, `t` or one space, then a time, with no offset | DateTime |
 | An optional sign, then `0` or a digit from 1 to 9 followed by any digits; or, with no sign, `0x`, `0o` or `0b` and digits in that base. An underscore may stand between two digits, but not right after `0x`, `0o` or `0b`: `0`, `1_000` and `0xff_ff` are integers, and `01`, `1__0`, `_1`, `1_` and `0x_ff` are not values. An integer that does not fit 64 bits is the String of its text as written, underscores and prefix kept, such as `"9_999_999_999_999_999_999"`, and is written back as quoted text | Integer, 64 bits; String when it does not fit |
 | A whole part written as a decimal integer, with its optional sign, then a fraction of digits, an exponent or both. The exponent is `e` or `E`, an optional sign and digits, which may start with zeros. An underscore may stand between two digits of the whole part, of the fraction or of the exponent: `0.5`, `1e02` and `1e0_1` are floats, and `01.5` is not a value. A float too large for a float to hold is the String of its text as written, such as `"1e400"`, and is written back as quoted text | Float, finite; String when it does not fit |
-| `inf` and `nan`, with an optional sign | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
+| `inf` and `nan`, with an optional sign: archie holds no float that is not a finite number. Each is the String of its text as written, such as `"-inf"`, and is written back as quoted text | String |
 
 ## YAML frontmatter
 
@@ -892,9 +892,10 @@ line under properties that end their line.
 - A tagged scalar's text is read again by the rules for an unquoted value of the
   tag's type in the table below: `!!str 01234` is the String `"01234"`, and
   `!!timestamp` reads a Date, an OffsetDateTime or a DateTime. `!!float` reads a
-  Float or a NonFinite, and also reads decimal digits of any size with an optional
-  sign, so `!!float 1` is the Float `1` and `!!float 99999999999999999999` is the
-  Float `1e20`. `!!float 1e400` is the String `"1e400"`, and
+  Float, and also reads decimal digits of any size with an optional sign, so
+  `!!float 1` is the Float `1` and `!!float 99999999999999999999` is the Float
+  `1e20`. `.inf` and `.nan` are text, so `!!float .inf` is refused.
+  `!!float 1e400` is the String `"1e400"`, and
   `!!int 99999999999999999999` is the String `"99999999999999999999"`, as the same
   digits are untagged. `!!map` and `!!seq` only check that the value is a
   mapping or a list.
@@ -919,7 +920,7 @@ A `PLAIN` value's type comes from how it is written:
 | `true`, `True`, `TRUE`, `false`, `False`, `FALSE` | Boolean |
 | An optional sign and digits; or `0x`, `0o` and digits in that base. A decimal, octal or hexadecimal integer that does not fit 64 bits is the String of its text as written, such as `"0xFFFFFFFFFFFFFFFFFF"`, and is written back as quoted text | Integer, 64 bits; String when it does not fit |
 | An optional sign; then digits, a dot and optional digits, or a dot and digits, or digits alone when an exponent follows; then an optional exponent: `e` or `E`, an optional sign and digits. `.5`, `5.`, `-.5e3` and `1e3` are floats, and `.` is a string. A float too large for a float to hold is the String of its text as written, such as `"1e400"`, and is written back as quoted text | Float, finite; String when it does not fit |
-| `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN` | NonFinite: `Infinity`, `NegativeInfinity` or `Nan` |
+| `.inf`, `.Inf`, `.INF`, with an optional sign; `.nan`, `.NaN`, `.NAN`: archie holds no float that is not a finite number. Each is the String of its text as written, such as `".inf"`, and is written back as quoted text | String |
 | `2026-10-10`, when that day exists in the calendar | Date |
 | A date-time, written as in TOML, whose date exists in the calendar | OffsetDateTime, or DateTime when it has no offset |
 | Anything else | String |
@@ -1178,11 +1179,13 @@ written once, with its list.
   with a space or an indicator, one of `` ! " # % & ' * , - : > ? @ [ ] ` { | } ``,
   ends with a space or `:`, holds `: `, ` #` or a control character, holds `,`, `[`,
   `]`, `{` or `}` inside a flow collection, has the form of a time of day, of an
-  integer that does not fit 64 bits or of a float too large for a float to hold, or
-  reads as another type; then in double quotes, with `\"`, `\\`, `\n`, `\r`, `\t`
-  and `\xXX` escapes. `null` for a null; `true` and `false`; a float as the shortest
-  text that reads back as it, with `.0` when that text would read as an integer, and
-  `.inf`, `-.inf` and `.nan`; dates and date-times after the tag `!!timestamp`, such
+  integer that does not fit 64 bits, of a float too large for a float to hold or of
+  a float that is not a finite number, such as `.inf`, or reads as another type;
+  then in double quotes, with `\"`, `\\`, `\n`, `\r`, `\t` and `\xXX` escapes.
+  `null` for a null; `true` and `false`; a float as the shortest text that reads
+  back as it, with `.0` when that text would read as an integer, and a float that is
+  not a finite number, which no parse gives, as the quoted text `".inf"`, `"-.inf"`
+  or `".nan"`; dates and date-times after the tag `!!timestamp`, such
   as `!!timestamp 2026-10-10T07:32:00Z`, with `Z` for UTC or an offset such as
   `+02:00`; a time of day as quoted text, such as `at: "07:32:00"`, which reads back
   as text.
@@ -1192,8 +1195,9 @@ written once, with its list.
   line unless it opens the frontmatter. Any other list as an inline array, a mapping
   in it as an inline table. A key bare when it is ASCII letters, digits, `_` and `-`,
   and quoted otherwise. Text always in double quotes, with `\"`, `\\`, `\n`, `\r`,
-  `\t`, `\b`, `\f` and `\uXXXX` escapes; dates, times and date-times bare; `inf`,
-  `-inf` and `nan`. TOML cannot hold a null: writing one fails with
+  `\t`, `\b`, `\f` and `\uXXXX` escapes; dates, times and date-times bare; a float
+  that is not a finite number, which no parse gives, as the quoted text `"inf"`,
+  `"-inf"` or `"nan"`. TOML cannot hold a null: writing one fails with
   `TOML cannot hold a null`, naming the key's path.
 
 One case is set aside for now: emphasis directly inside emphasis, such as `_*a*_`, is

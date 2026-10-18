@@ -4,8 +4,8 @@ use core::iter;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use archie_core::parser::ast::FrontmatterFormat;
-use archie_core::parser::parse;
+use archie_core::parser::ast::{FrontmatterFormat, RawDocument};
+use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
 use clap::Parser as _;
 use os_shim::System as _;
@@ -89,6 +89,14 @@ fn archies_form(source: &str, frontmatter: FrontmatterFormat) -> String {
     write(&parse(source).document, &options).unwrap()
 }
 
+/// archie's form of what the JSON form keeps of the markdown `source`: its
+/// date-times in UTC.
+fn archies_form_through_json(source: &str) -> String {
+    let json = to_json(&parse(source).document).unwrap();
+    let kept: RawDocument = from_json(&json).unwrap();
+    write(&kept, &WriteOptions::default()).unwrap()
+}
+
 /// Asserts `ran` failed with `code` and one line on standard error that
 /// opens with `line`, and wrote nothing to standard output.
 fn failed(ran: &Ran, code: u8, line: &str) {
@@ -135,8 +143,14 @@ fn vault(source: &str) -> MemorySystem {
 fn each_fixture_copied_in_each_form_is_archies_form_and_a_second_copy_changes_nothing() {
     for (index, source) in FIXTURES.iter().enumerate() {
         let archie_form = archies_form(source, FrontmatterFormat::Yaml);
+        let json_form = archies_form_through_json(source);
         let system = vault(source);
         for form in FORMS {
+            let expected = if form == "json" {
+                &json_form
+            } else {
+                &archie_form
+            };
             let first = format!("{form}/{index}.md");
             let second = format!("{form}/again/{index}.md");
             let got = archie(&system, &["get", "a.md", "-f", form], b"");
@@ -151,7 +165,7 @@ fn each_fixture_copied_in_each_form_is_archies_form_and_a_second_copy_changes_no
             assert_eq!(written.stdout, b"");
             assert_eq!(written.stderr, "");
             let copied = read(&system, &format!("/vault/{first}"));
-            assert_eq!(copied, archie_form, "{form}: {source}");
+            assert_eq!(&copied, expected, "{form}: {source}");
             let again = archie(&system, &["get", &first, "-f", form], b"");
             let rewritten = archie(&system, &["write", &second, "-f", form], &again.stdout);
             assert_eq!(
@@ -228,7 +242,7 @@ fn output_and_input_name_files_of_the_machine() {
     assert_eq!(written.code, ExitCode::SUCCESS, "{}", written.stderr);
     assert_eq!(
         read(&system, "/vault/b.md"),
-        archies_form(source, FrontmatterFormat::Yaml)
+        archies_form_through_json(source)
     );
 }
 

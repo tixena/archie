@@ -17,7 +17,7 @@ use crate::writer::{self, WriteError, WriteOptions, write_archived};
 pub const RKYV_MAGIC: &[u8; 7] = b"archie\0";
 
 /// The version of the model's types, the byte after `RKYV_MAGIC`.
-pub const RKYV_VERSION: u8 = 1;
+pub const RKYV_VERSION: u8 = 2;
 
 /// A form a document takes outside archie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

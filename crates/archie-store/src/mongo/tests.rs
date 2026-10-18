@@ -113,7 +113,7 @@ fn names(paths: &[StorePath]) -> Vec<&str> {
 
 /// A file whose frontmatter holds `count` mappings, each inside the one before.
 fn nested_mappings(count: usize) -> RawDocument {
-    let mut value = Value::Null;
+    let mut value = Value::Null(());
     for _ in 0..count {
         value = Value::Mapping(single(value));
     }
@@ -167,7 +167,7 @@ async fn the_sample_reads_back_finds_and_refuses_a_second_file_at_a_path() {
             .unwrap();
         assert_eq!(store.read(&path).await.unwrap().bytes, text);
         let open = store
-            .find(frontmatter_is("status", &Value::String("open".into())))
+            .find(frontmatter_is("status", &Value::String("open".into())).unwrap())
             .await
             .unwrap();
         assert_eq!(open[0].path, "notes/task.md");
@@ -325,7 +325,7 @@ async fn a_query_finds_the_files_by_their_frontmatter_and_compares_dates_as_date
                 .await
                 .unwrap();
         }
-        let open = frontmatter_is("status", &Value::String("open".into()));
+        let open = frontmatter_is("status", &Value::String("open".into())).unwrap();
         let opened = store.find(open).await.unwrap();
         assert_eq!(paths_of(&opened), ["notes/a.md", "notes/c.md"]);
         let november = DateTime::parse_rfc3339_str("2026-11-01T00:00:00Z").unwrap();

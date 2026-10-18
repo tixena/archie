@@ -4,22 +4,27 @@ use core::str::FromStr;
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 
-use crate::parser::ast::NonFinite;
 use crate::parser::located::ScalarValue;
 
 const TOML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8), ("0b", 2)];
 const YAML_RADIXES: &[(&str, u32)] = &[("0x", 16), ("0o", 8)];
 
+/// The YAML floats that are not finite numbers, which archie reads as text.
+const YAML_NON_FINITE: [&str; 12] = [
+    ".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF", "-.inf", "-.Inf", "-.INF", ".nan", ".NaN",
+    ".NAN",
+];
+
 /// The value of an unquoted TOML token, or `None` when it is not one. An
-/// integer that 64 bits cannot hold, or a float that a float cannot hold, is
-/// its text as written.
+/// integer that 64 bits cannot hold, a float that a float cannot hold, and
+/// `inf` and `nan` with an optional sign are their text as written.
 pub fn toml(text: &str) -> Option<ScalarValue> {
     match text {
         "true" => Some(ScalarValue::Boolean(true)),
         "false" => Some(ScalarValue::Boolean(false)),
-        "inf" | "+inf" => Some(ScalarValue::NonFinite(NonFinite::Infinity)),
-        "-inf" => Some(ScalarValue::NonFinite(NonFinite::NegativeInfinity)),
-        "nan" | "+nan" | "-nan" => Some(ScalarValue::NonFinite(NonFinite::Nan)),
+        "inf" | "+inf" | "-inf" | "nan" | "+nan" | "-nan" => {
+            Some(ScalarValue::String(text.to_owned()))
+        }
         _ => {
             let number = is_toml_number(text).then(|| text.replace('_', ""));
             date_time(text)
@@ -36,17 +41,14 @@ pub fn toml(text: &str) -> Option<ScalarValue> {
 }
 
 /// The value of a plain YAML scalar: whatever is not a null, a boolean, a
-/// number or a date is a string, and so are digits too large for a float.
+/// number or a date is a string, and so are digits too large for a float and
+/// the floats that are not finite numbers, such as `.inf`.
 pub fn yaml(text: &str) -> ScalarValue {
     match text {
         "" | "~" | "null" | "Null" | "NULL" => ScalarValue::Null,
         "true" | "True" | "TRUE" => ScalarValue::Boolean(true),
         "false" | "False" | "FALSE" => ScalarValue::Boolean(false),
-        ".inf" | ".Inf" | ".INF" | "+.inf" | "+.Inf" | "+.INF" => {
-            ScalarValue::NonFinite(NonFinite::Infinity)
-        }
-        "-.inf" | "-.Inf" | "-.INF" => ScalarValue::NonFinite(NonFinite::NegativeInfinity),
-        ".nan" | ".NaN" | ".NAN" => ScalarValue::NonFinite(NonFinite::Nan),
+        _ if is_non_finite(text) => ScalarValue::String(text.to_owned()),
         _ => integer(text, YAML_RADIXES)
             .map(ScalarValue::Integer)
             .or_else(|| yaml_float(text).map(|value| finite_or_text(value, text)))
@@ -66,6 +68,11 @@ pub fn is_oversized_integer(text: &str) -> bool {
 /// as `1e400`.
 pub fn is_oversized_float(text: &str) -> bool {
     yaml_float(text).is_some_and(f64::is_infinite)
+}
+
+/// Whether `text` is a YAML float that is not a finite number, such as `.inf`.
+pub fn is_non_finite(text: &str) -> bool {
+    YAML_NON_FINITE.contains(&text)
 }
 
 /// [`is_oversized_integer`] for a TOML number with its underscores dropped,

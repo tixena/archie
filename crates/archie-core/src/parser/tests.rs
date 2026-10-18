@@ -736,8 +736,7 @@ fn value_label(value: &Value) -> String {
         Value::Float(float) => format!("Scalar Float {float}"),
         Value::Integer(integer) => format!("Scalar Integer {integer}"),
         Value::Mapping(_) => "Mapping".to_owned(),
-        Value::NonFinite(non_finite) => format!("Scalar NonFinite {non_finite:?}"),
-        Value::Null => "Scalar Null".to_owned(),
+        Value::Null(()) => "Scalar Null".to_owned(),
         Value::OffsetDateTime(date_time) => {
             format!(
                 "Scalar OffsetDateTime {}",

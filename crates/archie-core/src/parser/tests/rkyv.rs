@@ -11,8 +11,8 @@ use rkyv::with::{DeserializeWith as _, With};
 use super::json::unclaim;
 use super::{on_two_megabytes, valid};
 use crate::parser::ast::{
-    ArchivedRawDocument, ArchivedValue, Block, Document, Kind, Mapping, MarkdownBlock, NonFinite,
-    RawDocument, Value,
+    ArchivedRawDocument, ArchivedValue, Block, Document, Kind, Mapping, MarkdownBlock, RawDocument,
+    Value,
 };
 use crate::parser::frontmatter::VALUE_CAP;
 use crate::parser::lexer::BLOCK_CAP;
@@ -146,8 +146,7 @@ fn the_sample_document_reads_in_place() {
         | ArchivedValue::Float(_)
         | ArchivedValue::Integer(_)
         | ArchivedValue::Mapping(_)
-        | ArchivedValue::NonFinite(_)
-        | ArchivedValue::Null
+        | ArchivedValue::Null(())
         | ArchivedValue::Sequence(_)
         | ArchivedValue::String(_)
         | ArchivedValue::Time(_) => None,
@@ -176,15 +175,11 @@ fn each_value_reads_back_from_rkyv_and_a_date_time_keeps_its_offset() {
         ("float".to_owned(), Value::Float(0.5)),
         ("integer".to_owned(), Value::Integer(-7)),
         ("mapping".to_owned(), Value::Mapping(inner)),
-        (
-            "non-finite".to_owned(),
-            Value::NonFinite(NonFinite::NegativeInfinity),
-        ),
-        ("null".to_owned(), Value::Null),
+        ("null".to_owned(), Value::Null(())),
         ("offset-date-time".to_owned(), Value::OffsetDateTime(at)),
         (
             "sequence".to_owned(),
-            Value::Sequence(vec![Value::String("a".to_owned()), Value::Null]),
+            Value::Sequence(vec![Value::String("a".to_owned()), Value::Null(())]),
         ),
         ("string".to_owned(), Value::String("text".to_owned())),
         ("time".to_owned(), Value::Time(leap_second)),

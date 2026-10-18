@@ -9,8 +9,8 @@ use rkyv::with::With;
 
 use crate::parser::ast::{
     Alignment, ArchivedRawDocument, Args, Block, CodeBlock, Document, FrontmatterFormat, Heading,
-    Inline, Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Paragraph,
-    RawDocument, Section, Table, TableCell, TableFormat, TableRow, Text, Value,
+    Inline, Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, Paragraph, RawDocument,
+    Section, Table, TableCell, TableFormat, TableRow, Text, Value,
 };
 use crate::parser::error::{ParseError, RebuildError};
 use crate::parser::extension::{Construct, Context, Extension, Markdown, Plain, Written};
@@ -1110,7 +1110,7 @@ fn holding(blocks: Vec<Block>) -> MarkdownBlock {
 
 #[test]
 fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
-    let null = || code_with_args("sh", Value::Null, Kind(None));
+    let null = || code_with_args("sh", Value::Null(()), Kind(None));
     let mut writer = Writer::new();
     if let Block::CodeBlock(code) = null() {
         assert_eq!(writer.info_string(&code), "sh b = 1");
@@ -1144,7 +1144,7 @@ fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
     }))));
     let in_markdown = code_with_args("md", Value::Integer(2), claimed);
     let claimed_null = Kind(Some(Box::new(RawDocument::Valid(document(Vec::new())))));
-    let markdown_null = code_with_args("md", Value::Null, claimed_null);
+    let markdown_null = code_with_args("md", Value::Null(()), claimed_null);
     for block in [null(), in_item, in_cell, in_markdown, markdown_null] {
         let built = Document {
             body: holding(vec![block]),
@@ -1250,8 +1250,7 @@ fn time_as_text(value: &mut Value) {
         | Value::DateTime(_)
         | Value::Float(_)
         | Value::Integer(_)
-        | Value::NonFinite(_)
-        | Value::Null
+        | Value::Null(())
         | Value::OffsetDateTime(_)
         | Value::String(_) => {}
     }
@@ -1414,35 +1413,54 @@ fn a_time_of_day_written_into_yaml_writes_the_same_quoted_text_again() {
 }
 
 #[test]
-fn a_non_finite_float_is_written_in_the_syntax_of_each_format() {
-    let source = "---\nup: .Inf\ndown: -.inf\nnothing: .NaN\n---\n";
+fn a_non_finite_float_is_text_and_written_back_quoted() {
+    let source = "---\nbig: .inf\nup: .Inf\ndown: -.inf\nnothing: .NaN\n---\n";
     let yaml = written(source);
-    assert_eq!(yaml, "---\nup: .inf\ndown: -.inf\nnothing: .nan\n---\n");
+    assert_eq!(
+        yaml,
+        "---\nbig: \".inf\"\nup: \".Inf\"\ndown: \"-.inf\"\nnothing: \".NaN\"\n---\n"
+    );
     assert_eq!(mapping(&yaml), mapping(source));
     let toml_text = toml(source);
     assert_eq!(
         toml_text,
-        "+++\nup = inf\ndown = -inf\nnothing = nan\n+++\n"
+        "+++\nbig = \".inf\"\nup = \".Inf\"\ndown = \"-.inf\"\nnothing = \".NaN\"\n+++\n"
     );
     assert_eq!(mapping(&toml_text), mapping(source));
+
+    let toml_source = "+++\nbig = inf\nsmall = -inf\n+++\n";
+    assert_eq!(
+        toml(toml_source),
+        "+++\nbig = \"inf\"\nsmall = \"-inf\"\n+++\n"
+    );
+    assert_eq!(mapping(&toml(toml_source)), mapping(toml_source));
+    assert_eq!(
+        written(toml_source),
+        "---\nbig: inf\nsmall: \"-inf\"\n---\n"
+    );
+    assert_eq!(mapping(&written(toml_source)), mapping(toml_source));
 }
 
 #[test]
-fn a_hand_built_non_finite_float_is_written_as_its_non_finite_value() {
-    for (float, yaml, toml, read) in [
-        (f64::NAN, ".nan", "nan", NonFinite::Nan),
-        (f64::INFINITY, ".inf", "inf", NonFinite::Infinity),
-        (
-            f64::NEG_INFINITY,
-            "-.inf",
-            "-inf",
-            NonFinite::NegativeInfinity,
-        ),
+fn a_hand_built_non_finite_float_is_written_as_the_quoted_text_of_its_literal() {
+    for (float, yaml, toml_text) in [
+        (f64::NAN, ".nan", "nan"),
+        (f64::INFINITY, ".inf", "inf"),
+        (f64::NEG_INFINITY, "-.inf", "-inf"),
     ] {
         let document = with_frontmatter_value(Value::Float(float));
-        assert!(written_yaml(&document).contains(&format!("x: {yaml}\n")));
-        assert!(written_toml(&document).contains(&format!("x = {toml}\n")));
-        assert_eq!(read_back_value(&document), Value::NonFinite(read));
+        let yaml_written = written_yaml(&document);
+        assert!(
+            yaml_written.contains(&format!("x: \"{yaml}\"\n")),
+            "{yaml_written}"
+        );
+        let toml_written = written_toml(&document);
+        assert!(
+            toml_written.contains(&format!("x = \"{toml_text}\"\n")),
+            "{toml_written}"
+        );
+        assert_eq!(mapping(&yaml_written)["x"], text(yaml));
+        assert_eq!(mapping(&toml_written)["x"], text(toml_text));
     }
 }
 
@@ -1835,7 +1853,7 @@ fn each_construct_is_written_from_its_archived_tree_as_write_writes_it() {
         rows: Vec::new(),
     });
     let null_args = Document {
-        body: holding(vec![code_with_args("sh", Value::Null, Kind(None))]),
+        body: holding(vec![code_with_args("sh", Value::Null(()), Kind(None))]),
         ..document(Vec::new())
     };
     for (name, built) in [
@@ -1877,7 +1895,6 @@ fn each_value_is_written_from_its_archived_tree_as_write_writes_it() {
         ("integer".to_owned(), Value::Integer(-7)),
         ("empty".to_owned(), Value::Mapping(Mapping::new())),
         ("mapping".to_owned(), Value::Mapping(inner.clone())),
-        ("non-finite".to_owned(), Value::NonFinite(NonFinite::Nan)),
         ("offset-date-time".to_owned(), Value::OffsetDateTime(at)),
         (
             "sequence".to_owned(),
@@ -1895,7 +1912,7 @@ fn each_value_is_written_from_its_archived_tree_as_write_writes_it() {
         ("time".to_owned(), Value::Time(leap_second)),
     ]);
     let mut with_null = values.clone();
-    with_null.insert("null".to_owned(), Value::Null);
+    with_null.insert("null".to_owned(), Value::Null(()));
     for (name, mapping) in [("each value", values), ("each value and a null", with_null)] {
         writes_as_write_does(RawDocument::Valid(with_frontmatter(mapping)), name);
     }

@@ -3,6 +3,8 @@
 //! Every node carries `kind`, the type an extension gave it, and none holds
 //! a span: a parse reports positions beside the document.
 
+mod value_serde;
+
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
 use rkyv::rancor::Source;
@@ -149,65 +151,50 @@ pub type ArchivedFrontmatterFormat = mirror::ArchivedFrontmatterFormatMirror;
 #[model_schema()]
 pub type Mapping = IndexMap<String, Value>;
 
-/// What a key maps to, or what a list holds.
+/// What a key maps to, or what a list holds. Written untagged: a frontmatter
+/// is plain values, a date a BSON `Date`, a time `{ t: "time", v: "07:32:00" }`.
 #[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "t", content = "v", rename_all = "kebab-case")]
+#[serde(untagged)]
 #[non_exhaustive]
+// WARNING: the variant order is the read order, so it is not alphabetical.
+// serde reads an untagged enum by trying its variants top to bottom and keeps
+// the first that reads. `Integer` comes before `Float`, so `2` reads as an
+// integer. `Date` comes before `OffsetDateTime`, so a date at midnight UTC
+// reads as a date. The dates come before `Time`, and `Time` before `Mapping`,
+// so a `$date` or `{ t, v }` document is not read as a mapping. Sorting these
+// variants changes what a stored value reads back as.
+#[expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "serde reads an untagged enum's variants in declaration order"
+)]
 pub enum Value {
     Boolean(bool),
-    Date(NaiveDate),
-    /// A date and time with no offset, such as `1979-05-27T07:32:00`.
-    DateTime(NaiveDateTime),
-    /// A finite float.
-    Float(f64),
     Integer(i64),
+    /// A finite float.
+    #[serde(with = "value_serde::finite")]
+    Float(f64),
+    String(String),
+    #[serde(with = "value_serde::midnight")]
+    Date(NaiveDate),
+    /// A date and time with an offset, such as `1979-05-27T07:32:00+02:00`.
+    #[serde(with = "value_serde::instant")]
+    OffsetDateTime(DateTime<FixedOffset>),
+    /// A date and time with no offset, such as `1979-05-27T07:32:00`.
+    #[serde(with = "value_serde::as_if_utc")]
+    DateTime(NaiveDateTime),
+    #[serde(with = "value_serde::time_of_day")]
+    Time(NaiveTime),
     #[serde(deserialize_with = "grown")]
     Mapping(Mapping),
-    NonFinite(NonFinite),
-    /// YAML only: TOML has no null.
-    Null,
-    /// A date and time with an offset, such as `1979-05-27T07:32:00+02:00`.
-    OffsetDateTime(DateTime<FixedOffset>),
     #[serde(deserialize_with = "grown")]
     Sequence(Vec<Self>),
-    String(String),
-    Time(NaiveTime),
+    /// YAML only: TOML has no null.
+    Null(()),
 }
 
 /// A `Value` as rkyv archives it.
 pub type ArchivedValue = mirror::ArchivedValueMirror;
-
-/// A float that is not a finite number: `.inf`, `-.inf` and `.nan` in
-/// YAML; `inf`, `-inf` and `nan` in TOML.
-#[model_schema(enable = ["decode_with", "mongodb"])]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum NonFinite {
-    Infinity,
-    Nan,
-    NegativeInfinity,
-}
-
-impl NonFinite {
-    /// The non-finite value `float` holds, or `None` when it is finite.
-    #[must_use]
-    pub const fn of(float: f64) -> Option<Self> {
-        if float.is_nan() {
-            Some(Self::Nan)
-        } else if float.is_finite() {
-            None
-        } else if float.is_sign_negative() {
-            Some(Self::NegativeInfinity)
-        } else {
-            Some(Self::Infinity)
-        }
-    }
-}
-
-/// A `NonFinite` as rkyv archives it.
-pub type ArchivedNonFinite = mirror::ArchivedNonFiniteMirror;
 
 /// A stretch of markdown read by the same rules: the body, a list item's
 /// content, a table cell's content, a markdown code block's content.

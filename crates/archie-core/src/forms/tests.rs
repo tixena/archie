@@ -1,8 +1,10 @@
 //! Each form of a document: its bytes, the document read back from them, and
 //! the text a store keeps for them.
 
+use chrono::{DateTime, NaiveTime, Timelike as _, Utc};
+
 use super::{DecodeError, EncodeError, Form, FormError, decode, encode, stored_text};
-use crate::parser::ast::{FrontmatterFormat, RawDocument};
+use crate::parser::ast::{FrontmatterFormat, RawDocument, Value};
 use crate::parser::parse;
 use crate::parser::tests::json::unclaim;
 use crate::parser::tests::rkyv::FIXTURES;
@@ -17,13 +19,13 @@ const TOML: WriteOptions = WriteOptions {
 /// The rkyv form of `toml_multi_line_string.md`. A change to a model type
 /// changes it, and raises `RKYV_VERSION` with it.
 const PINNED: &[u8] =
-    b"archie\0\x01\x07\0\0\0Body.\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\
+    b"archie\0\x02\x07\0\0\0Body.\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\
     \xdc\xff\xff\xff\x01\0\0\0\0\0\0\0\x04\0\0\0\xf0\xff\xff\xff\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\
     \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xd0\xff\xff\xff\x01\0\0\0\0\0\0\0\0\0\
     \0\0\0\0\0\0\xec\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0h\xff4h\xff4\xff\xff\xff\xff\
     \xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xffShippi\
     ng the parserdescriptionThe parser reads a file\nin two stages.\0\0\0\0\0title\xff\xff\xff\
-    \n\0\0\0\x93\0\0\0\xab\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\x8b\0\0\0\xaa\xff\xff\xff\n\0\0\
+    \t\0\0\0\x93\0\0\0\xab\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\x8b\0\0\0\xaa\xff\xff\xff\t\0\0\
     \0\xa6\0\0\0\xa9\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0,\xff\xff\xff\x01\0\0\0\x01\
     \0\0\0H\xff\xff\xff\x02\0\0\0\x03\0\0\0\xa4\xff\xff\xff";
 
@@ -31,6 +33,54 @@ const PINNED: &[u8] =
 fn stored(document: &RawDocument, form: Form, options: &WriteOptions) -> Result<String, FormError> {
     let bytes = encode(document, form, options)?;
     stored_text(&bytes, form, options)
+}
+
+/// `document` with each frontmatter value as the JSON form keeps it.
+fn through_json(document: &RawDocument) -> RawDocument {
+    let mut kept = document.clone();
+    if let RawDocument::Valid(valid) = &mut kept
+        && let Some(mapping) = &mut valid.frontmatter
+    {
+        for value in mapping.values_mut() {
+            *value = value_through_json(value.clone());
+        }
+    }
+    kept
+}
+
+/// What the JSON form keeps of `value`: a date-time in UTC, or a date when it
+/// is at midnight UTC, and a time to the millisecond.
+fn value_through_json(value: Value) -> Value {
+    let in_utc = |at: DateTime<Utc>| {
+        if at.time() == NaiveTime::MIN {
+            Value::Date(at.date_naive())
+        } else {
+            Value::OffsetDateTime(at.fixed_offset())
+        }
+    };
+    match value {
+        Value::DateTime(at) => in_utc(at.and_utc()),
+        Value::Mapping(inner) => Value::Mapping(
+            inner
+                .into_iter()
+                .map(|(key, item)| (key, value_through_json(item)))
+                .collect(),
+        ),
+        Value::OffsetDateTime(at) => in_utc(at.to_utc()),
+        Value::Sequence(items) => {
+            Value::Sequence(items.into_iter().map(value_through_json).collect())
+        }
+        Value::Time(time) => {
+            let millisecond = time.nanosecond() / 1_000_000 * 1_000_000;
+            Value::Time(time.with_nanosecond(millisecond).unwrap())
+        }
+        Value::Boolean(_)
+        | Value::Date(_)
+        | Value::Float(_)
+        | Value::Integer(_)
+        | Value::Null(())
+        | Value::String(_) => value,
+    }
 }
 
 /// The writer's error `form_error` holds, if it holds one.
@@ -50,7 +100,7 @@ fn the_sample_puts_a_list_into_each_form() {
     let json = encode(&document, Form::Json, &options).unwrap();
     assert!(json.ends_with(b"\n"));
     let rkyv = encode(&document, Form::Rkyv, &options).unwrap();
-    assert_eq!(&rkyv[..8], b"archie\0\x01");
+    assert_eq!(&rkyv[..8], b"archie\0\x02");
     assert_eq!(
         stored_text(&rkyv, Form::Rkyv, &options).unwrap(),
         "- item\n"
@@ -60,10 +110,10 @@ fn the_sample_puts_a_list_into_each_form() {
         "- item\n"
     );
     let mut wrong = rkyv;
-    wrong[7] = 2;
+    wrong[7] = 1;
     assert!(matches!(
         decode(&wrong, Form::Rkyv),
-        Err(DecodeError::Version { found: 2 })
+        Err(DecodeError::Version { found: 1 })
     ));
 }
 
@@ -71,12 +121,14 @@ fn the_sample_puts_a_list_into_each_form() {
 fn each_fixture_is_stored_from_each_form_as_write_writes_it_and_a_second_pass_changes_nothing() {
     for source in FIXTURES {
         let document = parse(source).document;
+        let kept = through_json(&document);
         for form in FORMS {
+            let expected = if form == Form::Json { &kept } else { &document };
             for options in [WriteOptions::default(), TOML] {
                 let text = stored(&document, form, &options).map_err(write_error);
                 assert_eq!(
                     text,
-                    write(&document, &options).map_err(Some),
+                    write(expected, &options).map_err(Some),
                     "{form:?} {options:?}: {source}"
                 );
                 if let Ok(first) = text {
@@ -134,7 +186,7 @@ fn rkyv_bytes_that_do_not_open_with_archie_a_zero_byte_and_a_version_are_not_arc
 fn rkyv_bytes_of_another_version_fail_naming_it() {
     let document = parse(FIXTURES[0]).document;
     let bytes = encode(&document, Form::Rkyv, &WriteOptions::default()).unwrap();
-    for version in [0, 2, u8::MAX] {
+    for version in [0, 1, 3, u8::MAX] {
         let mut other = bytes.clone();
         other[7] = version;
         assert!(matches!(

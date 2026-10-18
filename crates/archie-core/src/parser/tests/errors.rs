@@ -118,6 +118,14 @@ fn a_value_that_does_not_fit_its_tag_is_refused() {
         named("`0x1F` is not a value of the tag `!!float`", "0x1F")
     );
     assert_eq!(
+        failed("---\nx: !!float .inf\n---\n"),
+        named("`.inf` is not a value of the tag `!!float`", ".inf")
+    );
+    assert_eq!(
+        failed("---\nx: !!float .nan\n---\n"),
+        named("`.nan` is not a value of the tag `!!float`", ".nan")
+    );
+    assert_eq!(
         failed("---\ndone: !!bool yes\n---\n"),
         named("`yes` is not a value of the tag `!!bool`", "yes")
     );

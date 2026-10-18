@@ -2087,7 +2087,6 @@ fn scalar_text(cursor: &Cursor<'_>, value: ScalarValue, span: &Range<usize>) -> 
         | ScalarValue::DateTime(_)
         | ScalarValue::Float(_)
         | ScalarValue::Integer(_)
-        | ScalarValue::NonFinite(_)
         | ScalarValue::Null
         | ScalarValue::OffsetDateTime(_)
         | ScalarValue::Time(_) => folded(cursor.slice(span.clone())),
@@ -2107,7 +2106,7 @@ fn typed(name: &str, text: &str) -> Option<ScalarValue> {
             Some(oversized)
         }
         ("bool", fitting @ ScalarValue::Boolean(_))
-        | ("float", fitting @ (ScalarValue::Float(_) | ScalarValue::NonFinite(_)))
+        | ("float", fitting @ ScalarValue::Float(_))
         | ("int", fitting @ ScalarValue::Integer(_))
         | ("null", fitting @ ScalarValue::Null)
         | (
@@ -2253,7 +2252,6 @@ const fn text_length(scalar: &Scalar) -> usize {
         | ScalarValue::DateTime(_)
         | ScalarValue::Float(_)
         | ScalarValue::Integer(_)
-        | ScalarValue::NonFinite(_)
         | ScalarValue::Null
         | ScalarValue::OffsetDateTime(_)
         | ScalarValue::Time(_) => scalar.span.end - scalar.span.start,

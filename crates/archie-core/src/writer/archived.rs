@@ -13,9 +13,9 @@ use crate::parser::archive::{AsDays, AsDaysAndSeconds, AsLocalAndOffset, AsSecon
 use crate::parser::ast::{
     Alignment, ArchivedAlignment, ArchivedArgs, ArchivedBlock, ArchivedCodeBlock,
     ArchivedContinues, ArchivedFrontmatterFormat, ArchivedHeading, ArchivedInline, ArchivedLink,
-    ArchivedLinkForm, ArchivedList, ArchivedMarkdownBlock, ArchivedNonFinite, ArchivedParagraph,
-    ArchivedRawDocument, ArchivedSection, ArchivedTable, ArchivedTableCell, ArchivedTableRow,
-    ArchivedValue, Continues, FrontmatterFormat, LinkForm, NonFinite,
+    ArchivedLinkForm, ArchivedList, ArchivedMarkdownBlock, ArchivedParagraph, ArchivedRawDocument,
+    ArchivedSection, ArchivedTable, ArchivedTableCell, ArchivedTableRow, ArchivedValue, Continues,
+    FrontmatterFormat, LinkForm,
 };
 use crate::writer::inline::{EMPHASIS, Pieces, STRONG, Segments};
 use crate::writer::table::{Row, lay_out};
@@ -390,8 +390,7 @@ fn yaml_after_indicator(
         | ArchivedValue::Float(_)
         | ArchivedValue::Integer(_)
         | ArchivedValue::Mapping(_)
-        | ArchivedValue::NonFinite(_)
-        | ArchivedValue::Null
+        | ArchivedValue::Null(())
         | ArchivedValue::OffsetDateTime(_)
         | ArchivedValue::Sequence(_)
         | ArchivedValue::String(_)
@@ -598,8 +597,7 @@ fn toml_tables(value: &ArchivedValue) -> Option<Vec<&ArchivedMapping>> {
             | ArchivedValue::DateTime(_)
             | ArchivedValue::Float(_)
             | ArchivedValue::Integer(_)
-            | ArchivedValue::NonFinite(_)
-            | ArchivedValue::Null
+            | ArchivedValue::Null(())
             | ArchivedValue::OffsetDateTime(_)
             | ArchivedValue::Sequence(_)
             | ArchivedValue::String(_)
@@ -623,8 +621,7 @@ fn shape<'value>(
         ArchivedValue::Float(float) => Ok(Scalar::Float(float.to_native())),
         ArchivedValue::Integer(integer) => Ok(Scalar::Integer(integer.to_native())),
         ArchivedValue::Mapping(mapping) => return Ok(Shape::Mapping(mapping)),
-        ArchivedValue::NonFinite(non_finite) => Ok(Scalar::NonFinite(non_finite_of(non_finite))),
-        ArchivedValue::Null => Ok(Scalar::Null),
+        ArchivedValue::Null(()) => Ok(Scalar::Null),
         ArchivedValue::OffsetDateTime(date_time) => {
             read::<AsLocalAndOffset, _, _>(date_time).map(Scalar::OffsetDateTime)
         }
@@ -675,13 +672,5 @@ const fn link_form(archived: &ArchivedLinkForm) -> LinkForm {
     match archived {
         ArchivedLinkForm::Markdown => LinkForm::Markdown,
         ArchivedLinkForm::Wiki => LinkForm::Wiki,
-    }
-}
-
-const fn non_finite_of(archived: &ArchivedNonFinite) -> NonFinite {
-    match archived {
-        ArchivedNonFinite::Infinity => NonFinite::Infinity,
-        ArchivedNonFinite::Nan => NonFinite::Nan,
-        ArchivedNonFinite::NegativeInfinity => NonFinite::NegativeInfinity,
     }
 }

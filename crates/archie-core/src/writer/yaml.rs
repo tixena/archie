@@ -4,10 +4,12 @@
 
 use core::fmt::{self, Write as _};
 
-use crate::parser::ast::{Mapping, NonFinite, Value};
+use crate::parser::ast::{Mapping, Value};
 use crate::parser::located::ScalarValue;
 use crate::parser::scalar;
-use crate::writer::{Scalar, Shape, push_date_time, push_finite, push_offset_date_time, shape};
+use crate::writer::{
+    Scalar, Shape, non_finite, push_date_time, push_finite, push_offset_date_time, shape,
+};
 
 /// The characters that make a plain scalar starting with them something
 /// else: the YAML indicators.
@@ -75,8 +77,7 @@ fn after_indicator(out: &mut String, value: &Value, indent: usize, on_entry: boo
         | Value::Float(_)
         | Value::Integer(_)
         | Value::Mapping(_)
-        | Value::NonFinite(_)
-        | Value::Null
+        | Value::Null(())
         | Value::OffsetDateTime(_)
         | Value::Sequence(_)
         | Value::String(_)
@@ -126,17 +127,9 @@ fn flow(out: &mut String, value: &Value, in_flow: bool) {
     }
 }
 
-fn push_non_finite(out: &mut String, non_finite: NonFinite) {
-    out.push_str(match non_finite {
-        NonFinite::Infinity => ".inf",
-        NonFinite::Nan => ".nan",
-        NonFinite::NegativeInfinity => "-.inf",
-    });
-}
-
 /// `scalar` on one line, inside a flow collection when `in_flow`: a date or
-/// a date-time after the tag `!!timestamp`, a time of day as quoted text,
-/// `null` for a null.
+/// a date-time after the tag `!!timestamp`, a time of day and a float that is
+/// not a finite number as quoted text, `null` for a null.
 pub fn push_scalar(out: &mut String, scalar: Scalar<'_>, in_flow: bool) {
     match scalar {
         Scalar::Boolean(boolean) => out.push_str(if boolean { "true" } else { "false" }),
@@ -147,14 +140,13 @@ pub fn push_scalar(out: &mut String, scalar: Scalar<'_>, in_flow: bool) {
             out.push_str("!!timestamp ");
             push_date_time(out, &date_time);
         }
-        Scalar::Float(float) => match NonFinite::of(float) {
-            Some(non_finite) => push_non_finite(out, non_finite),
+        Scalar::Float(float) => match non_finite(float, [".nan", ".inf", "-.inf"]) {
+            Some(text) => push_text(out, text, in_flow),
             None => push_finite(out, float),
         },
         Scalar::Integer(integer) => {
             let _: fmt::Result = write!(out, "{integer}");
         }
-        Scalar::NonFinite(non_finite) => push_non_finite(out, non_finite),
         Scalar::Null => out.push_str("null"),
         Scalar::OffsetDateTime(date_time) => {
             out.push_str("!!timestamp ");
@@ -208,6 +200,7 @@ fn needs_quotes(text: &str, in_flow: bool) -> bool {
         || scalar::is_time(text)
         || scalar::is_oversized_integer(text)
         || scalar::is_oversized_float(text)
+        || scalar::is_non_finite(text)
         || !matches!(scalar::yaml(text), ScalarValue::String(_))
 }
 

@@ -10,7 +10,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    self, Alignment, Args, Continues, FrontmatterFormat, Kind, LinkForm, NonFinite, TableFormat,
+    self, Alignment, Args, Continues, FrontmatterFormat, Kind, LinkForm, TableFormat,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Extension, Markdown};
@@ -775,7 +775,6 @@ pub enum ScalarValue {
     /// A finite float.
     Float(f64),
     Integer(i64),
-    NonFinite(NonFinite),
     /// YAML only: TOML has no null.
     Null,
     /// A date and time with its offset from UTC.
@@ -793,8 +792,7 @@ impl ScalarValue {
             Self::DateTime(date_time) => ast::Value::DateTime(date_time),
             Self::Float(float) => ast::Value::Float(float),
             Self::Integer(integer) => ast::Value::Integer(integer),
-            Self::NonFinite(non_finite) => ast::Value::NonFinite(non_finite),
-            Self::Null => ast::Value::Null,
+            Self::Null => ast::Value::Null(()),
             Self::OffsetDateTime(date_time) => ast::Value::OffsetDateTime(date_time),
             Self::String(text) => ast::Value::String(text),
             Self::Time(time) => ast::Value::Time(time),

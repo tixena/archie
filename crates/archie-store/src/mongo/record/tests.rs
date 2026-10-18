@@ -1,8 +1,10 @@
-//! The record: each kind of frontmatter value stored and read back, the
-//! fixtures, an invalid document, records that do not read, the depth, the
-//! filter and the revision.
+//! The record: the sample's record, each kind of frontmatter value stored and
+//! read back, the fixtures, an invalid document, records that do not read, the
+//! depth, the filter and the revision.
 
-use archie_core::parser::ast::{InvalidDocument, Mapping, NonFinite, RawDocument, Value};
+use std::thread;
+
+use archie_core::parser::ast::{InvalidDocument, Mapping, RawDocument, Value};
 use archie_core::parser::{from_json, parse, to_json};
 use bson::oid::ObjectId;
 use bson::{Bson, DateTime as BsonDateTime, Document, doc};
@@ -36,6 +38,25 @@ const FIXTURES: [&str; 21] = [
 ];
 
 const ID: &str = "6ad42f681472f05ab2ed9be7";
+
+/// A TOML frontmatter holding each kind of value a record stores.
+const SAMPLE: &str = r#"+++
+title = "Notes"
+status = "open"
+due = 2026-10-20
+priority = 2
+ratio = 0.5
+draft = false
+big = inf
+tags = ["parser", "design"]
+starts = 07:32:00
+offset = 2026-10-20T09:00:00+02:00
+local = 2026-10-20T09:00:00
+
+[owner]
+name = "Ada"
++++
+"#;
 
 fn data(record: &Document) -> &Document {
     record
@@ -84,11 +105,24 @@ fn mapping(pairs: Vec<(&str, Value)>) -> Mapping {
 
 /// A file whose frontmatter holds `count` mappings, each inside the one before.
 fn nested_mappings(count: usize) -> StoredDocument {
-    let mut value = Value::Null;
+    let mut value = Value::Null(());
     for _ in 0..count {
         value = Value::Mapping(mapping(vec![("a", value)]));
     }
     with_frontmatter(mapping(vec![("a", value)]))
+}
+
+/// Runs `test` on a thread with a 2 MB stack, the stack a test thread gets.
+fn on_two_megabytes<F>(test: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(test)
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// A paragraph inside `count` list items, each inside the one before.
@@ -152,8 +186,7 @@ fn through_mongodb(value: Value) -> Value {
         | Value::Date(_)
         | Value::Float(_)
         | Value::Integer(_)
-        | Value::NonFinite(_)
-        | Value::Null
+        | Value::Null(())
         | Value::String(_)
         | _ => value,
     }
@@ -169,6 +202,80 @@ fn with_frontmatter(frontmatter: Mapping) -> StoredDocument {
 }
 
 #[test]
+fn the_sample_frontmatter_is_stored_as_the_sample_record() {
+    let record = to_record(&stored("notes/task.md", SAMPLE)).unwrap();
+    let expected = doc! {
+        "doc": {
+            "t": "valid",
+            "bd": { "se": [] },
+            "data": {
+                "title": "Notes",
+                "status": "open",
+                "due": instant("2026-10-20T00:00:00Z"),
+                "priority": 2_i64,
+                "ratio": 0.5_f64,
+                "draft": false,
+                "big": "inf",
+                "tags": ["parser", "design"],
+                "starts": { "t": "time", "v": "07:32:00" },
+                "offset": instant("2026-10-20T07:00:00Z"),
+                "local": instant("2026-10-20T09:00:00Z"),
+                "owner": { "name": "Ada" },
+            },
+        },
+        "_id": ObjectId::parse_str(ID).unwrap(),
+        "path": "notes/task.md",
+        "revision": "sha256:770bd77006283842c1a49279937c31aebe406b4ce74a55c14625d83c565b5f73",
+    };
+    assert_eq!(record, expected);
+}
+
+#[test]
+fn the_sample_record_reads_back_as_the_sample_table_says() {
+    let back = from_record(to_record(&stored("notes/task.md", SAMPLE)).unwrap()).unwrap();
+    let read = mapping(vec![
+        ("title", string("Notes")),
+        ("status", string("open")),
+        ("due", Value::Date(date())),
+        ("priority", Value::Integer(2)),
+        ("ratio", Value::Float(0.5)),
+        ("draft", Value::Boolean(false)),
+        ("big", string("inf")),
+        (
+            "tags",
+            Value::Sequence(vec![string("parser"), string("design")]),
+        ),
+        (
+            "starts",
+            Value::Time(NaiveTime::from_hms_opt(7, 32, 0).unwrap()),
+        ),
+        ("offset", offset("2026-10-20T07:00:00Z")),
+        ("local", offset("2026-10-20T09:00:00Z")),
+        (
+            "owner",
+            Value::Mapping(mapping(vec![("name", string("Ada"))])),
+        ),
+    ]);
+    let frontmatter = frontmatter(&back).unwrap();
+    assert_eq!(frontmatter, &read);
+    for key in ["offset", "local"] {
+        assert!(
+            matches!(&frontmatter[key], Value::OffsetDateTime(at) if at.offset().local_minus_utc() == 0_i32),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn a_yaml_null_is_stored_as_bson_null_and_reads_back_as_null() {
+    let record = to_record(&stored("notes/null.md", "---\nnothing: null\n---\n")).unwrap();
+    assert_eq!(data(&record).get("nothing"), Some(&Bson::Null));
+    let back = from_record(record).unwrap();
+    let read = mapping(vec![("nothing", Value::Null(()))]);
+    assert_eq!(frontmatter(&back), Some(&read));
+}
+
+#[test]
 fn each_kind_of_value_is_stored_as_plain_bson_and_read_back() {
     let seven = NaiveTime::from_hms_opt(7, 32, 0).unwrap();
     let written = with_frontmatter(mapping(vec![
@@ -176,7 +283,7 @@ fn each_kind_of_value_is_stored_as_plain_bson_and_read_back() {
         ("priority", Value::Integer(2)),
         ("ratio", Value::Float(0.5)),
         ("done", Value::Boolean(false)),
-        ("none", Value::Null),
+        ("none", Value::Null(())),
         (
             "tags",
             Value::Sequence(vec![string("parser"), string("design")]),
@@ -197,13 +304,8 @@ fn each_kind_of_value_is_stored_as_plain_bson_and_read_back() {
             "at_ms",
             Value::Time(NaiveTime::from_hms_micro_opt(7, 32, 0, 250_123).unwrap()),
         ),
-        ("infinity", Value::NonFinite(NonFinite::Infinity)),
-        ("negative", Value::NonFinite(NonFinite::NegativeInfinity)),
-        ("nan", Value::NonFinite(NonFinite::Nan)),
     ]));
-    let mut record = to_record(&written).unwrap();
-    let nan = data_mut(&mut record).remove("nan").unwrap();
-    assert!(matches!(nan, Bson::Double(number) if number.is_nan()));
+    let record = to_record(&written).unwrap();
     let expected = doc! {
         "title": "Notes",
         "priority": 2_i64,
@@ -218,19 +320,16 @@ fn each_kind_of_value_is_stored_as_plain_bson_and_read_back() {
         "local": instant("2026-10-20T09:00:00Z"),
         "at": { "t": "time", "v": "07:32:00" },
         "at_ms": { "t": "time", "v": "07:32:00.250" },
-        "infinity": f64::INFINITY,
-        "negative": f64::NEG_INFINITY,
     };
     assert_eq!(data(&record), &expected);
 
-    data_mut(&mut record).insert("nan", nan);
     let back = from_record(record).unwrap();
     let read = mapping(vec![
         ("title", string("Notes")),
         ("priority", Value::Integer(2)),
         ("ratio", Value::Float(0.5)),
         ("done", Value::Boolean(false)),
-        ("none", Value::Null),
+        ("none", Value::Null(())),
         (
             "tags",
             Value::Sequence(vec![string("parser"), string("design")]),
@@ -248,9 +347,6 @@ fn each_kind_of_value_is_stored_as_plain_bson_and_read_back() {
             "at_ms",
             Value::Time(NaiveTime::from_hms_milli_opt(7, 32, 0, 250).unwrap()),
         ),
-        ("infinity", Value::NonFinite(NonFinite::Infinity)),
-        ("negative", Value::NonFinite(NonFinite::NegativeInfinity)),
-        ("nan", Value::NonFinite(NonFinite::Nan)),
     ]);
     assert_eq!(frontmatter(&back), Some(&read));
 }
@@ -316,11 +412,26 @@ fn a_document_of_t_and_v_is_a_time_only_when_v_is_a_time() {
 }
 
 #[test]
-fn a_record_that_does_not_read_names_its_id_and_what_is_wrong() {
+fn a_list_like_a_time_or_a_date_reads_back_as_a_list() {
+    let pair = Value::Sequence(vec![string("time"), string("07:32:00")]);
+    let instant_text = Value::Sequence(vec![string("2026-10-20T00:00:00Z")]);
+    let lists = mapping(vec![("pair", pair), ("instant", instant_text)]);
+    let record = to_record(&with_frontmatter(lists.clone())).unwrap();
+    let expected = doc! {
+        "pair": ["time", "07:32:00"],
+        "instant": ["2026-10-20T00:00:00Z"],
+    };
+    assert_eq!(data(&record), &expected);
+    let back = from_record(record).unwrap();
+    assert_eq!(frontmatter(&back), Some(&lists));
+}
+
+#[test]
+fn a_record_that_does_not_read_names_its_id_and_serdes_first_error() {
     let written = with_frontmatter(mapping(vec![("status", string("open"))]));
     let mut foreign = to_record(&written).unwrap();
-    data_mut(&mut foreign).insert("owner", ObjectId::parse_str(ID).unwrap());
-    let no_row = "the record ObjectId(\"6ad42f681472f05ab2ed9be7\") does not read: a frontmatter value cannot be a BSON ObjectId";
+    data_mut(&mut foreign).insert("x", f64::NAN);
+    let no_row = "the record ObjectId(\"6ad42f681472f05ab2ed9be7\") does not read: BSON error. Kind: A deserialization-related error occurred. Message: data did not match any variant of untagged enum Value.";
     assert_eq!(
         from_record(foreign),
         Err(StoreError::Backend(no_row.to_owned()))
@@ -328,11 +439,10 @@ fn a_record_that_does_not_read_names_its_id_and_what_is_wrong() {
 
     let mut broken = to_record(&written).unwrap();
     broken.remove("path");
-    broken.insert("text", "# Notes\n");
-    let issues = "the record ObjectId(\"6ad42f681472f05ab2ed9be7\") does not read: path: missing: expected String\ntext: unknown: found String(\"# Notes\\n\")";
+    let missing = "the record ObjectId(\"6ad42f681472f05ab2ed9be7\") does not read: BSON error. Kind: A deserialization-related error occurred. Message: missing field `path`.";
     assert_eq!(
         from_record(broken),
-        Err(StoreError::Backend(issues.to_owned()))
+        Err(StoreError::Backend(missing.to_owned()))
     );
 }
 
@@ -353,28 +463,34 @@ fn a_record_deeper_than_mongodb_holds_is_not_stored() {
 
 #[test]
 fn a_frontmatter_value_98_mappings_deep_is_not_stored() {
-    assert_eq!(depth(&to_record(&nested_mappings(97)).unwrap()), 100);
-    let refused = "notes/notes.md nests 101 levels, and MongoDB holds 100";
-    assert_eq!(
-        to_record(&nested_mappings(98)),
-        Err(StoreError::Backend(refused.to_owned()))
-    );
+    on_two_megabytes(|| {
+        let deepest = to_record(&nested_mappings(97)).unwrap();
+        assert_eq!(depth(&deepest), 100);
+        assert_eq!(from_record(deepest).unwrap(), nested_mappings(97));
+        let refused = "notes/notes.md nests 101 levels, and MongoDB holds 100";
+        assert_eq!(
+            to_record(&nested_mappings(98)),
+            Err(StoreError::Backend(refused.to_owned()))
+        );
+    });
 }
 
 #[test]
 fn a_frontmatter_value_400_mappings_deep_is_refused_before_it_is_written() {
-    let refused = "notes/notes.md nests 403 levels, and MongoDB holds 100";
-    assert_eq!(
-        to_record(&nested_mappings(400)),
-        Err(StoreError::Backend(refused.to_owned()))
-    );
+    on_two_megabytes(|| {
+        let refused = "notes/notes.md nests 403 levels, and MongoDB holds 100";
+        assert_eq!(
+            to_record(&nested_mappings(400)),
+            Err(StoreError::Backend(refused.to_owned()))
+        );
+    });
 }
 
 #[test]
 fn the_filter_on_a_frontmatter_key_names_doc_data() {
-    let status = frontmatter_is("status", &string("open"));
+    let status = frontmatter_is("status", &string("open")).unwrap();
     assert_eq!(status.to_string(), r#"{ "doc.data.status": "open" }"#);
-    let due = frontmatter_is("due", &Value::Date(date()));
+    let due = frontmatter_is("due", &Value::Date(date())).unwrap();
     assert_eq!(
         due,
         doc! { "doc.data.due": instant("2026-10-20T00:00:00Z") }
