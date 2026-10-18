@@ -196,6 +196,30 @@ fn a_read_of_a_missing_file_is_not_found() {
     on_both(&missing_file);
 }
 
+async fn below_a_file(system: &dyn System, root: &Path) {
+    let store = holding(system, root, &["a.md"]).await;
+    let below = StorePath::new("a.md/b.md").unwrap();
+    assert_eq!(
+        store.read(&below).await,
+        Err(StoreError::NotFound(below.clone()))
+    );
+    assert_eq!(
+        store.delete(&below, &Precondition::None).await,
+        Err(StoreError::NotFound(below.clone()))
+    );
+    let stale = Precondition::Matches(Revision("sha256:00".to_owned()));
+    assert_eq!(
+        store.delete(&below, &stale).await,
+        Err(StoreError::Conflict(below.clone()))
+    );
+    assert_eq!(everything(system, root).await, ["a.md"]);
+}
+
+#[test]
+fn a_path_below_a_file_has_no_file() {
+    on_both(&below_a_file);
+}
+
 async fn hidden_left_out(system: &dyn System, root: &Path) {
     let store = holding(system, root, &["a.md", "b/c.md", ".obsidian/x.md"]).await;
     assert_eq!(names(&store.list(None).await.unwrap()), ["a.md", "b/c.md"]);
@@ -257,6 +281,17 @@ async fn a_failed_write_leaves_no_temporary_file() {
     let failed = store.write(&onto_folder, b"x", &Precondition::None).await;
     assert!(matches!(failed, Err(StoreError::Backend(_))), "{failed:?}");
     assert_eq!(everything(&real, folder.path()).await, ["notes/a.md"]);
+}
+
+#[tokio::test]
+async fn a_write_below_a_file_fails_and_leaves_the_file() {
+    let real = RealSystem::new();
+    let folder = real.create_temp_dir().unwrap();
+    let store = holding(&real, folder.path(), &["a.md"]).await;
+    let below = StorePath::new("a.md/b.md").unwrap();
+    let failed = store.write(&below, b"x", &Precondition::Absent).await;
+    assert!(matches!(failed, Err(StoreError::Backend(_))), "{failed:?}");
+    assert_eq!(everything(&real, folder.path()).await, ["a.md"]);
 }
 
 #[tokio::test]

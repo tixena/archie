@@ -30,7 +30,7 @@ impl<'system> FileStore<'system> {
         let (folder, name) = self.place(path);
         let mut reader = match self.system.open(&folder.join(name)) {
             Ok(reader) => reader,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if missing(&error) => return Ok(None),
             Err(error) => return Err(backend(path, &error)),
         };
         let mut bytes = Vec::new();
@@ -207,11 +207,20 @@ fn backend(path: &StorePath, error: &io::Error) -> StoreError {
 
 /// `NotFound` for a missing file, `Backend` for any other failure.
 fn failure(path: &StorePath, error: &io::Error) -> StoreError {
-    if error.kind() == io::ErrorKind::NotFound {
+    if missing(error) {
         StoreError::NotFound(path.clone())
     } else {
         backend(path, error)
     }
+}
+
+/// Whether `error` says no file is at the path: nothing there, or a file
+/// where a folder of the path should be.
+fn missing(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+    )
 }
 
 /// `sha256:` and the 64 lowercase hexadecimal digits of the hash of `bytes`.
