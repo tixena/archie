@@ -43,6 +43,16 @@ const FORMS: [&str; 3] = ["markdown", "json", "rkyv"];
 
 const JEKYLL_POST: &str = FIXTURES[10];
 
+/// The four variables a `MinIO` store reads: a server no process listens on,
+/// whose connection is refused at once, and keys no output may show.
+#[cfg(feature = "minio")]
+const MINIO_VARIABLES: [(&str, &str); 4] = [
+    ("ARCHIE_MINIO_ENDPOINT", "http://127.0.0.1:1"),
+    ("ARCHIE_MINIO_REGION", "us-east-1"),
+    ("AWS_ACCESS_KEY_ID", "archie-unit-access"),
+    ("AWS_SECRET_ACCESS_KEY", "archie-unit-secret"),
+];
+
 /// A server no process listens on, which the driver tries once and gives up
 /// on at once: no server selection to wait for, no retry.
 #[cfg(feature = "mongodb")]
@@ -87,6 +97,25 @@ fn failed(ran: &Ran, code: u8, line: &str) {
     assert!(ran.stderr.ends_with('\n'), "{}", ran.stderr);
     assert_eq!(ran.stderr.lines().count(), 1, "{}", ran.stderr);
     assert_eq!(ran.stdout, b"");
+}
+
+/// Asserts neither key of `MINIO_VARIABLES` is on `ran`'s standard error.
+#[cfg(feature = "minio")]
+fn hides_the_keys(ran: &Ran) {
+    for (_, key) in &MINIO_VARIABLES[2..] {
+        assert!(!ran.stderr.contains(key), "{}", ran.stderr);
+    }
+}
+
+/// `system` with each of `MINIO_VARIABLES` but the one named `left_out`.
+#[cfg(feature = "minio")]
+fn minio_variables(system: MemorySystem, left_out: Option<&str>) -> MemorySystem {
+    MINIO_VARIABLES
+        .iter()
+        .filter(|(name, _)| Some(*name) != left_out)
+        .fold(system, |with, (name, value)| {
+            with.with_env(name, value).unwrap()
+        })
 }
 
 fn read(system: &MemorySystem, path: &str) -> String {
@@ -245,8 +274,9 @@ fn a_path_that_names_no_file_exits_2() {
     failed(&ran, 2, "archie: ../..: ");
 }
 
+#[cfg(not(feature = "minio"))]
 #[test]
-fn a_minio_store_exits_3_in_this_build() {
+fn a_minio_store_exits_3_in_a_build_without_it() {
     let system = vault("# A\n");
     let minio = archie(
         &system,
@@ -259,6 +289,77 @@ fn a_minio_store_exits_3_in_this_build() {
         "archie: minio:notes/drafts: this archie is built without the MinIO store",
     );
     assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn each_minio_variable_left_out_exits_3_with_one_line_naming_it() {
+    let lines = [
+        "archie: ARCHIE_MINIO_ENDPOINT is not set: it holds the MinIO server's address\n",
+        "archie: ARCHIE_MINIO_REGION is not set: it holds the region the MinIO server expects\n",
+        "archie: minio:notes/vault: `AWS_ACCESS_KEY_ID` is not set\n",
+        "archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not set\n",
+    ];
+    for ((name, _), line) in MINIO_VARIABLES.iter().zip(lines) {
+        let system = minio_variables(vault("# A\n"), Some(name));
+        let got = archie(&system, &["get", "a.md", "-s", "minio:notes/vault"], b"");
+        failed(&got, 3, line);
+        hides_the_keys(&got);
+        let written = archie(
+            &system,
+            &["write", "b.md", "--store", "minio:notes/vault"],
+            b"# B\n",
+        );
+        failed(&written, 3, line);
+        hides_the_keys(&written);
+        assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+    }
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn a_minio_server_that_cannot_be_reached_exits_4_naming_the_path_and_no_key() {
+    let system = minio_variables(vault("# A\n"), None);
+    let got = archie(&system, &["get", "a.md", "-s", "minio:notes"], b"");
+    failed(&got, 4, "archie: a.md: ");
+    hides_the_keys(&got);
+    let written = archie(
+        &system,
+        &["write", "b.md", "-s", "minio:notes/vault"],
+        b"# B\n",
+    );
+    failed(&written, 4, "archie: b.md: ");
+    hides_the_keys(&written);
+    assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn with_a_minio_store_the_path_is_used_as_written_and_checked_before_any_request() {
+    let system = minio_variables(vault("# A\n"), None);
+    for path in ["/notes/a.md", "./a.md", "notes/../a.md"] {
+        let ran = archie(&system, &["get", path, "-s", "minio:notes/vault"], b"");
+        failed(
+            &ran,
+            2,
+            &format!("archie: {path}: `{path}` is not a store path\n"),
+        );
+    }
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn a_minio_prefix_that_is_not_a_store_path_exits_2_naming_the_store() {
+    let system = vault("# A\n");
+    for prefix in ["a//b", "vault/", "..", "a/./b"] {
+        let store = format!("minio:notes/{prefix}");
+        let ran = archie(&system, &["get", "a.md", "-s", &store], b"");
+        failed(
+            &ran,
+            2,
+            &format!("archie: {store}: `{prefix}` is not a store path\n"),
+        );
+    }
 }
 
 #[cfg(not(feature = "mongodb"))]

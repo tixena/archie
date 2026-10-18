@@ -58,6 +58,37 @@ archie: missing.md: no file at this path
 
 With no `--store`, the store is the file system.
 
+With `--store minio:<bucket>` or `--store minio:<bucket>/<prefix>`, the store is
+the bucket `<bucket>` on the MinIO server that the environment names, its files
+kept as objects whose keys start with `<prefix>/`, or with no prefix when it is
+left out: with the prefix `vault`, the store path `notes/task.md` is the object
+`vault/notes/task.md`. The prefix follows the rules of a store path: parts joined
+by `/`, none empty, none `.` or `..`. The bucket goes in the path of each
+request's address, `<endpoint>/<bucket>/<key>`.
+
+| Variable | What it holds |
+|---|---|
+| `ARCHIE_MINIO_ENDPOINT` | The address of the MinIO server, such as `http://127.0.0.1:9000`. Required, with no default. |
+| `ARCHIE_MINIO_REGION` | The region the server expects, such as `us-east-1`. Required. |
+| `AWS_ACCESS_KEY_ID` | The access key every request is signed with. Required. |
+| `AWS_SECRET_ACCESS_KEY` | The secret key every request is signed with. Required. No output and no error shows it. |
+
+A missing variable exits with code 3, on one line that names it. A prefix that is
+not a store path exits with code 2. A server that cannot be reached, or that
+refuses the keys, exits with code 4.
+
+```console
+$ export ARCHIE_MINIO_ENDPOINT=http://127.0.0.1:9000 ARCHIE_MINIO_REGION=us-east-1
+$ export AWS_ACCESS_KEY_ID=archie AWS_SECRET_ACCESS_KEY=archie-secret
+$ archie get notes/task.md | archie write notes/task.md --store minio:notes/vault
+$ archie get notes/task.md --store minio:notes/vault > task.md
+$ archie get notes/task.md | cmp - task.md && echo same
+same
+$ unset ARCHIE_MINIO_REGION; archie get notes/task.md -s minio:notes/vault; echo "exit $?"
+archie: ARCHIE_MINIO_REGION is not set: it holds the region the MinIO server expects
+exit 3
+```
+
 With `--store mongodb:<database>/<collection>`, the store is the collection
 `<collection>` of the database `<database>`, on the MongoDB server that the
 environment variable `ARCHIE_MONGODB_URI` names. The command line holds names
@@ -79,9 +110,9 @@ archie: ARCHIE_MONGODB_URI is not set: it holds the MongoDB connection string
 exit 3
 ```
 
-This build of archie does not have the MinIO store: a `--store minio:` value exits
-with code 3. An archie built without its default features does not have the
-MongoDB store either, and refuses a `--store mongodb:` value the same way.
+An archie built without its default features has neither the MinIO store nor the
+MongoDB store, and a `--store minio:` or `--store mongodb:` value exits with code
+3 in it:
 
 ```console
 $ archie get notes/task.md --store minio:notes
@@ -97,8 +128,8 @@ A `--store` value of any other shape is a usage error, code 2.
 | 0 | Success. |
 | 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the rkyv form, or a value the frontmatter syntax cannot hold. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
-| 3 | The store is not configured, or its configuration is wrong: `ARCHIE_MONGODB_URI` is not set for `--store mongodb:`, or the store is not built into this archie, as the MinIO store is not. |
-| 4 | The store failed: a file system error, such as a folder that is not writable or a path that is a folder, or a MongoDB server that cannot be reached. A failure to write standard output is code 4 too. |
+| 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` for `--store mongodb:` or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
+| 4 | The store failed: a file system error, such as a folder that is not writable or a path that is a folder, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to write standard output is code 4 too. |
 | 6 | No file at the path. |
 
 Code 5 belongs to the language-model provider error of the validation run; see

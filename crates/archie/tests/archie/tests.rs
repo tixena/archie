@@ -1,7 +1,7 @@
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 use std::ffi::OsStr;
 use std::fs::{self, File};
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
@@ -22,6 +22,16 @@ const FIXTURES: &str = concat!(
 );
 
 const FORMS: [&str; 3] = ["markdown", "json", "rkyv"];
+
+/// The four variables a `MinIO` store reads: a server no process listens on,
+/// whose connection is refused at once, and keys no output may show.
+#[cfg(feature = "minio")]
+const MINIO_VARIABLES: [(&str, &str); 4] = [
+    ("ARCHIE_MINIO_ENDPOINT", "http://127.0.0.1:1"),
+    ("ARCHIE_MINIO_REGION", "us-east-1"),
+    ("AWS_ACCESS_KEY_ID", "archie-binary-access"),
+    ("AWS_SECRET_ACCESS_KEY", "archie-binary-secret"),
+];
 
 /// A server no process listens on, which the driver tries once and gives up
 /// on at once: no server selection to wait for, no retry.
@@ -49,6 +59,19 @@ fn archie_with_uri(folder: &Path, arguments: &[&str], uri: Option<&OsStr>) -> As
     } else {
         command.env_remove("ARCHIE_MONGODB_URI");
     }
+    command.write_stdin(b"# B\n".as_slice()).assert()
+}
+
+/// Runs the binary in `folder` with `arguments`, `# B` on standard input,
+/// and of the variables of `MINIO_VARIABLES` only those in `variables`.
+#[cfg(feature = "minio")]
+fn archie_with_minio(folder: &Path, arguments: &[&str], variables: &[(&str, &OsStr)]) -> Assert {
+    let mut command = Command::cargo_bin("archie").unwrap();
+    command.current_dir(folder).args(arguments);
+    for (name, _) in MINIO_VARIABLES {
+        command.env_remove(name);
+    }
+    command.envs(variables.iter().copied());
     command.write_stdin(b"# B\n".as_slice()).assert()
 }
 
@@ -82,6 +105,17 @@ fn fixtures() -> Vec<(String, String)> {
     files.sort_unstable();
     assert_eq!(files.len(), 21);
     files
+}
+
+/// Asserts as `failed` does, and that standard error shows neither key of
+/// `MINIO_VARIABLES`.
+#[cfg(feature = "minio")]
+fn failed_hiding_the_keys(ran: Assert, code: i32, line: &str) {
+    let stderr = String::from_utf8(ran.get_output().stderr.clone()).unwrap();
+    for (_, key) in &MINIO_VARIABLES[2..] {
+        assert!(!stderr.contains(key), "{stderr}");
+    }
+    failed(ran, code, line);
 }
 
 /// A new folder under the target folder.
@@ -319,6 +353,83 @@ fn a_mongodb_server_that_cannot_be_reached_exits_4_naming_the_store() {
     failed(get, 4, "archie: mongodb:notes/files: ");
     let write = archie_with_uri(root, &["write", "b.md", "-s", "mongodb:notes/files"], uri);
     failed(write, 4, "archie: mongodb:notes/files: ");
+    assert_eq!(names(root), Vec::<String>::new());
+}
+
+#[cfg(not(feature = "minio"))]
+#[test]
+fn a_minio_store_exits_3_in_a_build_without_it() {
+    let folder = folder();
+    let root = folder.path();
+    archie(
+        root,
+        &["write", "b.md", "-s", "minio:notes/drafts"],
+        b"# B\n",
+    )
+    .code(3_i32)
+    .stdout(is_empty())
+    .stderr(eq(
+        "archie: minio:notes/drafts: this archie is built without the MinIO store\n",
+    ));
+    assert_eq!(names(root), Vec::<String>::new());
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn each_minio_variable_left_out_or_not_utf8_exits_3_with_one_line_naming_it() {
+    let folder = folder();
+    let root = folder.path();
+    fs::write(root.join("a.md"), "# A\n").unwrap();
+    let all: Vec<(&str, &OsStr)> = MINIO_VARIABLES
+        .iter()
+        .map(|(name, value)| (*name, OsStr::new(value)))
+        .collect();
+    let lines = [
+        "archie: ARCHIE_MINIO_ENDPOINT is not set: it holds the MinIO server's address\n",
+        "archie: ARCHIE_MINIO_REGION is not set: it holds the region the MinIO server expects\n",
+        "archie: minio:notes/vault: `AWS_ACCESS_KEY_ID` is not set\n",
+        "archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not set\n",
+    ];
+    for (index, line) in lines.iter().enumerate() {
+        let mut variables = all.clone();
+        variables.remove(index);
+        let get = ["get", "a.md", "--store", "minio:notes/vault"];
+        failed_hiding_the_keys(archie_with_minio(root, &get, &variables), 3, line);
+        let write = ["write", "b.md", "-s", "minio:notes/vault"];
+        failed_hiding_the_keys(archie_with_minio(root, &write, &variables), 3, line);
+    }
+    let not_utf8 = OsStr::from_bytes(b"http://\xff");
+    let mut endpoint = all.clone();
+    endpoint[0] = ("ARCHIE_MINIO_ENDPOINT", not_utf8);
+    failed_hiding_the_keys(
+        archie_with_minio(root, &["get", "a.md", "-s", "minio:notes/vault"], &endpoint),
+        3,
+        "archie: ARCHIE_MINIO_ENDPOINT is not UTF-8: it holds the MinIO server's address\n",
+    );
+    let mut secret = all;
+    secret[3] = ("AWS_SECRET_ACCESS_KEY", OsStr::from_bytes(b"\xff"));
+    failed_hiding_the_keys(
+        archie_with_minio(root, &["write", "b.md", "-s", "minio:notes/vault"], &secret),
+        3,
+        "archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not Unicode\n",
+    );
+    assert_eq!(names(root), ["a.md"]);
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn a_minio_server_that_cannot_be_reached_exits_4_naming_the_path_and_no_key() {
+    let folder = folder();
+    let root = folder.path();
+    let variables: Vec<(&str, &OsStr)> = MINIO_VARIABLES
+        .iter()
+        .map(|(name, value)| (*name, OsStr::new(value)))
+        .collect();
+    let get = archie_with_minio(root, &["get", "a.md", "-s", "minio:notes"], &variables);
+    failed_hiding_the_keys(get, 4, "archie: a.md: ");
+    let write = ["write", "b.md", "-s", "minio:notes/vault"];
+    let written = archie_with_minio(root, &write, &variables);
+    failed_hiding_the_keys(written, 4, "archie: b.md: ");
     assert_eq!(names(root), Vec::<String>::new());
 }
 

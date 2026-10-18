@@ -3,7 +3,7 @@
 use core::fmt::Display;
 #[cfg(not(feature = "mongodb"))]
 use core::future::{self, Ready};
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 use std::env::VarError;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -16,6 +16,8 @@ use archie_store::document::{self, DocumentError};
 use archie_store::file::FileStore;
 #[cfg(feature = "mongodb")]
 use archie_store::mongo::MongoStore;
+#[cfg(feature = "minio")]
+use archie_store::object::{ObjectConfig, ObjectStore};
 use archie_store::{Precondition, Revision, Store as _, StoreError, StorePath};
 use os_shim::System;
 
@@ -28,7 +30,7 @@ struct Failure {
 }
 
 impl Failure {
-    #[cfg(feature = "mongodb")]
+    #[cfg(any(feature = "minio", feature = "mongodb"))]
     const fn configuration(message: String) -> Self {
         Self { code: 3, message }
     }
@@ -68,7 +70,7 @@ impl Failure {
     }
 
     /// The store `arg` names failed to open.
-    #[cfg(feature = "mongodb")]
+    #[cfg(any(feature = "minio", feature = "mongodb"))]
     fn store(arg: &StoreArg, error: &StoreError) -> Self {
         Self {
             code: store_code(error),
@@ -83,6 +85,7 @@ impl Failure {
         }
     }
 
+    #[cfg(not(all(feature = "minio", feature = "mongodb")))]
     fn unbuilt(arg: &StoreArg, store: &str) -> Self {
         Self {
             code: 3,
@@ -92,7 +95,7 @@ impl Failure {
 }
 
 /// `path` as the command line wrote it, as a path of a store `--store` names.
-#[cfg(feature = "mongodb")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 fn as_written(path: &Path) -> Result<StorePath, Failure> {
     let text = path.to_str().ok_or_else(|| Failure::not_utf8(path))?;
     StorePath::new(text).map_err(|error| Failure::of_store(path, None, &error))
@@ -134,18 +137,36 @@ fn machine(system: &dyn System) -> FileStore<'_> {
     FileStore::new(PathBuf::from("/"), system)
 }
 
-/// The connection string the environment holds in `ARCHIE_MONGODB_URI`.
-#[cfg(feature = "mongodb")]
-fn mongodb_uri(system: &dyn System) -> Result<String, Failure> {
-    system.env_var("ARCHIE_MONGODB_URI").map_err(|error| {
-        let what = match error {
-            VarError::NotPresent => "is not set",
-            VarError::NotUnicode(_) => "is not UTF-8",
-        };
-        Failure::configuration(format!(
-            "ARCHIE_MONGODB_URI {what}: it holds the MongoDB connection string"
-        ))
-    })
+/// The `MinIO` store `arg` names, `bucket` under `prefix` on the server the
+/// environment names, and `path` as a path of it.
+#[cfg(feature = "minio")]
+fn minio<'system>(
+    system: &dyn System,
+    arg: &StoreArg,
+    bucket: &str,
+    prefix: Option<&str>,
+    path: &Path,
+) -> Result<(AnyStore<'system>, StorePath), Failure> {
+    let under = prefix
+        .map(StorePath::new)
+        .transpose()
+        .map_err(|error| Failure::store(arg, &error))?;
+    let endpoint = variable(
+        system,
+        "ARCHIE_MINIO_ENDPOINT",
+        "the MinIO server's address",
+    )?;
+    let region = variable(
+        system,
+        "ARCHIE_MINIO_REGION",
+        "the region the MinIO server expects",
+    )?;
+    let config = ObjectConfig::new(endpoint, region, bucket.to_owned(), under);
+    // `open` fails only on a key missing from the environment.
+    let store = ObjectStore::open(system, config)
+        .map_err(|error| Failure::configuration(format!("{arg}: {error}")))?;
+    let at = as_written(path)?;
+    Ok((AnyStore::Minio(store), at))
 }
 
 /// The store `named` names, the file system's when it is `None`, and `path`
@@ -160,6 +181,9 @@ async fn open<'system>(
         return Ok((AnyStore::File(machine(system)), store_path(system, path)?));
     };
     match arg {
+        #[cfg(feature = "minio")]
+        StoreArg::Minio { bucket, prefix } => minio(system, arg, bucket, prefix.as_deref(), path),
+        #[cfg(not(feature = "minio"))]
         StoreArg::Minio {
             bucket: _,
             prefix: _,
@@ -168,7 +192,11 @@ async fn open<'system>(
             collection,
             database,
         } => {
-            let uri = mongodb_uri(system)?;
+            let uri = variable(
+                system,
+                "ARCHIE_MONGODB_URI",
+                "the MongoDB connection string",
+            )?;
             let at = as_written(path)?;
             let store = MongoStore::open(&uri, database, collection)
                 .await
@@ -190,17 +218,20 @@ fn open<'system>(
         let at = store_path(system, path);
         return future::ready(at.map(|place| (AnyStore::File(machine(system)), place)));
     };
-    let unbuilt = match arg {
+    let opened = match arg {
+        #[cfg(feature = "minio")]
+        StoreArg::Minio { bucket, prefix } => minio(system, arg, bucket, prefix.as_deref(), path),
+        #[cfg(not(feature = "minio"))]
         StoreArg::Minio {
             bucket: _,
             prefix: _,
-        } => "MinIO",
+        } => Err(Failure::unbuilt(arg, "MinIO")),
         StoreArg::Mongodb {
             collection: _,
             database: _,
-        } => "MongoDB",
+        } => Err(Failure::unbuilt(arg, "MongoDB")),
     };
-    future::ready(Err(Failure::unbuilt(arg, unbuilt)))
+    future::ready(opened)
 }
 
 fn options(syntax: SyntaxArg) -> WriteOptions {
@@ -297,6 +328,19 @@ fn store_path(system: &dyn System, path: &Path) -> Result<StorePath, Failure> {
         }
     }
     StorePath::new(&parts.join("/")).map_err(|error| Failure::of_store(path, None, &error))
+}
+
+/// The value of the variable `name`, which holds `holds`; the error names the
+/// variable, never its value.
+#[cfg(any(feature = "minio", feature = "mongodb"))]
+fn variable(system: &dyn System, name: &str, holds: &str) -> Result<String, Failure> {
+    system.env_var(name).map_err(|error| {
+        let what = match error {
+            VarError::NotPresent => "is not set",
+            VarError::NotUnicode(_) => "is not UTF-8",
+        };
+        Failure::configuration(format!("{name} {what}: it holds {holds}"))
+    })
 }
 
 /// Stores at `path` the document in `form` read from `stdin`, or from the
