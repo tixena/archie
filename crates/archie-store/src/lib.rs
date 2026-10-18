@@ -10,6 +10,8 @@ pub mod document;
 pub mod file;
 #[cfg(feature = "mongodb")]
 pub mod mongo;
+#[cfg(feature = "minio")]
+pub mod object;
 
 use core::fmt;
 

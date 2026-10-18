@@ -21,6 +21,8 @@ mongodb = [
     "dep:serde_json",
     "dep:tixschema",
 ]
+# The MinIO store: os-shim's MinIO client, and the Bucket trait it implements.
+minio = ["os-shim/minio", "os-shim/async"]
 
 [dependencies]
 archie-core = { path = "../archie-core" }

@@ -31,9 +31,20 @@ test-stores:
     name="archie-test-mongo-$$"
     docker run -d --rm --name "$name" -p 127.0.0.1::27017 mongo:latest >/dev/null
     trap 'docker stop "$name" >/dev/null' EXIT
+    rustfs="archie-test-rustfs-$$"
+    docker run -d --rm --name "$rustfs" -p 127.0.0.1::9000 \
+      -e RUSTFS_ACCESS_KEY=archie-test -e RUSTFS_SECRET_KEY=archie-test-secret \
+      rustfs/rustfs:1.0.0-beta.8 >/dev/null
+    trap 'docker stop "$name" "$rustfs" >/dev/null' EXIT
     port=$(docker port "$name" 27017/tcp | head -1 | sed 's/.*://')
+    rustfs_port=$(docker port "$rustfs" 9000/tcp | head -1 | sed 's/.*://')
+    endpoint="http://127.0.0.1:$rustfs_port"
     until docker exec "$name" mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok' >/dev/null 2>&1; do sleep 1; done
+    for _ in $(seq 1 50); do curl -s -o /dev/null "$endpoint/" && break; sleep 0.2; done
+    curl -sf --aws-sigv4 "aws:amz:us-east-1:s3" --user archie-test:archie-test-secret -X PUT "$endpoint/archie-test"
     ARCHIE_TEST_MONGODB_URI="mongodb://127.0.0.1:$port" \
+    ARCHIE_TEST_MINIO_ENDPOINT="$endpoint" ARCHIE_TEST_MINIO_BUCKET=archie-test \
+    AWS_ACCESS_KEY_ID=archie-test AWS_SECRET_ACCESS_KEY=archie-test-secret \
       cargo test -p archie-store -p archie --all-features --config 'build.rustflags=["--cfg", "store_tests"]'
 
 # Full pipeline: lint everything, build everything, run tests.
