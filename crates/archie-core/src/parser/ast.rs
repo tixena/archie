@@ -51,7 +51,7 @@ where
 
 /// What `parse` builds: a document whose frontmatter reads, or one whose
 /// frontmatter no entry of reads.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
 #[serde(tag = "t", rename_all = "kebab-case")]
@@ -69,7 +69,7 @@ pub type ArchivedRawDocument<E = Markdown> = mirror::ArchivedRawDocumentMirror<E
 
 /// A document whose frontmatter no entry of reads: its body, claimed by
 /// archie's markdown extension alone, and the frontmatter as written.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -84,7 +84,7 @@ pub struct InvalidDocument {
 
 /// A frontmatter no entry of reads: the reader's message, its syntax, and its
 /// text as written, so that a write gives it back.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug,
     Clone,
@@ -109,7 +109,7 @@ pub struct InvalidFrontmatter {
 }
 
 /// A markdown file whose frontmatter, if it has one, reads.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -132,7 +132,7 @@ where
 }
 
 /// The syntax a frontmatter block is written in.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -150,7 +150,7 @@ pub type ArchivedFrontmatterFormat = mirror::ArchivedFrontmatterFormatMirror;
 pub type Mapping = IndexMap<String, Value>;
 
 /// What a key maps to, or what a list holds.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", content = "v", rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -180,7 +180,7 @@ pub type ArchivedValue = mirror::ArchivedValueMirror;
 
 /// A float that is not a finite number: `.inf`, `-.inf` and `.nan` in
 /// YAML; `inf`, `-inf` and `nan` in TOML.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -211,7 +211,7 @@ pub type ArchivedNonFinite = mirror::ArchivedNonFiniteMirror;
 
 /// A stretch of markdown read by the same rules: the body, a list item's
 /// content, a table cell's content, a markdown code block's content.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -231,7 +231,7 @@ where
 }
 
 /// A node that stands on its own lines.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
 #[serde(tag = "t", rename_all = "kebab-case")]
@@ -253,7 +253,7 @@ where
 pub type ArchivedBlock<E = Markdown> = mirror::ArchivedBlockMirror<E>;
 
 /// Quoted text, without its `>` marks. Nothing inside it is read.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -273,7 +273,7 @@ where
 
 /// Raw HTML, as written: a block, or an inline node such as `<span>`. A
 /// block's `continues` is always `Continues::Neither`.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -295,7 +295,7 @@ where
 }
 
 /// A line of three or more `-`, `*` or `_`, such as `---`.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -316,7 +316,7 @@ where
 ///
 /// `heading` is `None` when no heading line was written, and a heading line
 /// with no text is a heading with no children.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -346,7 +346,7 @@ where
 }
 
 /// A heading line, such as `# Ship parser`. An empty heading has no children.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -366,7 +366,7 @@ where
 }
 
 /// A set of lines, ended by a blank line.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -385,7 +385,7 @@ where
 }
 
 /// One line of a paragraph and the inline nodes written on it.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -410,7 +410,7 @@ where
 /// their number. `start` is an ordered list's first number, `None` for a
 /// bullet list. `loose` is set when a blank line separates two items, or two
 /// blocks of one item.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -434,7 +434,7 @@ where
 }
 
 /// One entry of a list.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -458,7 +458,7 @@ where
 /// `value` holds the lines as the block holds them. The info string, the
 /// text after the opening fence, is split into `language`, its first word,
 /// `None` when there is no info string, and `args`, the rest.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -483,7 +483,7 @@ where
 }
 
 /// The rest of a fenced code block's info string, after its language.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", content = "v", rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -500,7 +500,7 @@ pub type ArchivedArgs = mirror::ArchivedArgsMirror;
 
 /// A table read from pipe, grid or simple table syntax. `head` holds the
 /// header rows, `rows` the rest.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -527,7 +527,7 @@ where
 }
 
 /// One row of a table.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -546,7 +546,7 @@ where
 }
 
 /// One cell of a table row.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -565,7 +565,7 @@ where
 }
 
 /// How a column's cells are aligned.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -580,7 +580,7 @@ pub enum Alignment {
 pub type ArchivedAlignment = mirror::ArchivedAlignmentMirror;
 
 /// The syntax a table is written in.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -597,7 +597,7 @@ pub enum TableFormat {
 pub type ArchivedTableFormat = mirror::ArchivedTableFormatMirror;
 
 /// A node inside a line of text.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
 #[serde(tag = "t", rename_all = "kebab-case")]
@@ -622,7 +622,7 @@ pub type ArchivedInline<E = Markdown> = mirror::ArchivedInlineMirror<E>;
 /// Whether an inline node goes on from the line before or into the line
 /// after. A node written across lines of a paragraph is cut into one piece
 /// per line.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -642,7 +642,7 @@ pub enum Continues {
 pub type ArchivedContinues = mirror::ArchivedContinuesMirror;
 
 /// Plain text.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -661,7 +661,7 @@ where
 }
 
 /// Text between `*` or `_`, such as `*a*`.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -688,7 +688,7 @@ where
 }
 
 /// Text between `**` or `__`, such as `**b**`.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -716,7 +716,7 @@ where
 
 /// A hard line break: the two or more spaces, or the backslash, that end a
 /// line followed by another line of its paragraph.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -738,7 +738,7 @@ where
 /// `children` are the text shown, and are empty for `[[target]]`. A
 /// reference link takes its target and title from its label's definition.
 /// `target` and `title` hold their escapes and references resolved.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -773,7 +773,7 @@ where
 }
 
 /// How a link or an image is written.
-#[model_schema()]
+#[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
@@ -791,7 +791,7 @@ pub type ArchivedLinkForm = mirror::ArchivedLinkFormMirror;
 ///
 /// `alt` is empty when none is written. `target` and `title` hold their
 /// escapes and references resolved.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]
@@ -821,7 +821,7 @@ where
 }
 
 /// Text between backticks, such as `` `archie check` ``.
-#[model_schema(default_types(E = Markdown))]
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
     Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
 )]

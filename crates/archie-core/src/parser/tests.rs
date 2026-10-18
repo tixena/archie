@@ -2,6 +2,8 @@
 //! an outline: one node per line, indented under its parent.
 
 mod blocks;
+#[cfg(feature = "mongodb")]
+mod bson;
 mod documents;
 mod errors;
 mod example;

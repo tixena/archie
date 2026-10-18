@@ -6,6 +6,7 @@ use core::fmt::Debug;
 use core::iter;
 use core::ops::Range;
 
+use serde::{Deserialize, Serialize};
 use tixschema::model_schema;
 
 use crate::parser::ast::{self, Document, InvalidDocument, Kind, MarkdownBlock, RawDocument};
@@ -372,7 +373,7 @@ impl Extension for Plain {
 /// `markdown` or `md`, in any case, holds a whole document, its frontmatter
 /// included.
 #[model_schema()]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Markdown;
 

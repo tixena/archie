@@ -16,6 +16,8 @@ default = ["zod", "jsonschema"]
 # cfg(feature = "...") checks successfully in this crate's scope.
 zod = []
 jsonschema = []
+# tixschema's MongoDB layer on every model type: typed paths and the recovering decode of BSON.
+mongodb = ["tixschema/mongodb", "dep:mongodb", "dep:bson"]
 
 [dependencies]
 # Error handling
@@ -44,3 +46,7 @@ rkyv.workspace = true
 
 # TypeScript type + Zod schema generation from Rust models
 tixschema.workspace = true
+
+# The MongoDB driver and its BSON, under the mongodb feature
+mongodb = { workspace = true, optional = true }
+bson = { workspace = true, optional = true }
