@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/archie-core"]
+members = ["crates/archie-core", "crates/archie-store"]
 resolver = "2"
 
 [workspace.package]
@@ -32,6 +32,15 @@ unicase = "2.10"
 
 # Unicode general categories, for emphasis delimiter runs
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
+
+# The operating system behind a trait, real or in memory
+os-shim = { git = "https://github.com/tixena/os-shim.git" }
+
+# SHA-256, for the revision of a stored file
+sha2 = "0.11"
+
+# Async runtime, for the tests of the stores
+tokio = { version = "1", default-features = false }
 
 [profile.release]
 lto = true
