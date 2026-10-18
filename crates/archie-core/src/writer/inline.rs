@@ -4,7 +4,7 @@
 use core::fmt::{self, Write as _};
 use core::mem;
 
-use crate::parser::ast::{Code, Continues, Emphasis, Image, Inline, Link, LinkForm, Strong};
+use crate::parser::ast::{Continues, Emphasis, Inline, Link, LinkForm, Strong};
 use crate::parser::definition;
 use crate::parser::entity;
 use crate::parser::extension::{Extension, Written};
@@ -14,6 +14,12 @@ use crate::parser::lexer;
 use crate::parser::line::{Base, space};
 use crate::parser::table;
 use crate::writer::Writer;
+
+/// The mark on each side of emphasis.
+pub const EMPHASIS: &str = "*";
+
+/// The mark on each side of strong text.
+pub const STRONG: &str = "**";
 
 /// How a line break no extension claimed is written.
 #[derive(Clone, Copy)]
@@ -110,7 +116,9 @@ impl Pieces {
     {
         for node in nodes {
             match node {
-                Inline::Code(code) if code.kind.0.is_none() => self.code(code),
+                Inline::Code(code) if code.kind.0.is_none() => {
+                    self.code(&code.value, code.continues);
+                }
                 Inline::Emphasis(emphasis) if emphasis.kind.0.is_none() => {
                     self.add(&emphasis.children);
                 }
@@ -130,22 +138,19 @@ impl Pieces {
         }
     }
 
-    /// A piece that goes on from the line before joins the span it is part
-    /// of.
-    fn code<T>(&mut self, code: &Code<T>)
-    where
-        T: Extension,
-    {
-        let continued = matches!(code.continues, Continues::Both | Continues::Previous);
+    /// Adds a code span piece holding `value`. A piece that goes on from the
+    /// line before joins the span it is part of.
+    pub fn code(&mut self, value: &str, continues: Continues) {
+        let from_before = matches!(continues, Continues::Both | Continues::Previous);
         match self.spans.last_mut() {
-            Some(span) if continued && self.open => {
+            Some(span) if from_before && self.open => {
                 span.push('\n');
-                span.push_str(&code.value);
+                span.push_str(value);
             }
-            Some(_) | None => self.spans.push(code.value.clone()),
+            Some(_) | None => self.spans.push(value.to_owned()),
         }
         self.owners.push(self.spans.len().saturating_sub(1));
-        self.open = matches!(code.continues, Continues::Both | Continues::Next);
+        self.open = matches!(continues, Continues::Both | Continues::Next);
     }
 
     /// The fence of each piece, the first one last.
@@ -186,23 +191,20 @@ impl Segment {
 }
 
 impl Segments {
-    /// A code span piece: the opening backticks before the first piece, the
-    /// closing ones after the last.
-    pub fn code<T>(&mut self, code: &Code<T>)
-    where
-        T: Extension,
-    {
+    /// A code span piece holding `value`: the opening backticks before the
+    /// first piece, the closing ones after the last.
+    pub fn code(&mut self, value: &str, continues: Continues) {
         self.bare_led |= self.list.is_empty();
-        let fence = self.fences.pop().unwrap_or_else(|| Fence::of(&code.value));
+        let fence = self.fences.pop().unwrap_or_else(|| Fence::of(value));
         let ticks = "`".repeat(fence.ticks);
         let pad = if fence.pad { " " } else { "" };
         let mut written = String::new();
-        if opens(code.continues) {
+        if opens(continues) {
             written.push_str(&ticks);
             written.push_str(pad);
         }
-        written.push_str(&code.value);
-        if closes(code.continues) {
+        written.push_str(value);
+        if closes(continues) {
             written.push_str(pad);
             written.push_str(&ticks);
         }
@@ -219,7 +221,9 @@ impl Segments {
     where
         T: Extension,
     {
-        self.wrapped(writer, &emphasis.children, emphasis.continues, "*", link);
+        self.wrapped(emphasis.continues, EMPHASIS, |segments| {
+            segments.nodes(writer, &emphasis.children, link);
+        });
     }
 
     /// Puts a backslash before every `|` of the text written from now on.
@@ -227,28 +231,39 @@ impl Segments {
         self.pipes = true;
     }
 
-    /// `![alt](target "title")`, or `![[target|alt]]` for a wiki embed.
-    pub fn image<T>(&mut self, image: &Image<T>)
-    where
-        T: Extension,
-    {
+    /// Inline HTML, as written.
+    pub fn html(&mut self, value: &str) {
+        self.bare_led |= self.list.is_empty();
+        self.markup(value);
+    }
+
+    /// `![alt](destination "title")`, or `![[destination|alt]]` for a wiki
+    /// embed.
+    pub fn image(
+        &mut self,
+        form: LinkForm,
+        continues: Continues,
+        alt: &str,
+        destination: &str,
+        title: Option<&str>,
+    ) {
         let mut written = String::new();
-        match image.form {
+        match form {
             LinkForm::Markdown => {
-                if opens(image.continues) {
+                if opens(continues) {
                     written.push_str("![");
                 }
-                written.push_str(&image.alt);
-                if closes(image.continues) {
-                    written.push_str(&target(&image.target, image.title.as_deref()));
+                written.push_str(alt);
+                if closes(continues) {
+                    written.push_str(&target(destination, title));
                 }
             }
             LinkForm::Wiki => {
                 written.push_str("![[");
-                written.push_str(&image.target);
-                if !image.alt.is_empty() {
+                written.push_str(destination);
+                if !alt.is_empty() {
                     written.push('|');
-                    written.push_str(&image.alt);
+                    written.push_str(alt);
                 }
                 written.push_str("]]");
             }
@@ -274,7 +289,7 @@ impl Segments {
 
     /// A line break: `\`, which ends the line when lines are cut at line
     /// breaks, or `&#10;`.
-    fn line_break(&mut self) {
+    pub fn line_break(&mut self) {
         match self.breaks {
             Breaks::Backslash => self.markup("\\"),
             Breaks::Cut => {
@@ -305,33 +320,42 @@ impl Segments {
         (lines, text_led)
     }
 
-    /// `[text](target "title")`, also for a reference link or an autolink,
-    /// or `[[target|text]]` for a wiki link. The `[` goes before the first
-    /// piece of a link written over several lines, the rest after the last.
+    /// `[text](target "title")`, or `[[target|text]]` for a wiki link.
     pub fn link<T>(&mut self, writer: &mut Writer, link: &Link<T>)
     where
         T: Extension,
     {
         match link.form {
-            LinkForm::Markdown => {
-                if opens(link.continues) {
-                    self.markup("[");
-                }
-                self.nodes(writer, &link.children, true);
-                if closes(link.continues) {
-                    self.markup(&target(&link.target, link.title.as_deref()));
-                }
-            }
+            LinkForm::Markdown => self.markdown_link(
+                link.continues,
+                &link.target,
+                link.title.as_deref(),
+                |segments| segments.nodes(writer, &link.children, true),
+            ),
             LinkForm::Wiki => {
-                let mut written = format!("[[{}", link.target);
                 let alias: String = link.children.iter().filter_map(text_of).collect();
-                if !alias.is_empty() {
-                    written.push('|');
-                    written.push_str(&alias);
-                }
-                written.push_str("]]");
-                self.markup(&written);
+                self.wiki_link(&link.target, &alias);
             }
+        }
+    }
+
+    /// `[text](destination "title")`, also for a reference link or an autolink. The `[` goes
+    /// before the first piece of a link written over several lines, the rest after the last.
+    pub fn markdown_link<F>(
+        &mut self,
+        continues: Continues,
+        destination: &str,
+        title: Option<&str>,
+        children: F,
+    ) where
+        F: FnOnce(&mut Self),
+    {
+        if opens(continues) {
+            self.markup("[");
+        }
+        children(self);
+        if closes(continues) {
+            self.markup(&target(destination, title));
         }
     }
 
@@ -405,13 +429,16 @@ impl Segments {
         T: Extension,
     {
         match node {
-            Inline::Code(code) => self.code(code),
+            Inline::Code(code) => self.code(&code.value, code.continues),
             Inline::Emphasis(emphasis) => self.emphasis(writer, emphasis, link),
-            Inline::Html(html) => {
-                self.bare_led |= self.list.is_empty();
-                self.markup(&html.value);
-            }
-            Inline::Image(image) => self.image(image),
+            Inline::Html(html) => self.html(&html.value),
+            Inline::Image(image) => self.image(
+                image.form,
+                image.continues,
+                &image.alt,
+                &image.target,
+                image.title.as_deref(),
+            ),
             Inline::LineBreak(_) => self.line_break(),
             Inline::Link(anchor) => self.link(writer, anchor),
             Inline::Strong(strong) => self.strong(writer, strong, link),
@@ -424,7 +451,9 @@ impl Segments {
     where
         T: Extension,
     {
-        self.wrapped(writer, &strong.children, strong.continues, "**", link);
+        self.wrapped(strong.continues, STRONG, |segments| {
+            segments.nodes(writer, &strong.children, link);
+        });
     }
 
     /// The segments written between `start` and `end`, which are taken out.
@@ -478,30 +507,35 @@ impl Segments {
     {
         let spans = run.iter().filter_map(whole_span);
         let mark = spans.clone().next().map_or("", |(mark, _)| mark);
-        self.markup(mark);
-        for (_, children) in spans {
-            self.nodes(writer, children, link);
-        }
-        self.markup(mark);
+        self.wrapped(Continues::Neither, mark, |segments| {
+            for (_, children) in spans {
+                segments.nodes(writer, children, link);
+            }
+        });
     }
 
-    /// `children` between two `mark`s: the opening one before the first
-    /// piece of a node written over several lines, the closing one after
-    /// the last.
-    fn wrapped<T>(
-        &mut self,
-        writer: &mut Writer,
-        children: &[Inline<T>],
-        continues: Continues,
-        mark: &str,
-        link: bool,
-    ) where
-        T: Extension,
+    /// `[[destination|alias]]`, a wiki link.
+    pub fn wiki_link(&mut self, destination: &str, alias: &str) {
+        let mut written = format!("[[{destination}");
+        if !alias.is_empty() {
+            written.push('|');
+            written.push_str(alias);
+        }
+        written.push_str("]]");
+        self.markup(&written);
+    }
+
+    /// What `children` writes between two `mark`s: the opening one before
+    /// the first piece of a node written over several lines, the closing one
+    /// after the last.
+    pub fn wrapped<F>(&mut self, continues: Continues, mark: &str, children: F)
+    where
+        F: FnOnce(&mut Self),
     {
         if opens(continues) {
             self.markup(mark);
         }
-        self.nodes(writer, children, link);
+        children(self);
         if closes(continues) {
             self.markup(mark);
         }
@@ -839,12 +873,12 @@ where
         Inline::Emphasis(emphasis)
             if emphasis.kind.0.is_none() && emphasis.continues == Continues::Neither =>
         {
-            Some(("*", &emphasis.children))
+            Some((EMPHASIS, &emphasis.children))
         }
         Inline::Strong(strong)
             if strong.kind.0.is_none() && strong.continues == Continues::Neither =>
         {
-            Some(("**", &strong.children))
+            Some((STRONG, &strong.children))
         }
         Inline::Code(_)
         | Inline::Emphasis(_)

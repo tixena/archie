@@ -7,7 +7,7 @@ use core::fmt::{self, Write as _};
 use crate::parser::ast::{Mapping, NonFinite, Value};
 use crate::parser::located::ScalarValue;
 use crate::parser::scalar;
-use crate::writer::{push_date_time, push_finite, push_offset_date_time};
+use crate::writer::{Scalar, Shape, push_date_time, push_finite, push_offset_date_time, shape};
 
 /// The characters that make a plain scalar starting with them something
 /// else: the YAML indicators.
@@ -20,10 +20,14 @@ const FLOW_INDICATORS: [char; 5] = [',', '[', ']', '{', '}'];
 
 /// `mapping` between `---` lines.
 pub fn frontmatter(mapping: &Mapping) -> String {
-    let mut out = String::from("---\n");
-    block_mapping(&mut out, mapping, 0, false);
-    out.push_str("---\n");
-    out
+    let mut content = String::new();
+    block_mapping(&mut content, mapping, 0, false);
+    delimited(&content)
+}
+
+/// `content` between `---` lines.
+pub fn delimited(content: &str) -> String {
+    format!("---\n{content}---\n")
 }
 
 /// The pairs of `mapping`, each key at column `indent`. With `on_entry`, the
@@ -93,26 +97,10 @@ fn holds_mapping(sequence: &[Value]) -> bool {
 }
 
 /// `value` on one line, in flow form, inside a flow collection when
-/// `in_flow`: a date or a date-time after the tag `!!timestamp`, a time of
-/// day as quoted text, `null` for a null.
+/// `in_flow`.
 fn flow(out: &mut String, value: &Value, in_flow: bool) {
-    match value {
-        Value::Boolean(boolean) => out.push_str(if *boolean { "true" } else { "false" }),
-        Value::Date(date) => {
-            let _: fmt::Result = write!(out, "!!timestamp {date}");
-        }
-        Value::DateTime(date_time) => {
-            out.push_str("!!timestamp ");
-            push_date_time(out, date_time);
-        }
-        Value::Float(float) => match NonFinite::of(*float) {
-            Some(non_finite) => push_non_finite(out, non_finite),
-            None => push_finite(out, *float),
-        },
-        Value::Integer(integer) => {
-            let _: fmt::Result = write!(out, "{integer}");
-        }
-        Value::Mapping(mapping) => {
+    match shape(value) {
+        Shape::Mapping(mapping) => {
             out.push('{');
             for (index, (key, item)) in mapping.iter().enumerate() {
                 if index > 0 {
@@ -124,13 +112,8 @@ fn flow(out: &mut String, value: &Value, in_flow: bool) {
             }
             out.push('}');
         }
-        Value::NonFinite(non_finite) => push_non_finite(out, *non_finite),
-        Value::Null => out.push_str("null"),
-        Value::OffsetDateTime(date_time) => {
-            out.push_str("!!timestamp ");
-            push_offset_date_time(out, date_time);
-        }
-        Value::Sequence(sequence) => {
+        Shape::Scalar(scalar) => push_scalar(out, scalar, in_flow),
+        Shape::Sequence(sequence) => {
             out.push('[');
             for (index, item) in sequence.iter().enumerate() {
                 if index > 0 {
@@ -139,10 +122,6 @@ fn flow(out: &mut String, value: &Value, in_flow: bool) {
                 flow(out, item, true);
             }
             out.push(']');
-        }
-        Value::String(text) => push_text(out, text, in_flow),
-        Value::Time(time) => {
-            let _: fmt::Result = write!(out, "\"{time}\"");
         }
     }
 }
@@ -155,9 +134,42 @@ fn push_non_finite(out: &mut String, non_finite: NonFinite) {
     });
 }
 
+/// `scalar` on one line, inside a flow collection when `in_flow`: a date or
+/// a date-time after the tag `!!timestamp`, a time of day as quoted text,
+/// `null` for a null.
+pub fn push_scalar(out: &mut String, scalar: Scalar<'_>, in_flow: bool) {
+    match scalar {
+        Scalar::Boolean(boolean) => out.push_str(if boolean { "true" } else { "false" }),
+        Scalar::Date(date) => {
+            let _: fmt::Result = write!(out, "!!timestamp {date}");
+        }
+        Scalar::DateTime(date_time) => {
+            out.push_str("!!timestamp ");
+            push_date_time(out, &date_time);
+        }
+        Scalar::Float(float) => match NonFinite::of(float) {
+            Some(non_finite) => push_non_finite(out, non_finite),
+            None => push_finite(out, float),
+        },
+        Scalar::Integer(integer) => {
+            let _: fmt::Result = write!(out, "{integer}");
+        }
+        Scalar::NonFinite(non_finite) => push_non_finite(out, non_finite),
+        Scalar::Null => out.push_str("null"),
+        Scalar::OffsetDateTime(date_time) => {
+            out.push_str("!!timestamp ");
+            push_offset_date_time(out, &date_time);
+        }
+        Scalar::String(text) => push_text(out, text, in_flow),
+        Scalar::Time(time) => {
+            let _: fmt::Result = write!(out, "\"{time}\"");
+        }
+    }
+}
+
 /// `text` plain, or in double quotes with its line breaks, quotes,
 /// backslashes and control characters escaped.
-fn push_text(out: &mut String, text: &str, in_flow: bool) {
+pub fn push_text(out: &mut String, text: &str, in_flow: bool) {
     if !needs_quotes(text, in_flow) {
         out.push_str(text);
         return;
@@ -199,6 +211,6 @@ fn needs_quotes(text: &str, in_flow: bool) -> bool {
         || !matches!(scalar::yaml(text), ScalarValue::String(_))
 }
 
-fn push_indent(out: &mut String, indent: usize) {
+pub fn push_indent(out: &mut String, indent: usize) {
     out.push_str(&" ".repeat(indent));
 }

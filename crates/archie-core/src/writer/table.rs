@@ -11,7 +11,7 @@ const NARROWEST: usize = 3;
 
 /// A row as it is laid out: its cells' text, or what an extension wrote for
 /// a row it claimed, which is written as it is.
-enum Row {
+pub enum Row {
     Cells(Vec<String>),
     Claimed(String),
 }
@@ -67,15 +67,28 @@ where
         .iter()
         .map(|each| row(writer, each, width))
         .collect();
-    let one_line = head.iter().chain(&rows).all(|each| match each {
+    lay_out(writer, &table.alignments, width, &head, &rows);
+}
+
+/// `head` and `rows`, of `width` cells, as a pipe table, or as a grid table
+/// when a cell needs more than one line or there is not exactly one header
+/// row.
+pub fn lay_out(
+    writer: &mut Writer,
+    alignments: &[Alignment],
+    width: usize,
+    head: &[Row],
+    rows: &[Row],
+) {
+    let one_line = head.iter().chain(rows).all(|each| match each {
         Row::Cells(cells) => cells.iter().all(|text| !text.contains('\n')),
         Row::Claimed(_) => true,
     });
     let mut out = String::new();
     if head.len() == 1 && one_line {
-        pipe(&mut out, &table.alignments, width, &head, &rows);
+        pipe(&mut out, alignments, width, head, rows);
     } else {
-        grid(&mut out, &table.alignments, width, &head, &rows);
+        grid(&mut out, alignments, width, head, rows);
     }
     writer.put(&out);
 }

@@ -2490,7 +2490,7 @@ pub(super) fn nested_markdown_blocks(levels: usize) -> String {
 
 /// `levels` grid tables around `a`, each in the single cell of the one
 /// before.
-pub(super) fn nested_grid_tables(levels: usize) -> String {
+pub fn nested_grid_tables(levels: usize) -> String {
     let line =
         |depth: usize, text: &str| format!("{}{text}{}\n", "| ".repeat(depth), " |".repeat(depth));
     let borders: Vec<String> = (0..levels)

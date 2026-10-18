@@ -1,17 +1,28 @@
 //! Each sample is a tree written back to markdown: read from a source, or
 //! built, then written, then read again.
 
+use chrono::{FixedOffset, NaiveDate, NaiveTime, TimeZone as _};
 use indexmap::IndexMap;
+use rkyv::rancor::Error;
+use rkyv::util::AlignedVec;
+use rkyv::with::With;
 
 use crate::parser::ast::{
-    Alignment, Args, Block, CodeBlock, Document, FrontmatterFormat, Heading, Inline, Item, Kind,
-    Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Paragraph, RawDocument, Section,
-    Table, TableCell, TableFormat, TableRow, Text, Value,
+    Alignment, ArchivedRawDocument, Args, Block, CodeBlock, Document, FrontmatterFormat, Heading,
+    Inline, Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Paragraph,
+    RawDocument, Section, Table, TableCell, TableFormat, TableRow, Text, Value,
 };
 use crate::parser::error::{ParseError, RebuildError};
 use crate::parser::extension::{Construct, Context, Extension, Markdown, Plain, Written};
+use crate::parser::frontmatter::VALUE_CAP;
+use crate::parser::inline::INLINE_CAP;
+use crate::parser::lexer::BLOCK_CAP;
+use crate::parser::mirror::RawDocumentMirror;
+use crate::parser::tests::blocks::nested_grid_tables;
+use crate::parser::tests::json::unclaim;
+use crate::parser::tests::on_two_megabytes;
 use crate::parser::{ParseOptions, Parsed, parse, parse_with, rebuild_with};
-use crate::writer::{WriteError, WriteOptions, Writer, write};
+use crate::writer::{WriteError, WriteOptions, Writer, write, write_archived};
 
 /// Every file under `parser/tests/fixtures/`.
 const FIXTURES: [(&str, &str); 21] = [
@@ -113,6 +124,39 @@ ___
 /// TOML frontmatter with a table, then a heading.
 const TOML_SAMPLE: &str =
     "+++\ntitle = \"Notes\"\ndue = 2026-10-10\n[params]\nauthor = \"Ada\"\n+++\n# Notes\n";
+
+/// Sources of the constructs, and the guards around them, that the fixture
+/// files do not hold.
+const CONSTRUCTS: [&str; 28] = [
+    "Title\n=====\n\nSub\n---\ntext\n\n# A\n\n#\n\nfoo\n",
+    "Setext a  \nb\n===\n",
+    "a\\\n    <div>\n===\n",
+    "\\[a]: b  \nc\n===\n",
+    "- a\n* b\n+ c\n\n1. a\n1) b\n",
+    "3. a\n\n4. b\n\n- a\n\n  second\n- b\n",
+    "-\n  - -\n\n-\n  \t<div>\n\n- a\n+ ***\n",
+    "- ```\n  a\n\n  b\n  ```\n",
+    "_a_ __b__ `c` ``a`b`` *a*_b_ __*a*__ _*a*_\n",
+    "*a `b`* **c `d`** [e `f`](u) ```g``h```\n",
+    "[a\\[b](u) [*c\\]d*](u)\n",
+    "Some *emphasis that\ngoes on* here.\nA [link that\ngoes on\nand on](u \"t\") here.\n",
+    "a ``code ` that\ngoes on`` b\n\na ``b\n    # c``\n",
+    "[g][1] [a](<b c> 'd') <https://x.org> [a](u(1)) [a](<u)>) [a](u&#10;x)\n\n[1]: u\n",
+    "[[t|x]] [[only]] ![a](i.png) ![[i.png|alt]] ![[i.png]] ![a](<b c> \"t\")\n",
+    "a &amp;amp; b &#38;#35; c & d &#32;\n\n\\*a\\* \\_b\\_ \\`c\\` \\[d](e) \\<f> \\!\\[g](h)\n",
+    "\\# a\n\n\\> b\n\n\\- c\n\n1\\. d\n\na\n\\===\n\n#tag and [x] here\n",
+    "a  \nb\\\nc\n\n>a\n>\n>  b\n\n<div>\n  <p>x</p>\n</div>\n\na <span>b</span>\n\n***\n",
+    "|a|bb|\n|-|:-|\n|1|2|\n\n| a \\| b |\n|---|\n",
+    "+-----+-----+\n| a   | b   |\n+=====+====:+\n| one | x   |\n|     |     |\n| two |     |\n+-----+-----+\n",
+    "a   b\n--- ---\n1   2\n",
+    "\tcode\n\n~~~python\nprint(1)\n~~~\n\n````\n```\ninside\n```\n````\n\n```\n```\n",
+    "```md title=\"README.md\",showLineNumbers=true\nx\n```\n\n```md a.b=1,a.c=2,d={}\nx\n```\n",
+    "```md a=1} # x\nx\n```\n\n```Markdown title\n# A\n```\n",
+    "a \\| b\n\\--- \\| ---\n\n\\+---+\n\\| a \\|\n\\+---+\n",
+    "\\+++\nx = 1\n\\+++\n",
+    "\u{feff}\u{feff}# A\n",
+    "a\n    ```b\n    c``d```\n",
+];
 
 /// Frontmatter written in TOML.
 const TOML: WriteOptions = WriteOptions {
@@ -1715,5 +1759,242 @@ fn text_reads_back_as_the_same_text_whether_it_is_quoted_or_not() {
     for frontmatter in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
         let written_text = write_valid(&built, &WriteOptions { frontmatter }).unwrap();
         assert_eq!(mapping(&written_text), expected, "{written_text}");
+    }
+}
+
+/// The rkyv bytes of `document`.
+fn archive(document: &RawDocument) -> AlignedVec {
+    rkyv::to_bytes::<Error>(With::<RawDocument, RawDocumentMirror>::cast(document)).unwrap()
+}
+
+/// The archived tree `bytes` hold, checked.
+fn archived(bytes: &[u8]) -> &ArchivedRawDocument {
+    rkyv::access::<ArchivedRawDocument, Error>(bytes).unwrap()
+}
+
+/// Checks that the archived tree of `document` writes, with YAML and with
+/// TOML options, what `write` gives for `document` with every kind empty.
+fn writes_as_write_does(mut document: RawDocument, name: &str) {
+    let bytes = archive(&document);
+    let tree = archived(&bytes);
+    unclaim(&mut document);
+    for options in [WriteOptions::default(), TOML] {
+        assert_eq!(
+            write_archived(tree, &options),
+            write(&document, &options),
+            "{name}: {options:?}"
+        );
+    }
+}
+
+#[test]
+fn the_sample_is_written_from_its_archived_tree() {
+    let parsed = parse("---\nstatus: open\n---\n# Task\n\n* item\n");
+    let bytes = archive(&parsed.document);
+    assert_eq!(
+        write_archived(archived(&bytes), &WriteOptions::default()).unwrap(),
+        "---\nstatus: open\n---\n# Task\n\n- item\n"
+    );
+}
+
+#[test]
+fn each_fixture_is_written_from_its_archived_tree_as_write_writes_it() {
+    for (name, source) in FIXTURES {
+        writes_as_write_does(parse(source).document, name);
+    }
+}
+
+#[test]
+fn each_construct_is_written_from_its_archived_tree_as_write_writes_it() {
+    for source in CONSTRUCTS.into_iter().chain([OWNERS_SAMPLE, TOML_SAMPLE]) {
+        writes_as_write_does(parse(source).document, source);
+    }
+    let line_break = Inline::LineBreak(LineBreak { kind: Kind(None) });
+    let third = headed(vec![text_node("a"), line_break, text_node("b")], Vec::new());
+    let deep_heading = document(vec![headed(
+        Vec::new(),
+        vec![headed(Vec::new(), vec![third])],
+    )]);
+    let wide = Block::Table(Table {
+        alignments: vec![Alignment::Left, Alignment::Right, Alignment::Center],
+        format: TableFormat::Pipe,
+        head: vec![TableRow {
+            cells: vec![TableCell {
+                body: holding(vec![Block::Paragraph(Paragraph {
+                    kind: Kind(None),
+                    lines: vec![Line {
+                        children: vec![text_node("a")],
+                        kind: Kind(None),
+                    }],
+                })]),
+                kind: Kind(None),
+            }],
+            kind: Kind(None),
+        }],
+        kind: Kind(None),
+        rows: Vec::new(),
+    });
+    let null_args = Document {
+        body: holding(vec![code_with_args("sh", Value::Null, Kind(None))]),
+        ..document(Vec::new())
+    };
+    for (name, built) in [
+        ("sections 22 levels deep", document(vec![levels(1, 22)])),
+        ("a line break in a heading deeper than two", deep_heading),
+        ("toml args holding a null", null_args),
+        (
+            "more alignments than cells",
+            Document {
+                body: holding(vec![wide]),
+                ..document(Vec::new())
+            },
+        ),
+    ] {
+        writes_as_write_does(RawDocument::Valid(built), name);
+    }
+}
+
+#[test]
+fn each_value_is_written_from_its_archived_tree_as_write_writes_it() {
+    let date = NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+    let leap_second = NaiveTime::from_hms_nano_opt(23, 59, 59, 1_500_000_000).unwrap();
+    let local = date.and_time(NaiveTime::from_hms_nano_opt(9, 0, 0, 123_456_789).unwrap());
+    let at = FixedOffset::west_opt(4 * 3600)
+        .unwrap()
+        .from_local_datetime(&date.and_hms_opt(9, 0, 0).unwrap())
+        .single()
+        .unwrap();
+    let inner: Mapping = IndexMap::from([("a b".to_owned(), Value::Integer(1))]);
+    let values: Mapping = IndexMap::from([
+        ("boolean".to_owned(), Value::Boolean(true)),
+        ("date".to_owned(), Value::Date(date)),
+        ("date-time".to_owned(), Value::DateTime(local)),
+        ("float".to_owned(), Value::Float(0.5)),
+        (
+            "built non-finite".to_owned(),
+            Value::Float(f64::NEG_INFINITY),
+        ),
+        ("integer".to_owned(), Value::Integer(-7)),
+        ("empty".to_owned(), Value::Mapping(Mapping::new())),
+        ("mapping".to_owned(), Value::Mapping(inner.clone())),
+        ("non-finite".to_owned(), Value::NonFinite(NonFinite::Nan)),
+        ("offset-date-time".to_owned(), Value::OffsetDateTime(at)),
+        (
+            "sequence".to_owned(),
+            Value::Sequence(vec![text("a: b"), Value::Time(leap_second)]),
+        ),
+        (
+            "tables".to_owned(),
+            Value::Sequence(vec![Value::Mapping(inner.clone()), Value::Mapping(inner)]),
+        ),
+        (
+            "mixed".to_owned(),
+            Value::Sequence(vec![Value::Integer(1), Value::Mapping(Mapping::new())]),
+        ),
+        ("string".to_owned(), text("07:32:00")),
+        ("time".to_owned(), Value::Time(leap_second)),
+    ]);
+    let mut with_null = values.clone();
+    with_null.insert("null".to_owned(), Value::Null);
+    for (name, mapping) in [("each value", values), ("each value and a null", with_null)] {
+        writes_as_write_does(RawDocument::Valid(with_frontmatter(mapping)), name);
+    }
+}
+
+#[test]
+fn the_tree_at_the_caps_is_written_from_its_archived_tree_as_write_writes_it() {
+    on_two_megabytes(|| {
+        let mut source = String::from("---\n");
+        for level in 0..VALUE_CAP {
+            source.push_str(&"  ".repeat(level));
+            source.push_str("a:\n");
+        }
+        source.push_str(&"  ".repeat(VALUE_CAP));
+        source.push_str("b: 1\n---\n");
+        source.push_str(&"- ".repeat(BLOCK_CAP - 1));
+        source.push_str("a\n");
+        let stars = "*".repeat(2 * INLINE_CAP);
+        for deep in [
+            source,
+            format!("{stars}a{stars}\n"),
+            nested_grid_tables(BLOCK_CAP),
+        ] {
+            writes_as_write_does(parse(&deep).document, "the tree at the caps");
+        }
+    });
+}
+
+#[test]
+fn a_null_in_the_frontmatter_fails_the_archived_toml_write_with_the_error_write_gives() {
+    let document = parse("---\nowner:\n  name: Ada\n  email: null\n---\n").document;
+    let bytes = archive(&document);
+    assert_eq!(
+        write_archived(archived(&bytes), &TOML),
+        Err(null_error("owner.email"))
+    );
+    assert_eq!(write(&document, &TOML), Err(null_error("owner.email")));
+}
+
+#[test]
+fn a_markdown_block_is_written_from_its_archived_tree_as_its_value() {
+    let source = "```markdown\n* a\n```\n";
+    let document = parse(source).document;
+    let bytes = archive(&document);
+    assert_eq!(
+        write_archived(archived(&bytes), &WriteOptions::default()).unwrap(),
+        source
+    );
+    assert_eq!(
+        write(&document, &WriteOptions::default()).unwrap(),
+        "```markdown\n- a\n```\n"
+    );
+}
+
+#[test]
+fn an_invalid_document_is_written_from_its_archived_tree_as_write_writes_it() {
+    for source in [
+        "---\n{a: 1, b: [}\n---\n# A\n",
+        "+++\na = \"\"\"never closed\n+++\n# A\n",
+    ] {
+        let document = parse(source).document;
+        assert!(matches!(document, RawDocument::Invalid(_)), "{source:?}");
+        writes_as_write_does(document, source);
+    }
+    let mut closing = parse("---\na: [\n---\n# A\n").document;
+    if let RawDocument::Invalid(invalid) = &mut closing {
+        invalid.frontmatter.text = "a: [\n---\nb: 1".to_owned();
+    }
+    let error = WriteError {
+        key: String::new(),
+        message: "the invalid frontmatter's text holds the line `---`, which would close it"
+            .to_owned(),
+    };
+    assert_eq!(write(&closing, &WriteOptions::default()), Err(error));
+    writes_as_write_does(closing, "a text holding a line that would close it");
+}
+
+#[test]
+fn an_archived_date_out_of_chronos_range_fails_the_write_with_an_error_naming_its_key() {
+    let days = 0x0012_3456_i32;
+    let date = NaiveDate::from_num_days_from_ce_opt(days).unwrap();
+    let due: Mapping = IndexMap::from([("due".to_owned(), Value::Date(date))]);
+    let built = with_frontmatter(IndexMap::from([("owner".to_owned(), Value::Mapping(due))]));
+    let mut bytes = archive(&RawDocument::Valid(built));
+    let [found, past_range] =
+        [days, i32::MAX].map(|count| rkyv::to_bytes::<Error>(&count).unwrap());
+    let at = bytes
+        .windows(found.len())
+        .position(|window| window == found.as_slice())
+        .unwrap();
+    bytes[at..at + found.len()].copy_from_slice(&past_range);
+    let error = WriteError {
+        key: "owner.due".to_owned(),
+        message: "the archived date is out of chrono's range".to_owned(),
+    };
+    for options in [WriteOptions::default(), TOML] {
+        assert_eq!(
+            write_archived(archived(&bytes), &options),
+            Err(error.clone())
+        );
     }
 }

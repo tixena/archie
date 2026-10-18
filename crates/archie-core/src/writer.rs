@@ -1,6 +1,7 @@
 //! A document tree written back to markdown, in archie's own form: one
 //! written form for each construct, whatever form the file used.
 
+mod archived;
 mod inline;
 mod table;
 mod toml;
@@ -9,12 +10,12 @@ mod yaml;
 use core::fmt::{self, Write as _};
 use core::{iter, mem};
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use thiserror::Error;
 
 use crate::parser::ast::{
-    Args, Block, BlockQuote, CodeBlock, FrontmatterFormat, Heading, InvalidFrontmatter, Kind, Line,
-    List, MarkdownBlock, Paragraph, RawDocument, Section,
+    ArchivedRawDocument, Args, Block, CodeBlock, FrontmatterFormat, Heading, Kind, Line, List,
+    Mapping, MarkdownBlock, NonFinite, Paragraph, RawDocument, Section, Value,
 };
 use crate::parser::extension::{Extension, Written};
 use crate::parser::frontmatter;
@@ -52,6 +53,30 @@ enum Place {
     SubsectionFirst,
 }
 
+/// A frontmatter value that holds no other value, as the YAML and TOML
+/// writers take it from either tree.
+#[derive(Clone, Copy)]
+enum Scalar<'value> {
+    Boolean(bool),
+    Date(NaiveDate),
+    DateTime(NaiveDateTime),
+    Float(f64),
+    Integer(i64),
+    NonFinite(NonFinite),
+    Null,
+    OffsetDateTime(DateTime<FixedOffset>),
+    String(&'value str),
+    Time(NaiveTime),
+}
+
+/// A frontmatter value as the YAML and TOML writers walk it: a mapping, a
+/// list, or a scalar.
+enum Shape<'value, M, S> {
+    Mapping(&'value M),
+    Scalar(Scalar<'value>),
+    Sequence(&'value [S]),
+}
+
 impl Place {
     /// The place of the section at `index` in a markdown block's list.
     const fn in_block(index: usize) -> Self {
@@ -72,11 +97,8 @@ impl Place {
     }
 }
 
-/// Why a document could not be written: the key, of the frontmatter or of a
-/// code block's TOML args, whose value the chosen syntax cannot hold.
-///
-/// The key is empty when the text of an invalid frontmatter holds a line
-/// that would close it.
+/// Why a document could not be written: the frontmatter or TOML args key whose value the
+/// syntax or chrono cannot hold, empty when an invalid frontmatter's text holds a closing line.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 #[non_exhaustive]
@@ -144,11 +166,8 @@ impl Writer {
     }
 
     /// `> ` before each line of the quoted text, `>` alone on an empty one.
-    fn block_quote<T>(&mut self, quote: &BlockQuote<T>)
-    where
-        T: Extension,
-    {
-        for line in quote.value.split('\n') {
+    fn block_quote(&mut self, value: &str) {
+        for line in value.split('\n') {
             if line.is_empty() {
                 self.put(">\n");
             } else {
@@ -181,15 +200,12 @@ impl Writer {
         writer.out
     }
 
-    /// Fenced, also when it was indented.
-    fn code_block<T>(&mut self, code: &CodeBlock<T>)
-    where
-        T: Extension,
-    {
-        let info = self.info_string(code);
-        self.fenced(&info, |inner| {
-            if !code.value.is_empty() {
-                inner.put(&code.value);
+    /// The lines of a code block after `info`, fenced, also when they were
+    /// indented.
+    fn code_block(&mut self, info: &str, value: &str) {
+        self.fenced(info, |inner| {
+            if !value.is_empty() {
+                inner.put(value);
                 inner.put("\n");
             }
         });
@@ -236,47 +252,85 @@ impl Writer {
         self.put("\n");
     }
 
+    /// Writes a file: `frontmatter`, or the error that fails it, then the
+    /// body that `body` writes, at the start of the file when `file_start`.
+    fn file<F>(&mut self, frontmatter: Result<String, WriteError>, file_start: bool, body: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let mut text = match frontmatter {
+            Ok(text) => text,
+            Err(error) => {
+                self.record(Some(error));
+                return;
+            }
+        };
+        let mut writer = Self {
+            file_start,
+            ..self.inner()
+        };
+        body(&mut writer);
+        self.keep_error(&mut writer);
+        let written = writer.finish();
+        // The reader skips a byte-order mark that starts the file.
+        match written.strip_prefix('\u{feff}') {
+            Some(rest) if text.is_empty() => {
+                text.push_str("&#65279;");
+                text.push_str(rest);
+            }
+            Some(_) | None => text.push_str(&written),
+        }
+        self.put(&text);
+    }
+
     /// The text written, ending with one line ending unless it is empty.
     fn finish(mut self) -> String {
         self.end_line();
         self.out
     }
 
-    /// `#` marks, one per level of depth, then the heading's text, a line
-    /// break in it written `&#10;` and a backslash before a final run of `#`s
-    /// the reader would take for its closing sequence. At depth 1 or 2, a
-    /// heading that holds a line break is written over lines instead, each
-    /// but the last ended by the break's `\`, guarded as a paragraph's lines,
-    /// then `===` or `---` on a line of its own, unless text is written
-    /// before it in a tight list, which those lines would join.
     fn heading<T>(&mut self, heading: &Heading<T>)
     where
         T: Extension,
+    {
+        self.heading_line(
+            &Pieces::of(&heading.children),
+            inline::holds_line_break(&heading.children),
+            heading.children.is_empty(),
+            |segments, writer| segments.nodes(writer, &heading.children, false),
+        );
+    }
+
+    /// `#` marks, then the text, a line break as `&#10;` and a backslash before a final `#` run
+    /// that would read as the closing sequence. At depth 1 or 2, a line break splits it over
+    /// guarded lines, then `===` or `---`, unless it follows text in a tight list.
+    fn heading_line<F>(&mut self, pieces: &Pieces, line_break: bool, empty: bool, children: F)
+    where
+        F: Fn(&mut Segments, &mut Self),
     {
         let underline = match self.depth {
             1 => "===",
             2 => "---",
             _ => "",
         };
-        let pieces = Pieces::of(&heading.children);
         let after_text = self.tight && (self.after_text == Before::Text || !self.out.is_empty());
-        if !underline.is_empty() && !after_text && inline::holds_line_break(&heading.children) {
+        if !underline.is_empty() && !after_text && line_break {
             self.put_lines(|writer, pipes| {
-                let mut segments = Segments::new(&pieces);
+                let mut segments = Segments::new(pieces);
                 if pipes {
                     segments.escape_pipes();
                 }
                 segments.cut_at_line_breaks();
-                segments.nodes(writer, &heading.children, false);
+                children(&mut segments, writer);
                 segments.lines()
             });
             self.put(underline);
         } else {
             self.put(&"#".repeat(self.depth));
-            if !heading.children.is_empty() {
-                let mut segments = Segments::new(&pieces);
+            if !empty {
+                let mut segments = Segments::new(pieces);
                 segments.line_breaks_as_references();
-                segments.nodes(self, &heading.children, false);
+                children(&mut segments, self);
                 let mut text = segments.take(Near::Edge, Near::Edge);
                 inline::guard_closing_sequence(&mut text);
                 self.put(" ");
@@ -294,20 +348,15 @@ impl Writer {
     where
         T: Extension,
     {
-        let args = match &block.args {
-            Args::Text(text) => text.clone(),
+        let language = block.language.as_deref();
+        match &block.args {
+            Args::Text(text) => info(language, text),
             Args::Toml(mapping) => {
                 let (text, error) = toml::args(mapping);
                 self.record(error);
-                text
+                info(language, &text)
             }
-        };
-        let mut info = block.language.clone().unwrap_or_default();
-        if !args.is_empty() {
-            info.push(' ');
-            info.push_str(&args);
         }
-        info
     }
 
     /// Writes inline nodes on their own, with nothing known around them.
@@ -327,6 +376,40 @@ impl Writer {
         Self {
             frontmatter: self.frontmatter,
             ..Self::new()
+        }
+    }
+
+    /// Each of `items` after `-`, or after its number counted up from `start` and `.`, or `*`
+    /// and `)` for the other marker; `item` writes an item's lines, those after the first
+    /// indented to its text.
+    fn items<I, F>(&mut self, items: I, loose: bool, start: Option<u64>, mut item: F)
+    where
+        I: IntoIterator,
+        F: FnMut(&mut Self, I::Item),
+    {
+        let (bullet, delimiter) = match self.marker {
+            Marker::First => ("-", '.'),
+            Marker::Other => ("*", ')'),
+        };
+        for (index, each) in items.into_iter().enumerate() {
+            if index > 0 {
+                self.separate_items(loose);
+            }
+            let marker = start.map_or_else(
+                || bullet.to_owned(),
+                |first| {
+                    let number =
+                        u64::try_from(index).map_or(first, |step| first.saturating_add(step));
+                    format!("{number}{delimiter}")
+                },
+            );
+            let mut inner = Self {
+                tight: !loose,
+                ..self.inner()
+            };
+            item(&mut inner, each);
+            self.keep_error(&mut inner);
+            self.marked(&marker, &inner.finish());
         }
     }
 
@@ -351,38 +434,13 @@ impl Writer {
         }
     }
 
-    /// `-` and one space before each item of a bullet list, the number and
-    /// `. ` before each of an ordered list, numbered up from its first
-    /// number, or `*` and `)` in their place for the other marker. Each
-    /// item's lines after the first are indented to its text.
     fn list<T>(&mut self, list: &List<T>)
     where
         T: Extension,
     {
-        let (bullet, delimiter) = match self.marker {
-            Marker::First => ("-", '.'),
-            Marker::Other => ("*", ')'),
-        };
-        for (index, item) in list.items.iter().enumerate() {
-            if index > 0 {
-                self.separate_items(list.loose);
-            }
-            let marker = list.start.map_or_else(
-                || bullet.to_owned(),
-                |start| {
-                    let number =
-                        u64::try_from(index).map_or(start, |step| start.saturating_add(step));
-                    format!("{number}{delimiter}")
-                },
-            );
-            let mut inner = Self {
-                tight: !list.loose,
-                ..self.inner()
-            };
+        self.items(&list.items, list.loose, list.start, |inner, item| {
             inner.node(&item.kind, Written::Item(item));
-            self.keep_error(&mut inner);
-            self.marked(&marker, &inner.finish());
-        }
+        });
     }
 
     /// Writes `block` with its levels counted from one.
@@ -455,21 +513,34 @@ impl Writer {
         }
     }
 
+    /// The empty heading line of a section with no heading at `place`, unless a read builds it
+    /// again with none: first of a markdown block holding blocks or subsections, or first
+    /// subsection of its parent holding subsections and no blocks.
+    fn no_heading(&mut self, place: Place, blocks: bool, subsections: bool) {
+        match place {
+            Place::BlockFirst if blocks || subsections => {}
+            Place::SubsectionFirst if !blocks && subsections => {}
+            Place::BlockFirst | Place::Later | Place::SubsectionFirst => {
+                self.separate();
+                self.put(&"#".repeat(self.depth));
+                self.put("\n");
+            }
+        }
+    }
+
     /// Writes a node that stands on its own lines: what the extension that
     /// claimed it writes, or else its plain form.
     fn node<T>(&mut self, kind: &Kind<T>, plain: Written<'_, T>)
     where
         T: Extension,
     {
-        self.separate();
-        match kind.0.as_deref() {
+        self.standalone(|writer| match kind.0.as_deref() {
             Some(node) => {
-                let text = self.claimed(node, plain);
-                self.put(&text);
+                let text = writer.claimed(node, plain);
+                writer.put(&text);
             }
-            None => self.construct(plain),
-        }
-        self.end_line();
+            None => writer.construct(plain),
+        });
     }
 
     /// Each line of the paragraph on a line of its own, guarded as a
@@ -512,55 +583,45 @@ impl Writer {
         (lines, text_led)
     }
 
-    /// The heading, written when the section has one, or else an empty
-    /// heading line, unless a read builds the section again with none: as
-    /// the first of a markdown block holding blocks or subsections, or as
-    /// the first subsection of its parent holding subsections and no
-    /// blocks. Then the blocks, then the subsections one level deeper. Past
-    /// the deepest level, each subsection is a `markdown` block. A plain
-    /// list right after a plain list of its kind takes the other marker than
-    /// that list, so the two read back as two lists.
+    /// Picks the marker of the list written next: the other one than that of
+    /// the list before it, when that list is of its kind, `after_same_kind`.
+    fn pick_marker(&mut self, after_same_kind: bool) {
+        self.marker = if after_same_kind && self.marker == Marker::First {
+            Marker::Other
+        } else {
+            Marker::First
+        };
+    }
+
+    /// The heading or the empty heading line, then the blocks, then the subsections one level
+    /// deeper. A plain list right after a plain list of its kind takes the other marker, so the
+    /// two read back as two lists.
     fn plain_section<T>(&mut self, section: &Section<T>)
     where
         T: Extension,
     {
-        match (&section.heading, mem::take(&mut self.place)) {
-            (Some(heading), _) => self.node(&heading.kind, Written::Heading(heading)),
-            (None, Place::BlockFirst)
-                if !section.blocks.is_empty() || !section.subsections.is_empty() => {}
-            (None, Place::SubsectionFirst)
-                if section.blocks.is_empty() && !section.subsections.is_empty() => {}
-            (None, _) => {
-                self.separate();
-                self.put(&"#".repeat(self.depth));
-                self.put("\n");
-            }
+        let place = mem::take(&mut self.place);
+        match &section.heading {
+            Some(heading) => self.node(&heading.kind, Written::Heading(heading)),
+            None => self.no_heading(
+                place,
+                !section.blocks.is_empty(),
+                !section.subsections.is_empty(),
+            ),
         }
         let mut previous: Option<&List<T>> = None;
         for block in &section.blocks {
             let list = plain_list(block);
-            let same_kind = previous
-                .zip(list)
-                .is_some_and(|(before, after)| before.start.is_some() == after.start.is_some());
-            self.marker = if same_kind && self.marker == Marker::First {
-                Marker::Other
-            } else {
-                Marker::First
-            };
+            self.pick_marker(
+                previous
+                    .zip(list)
+                    .is_some_and(|(before, after)| before.start.is_some() == after.start.is_some()),
+            );
             self.block(block);
             previous = list;
         }
-        let depth = self.depth;
         for (index, subsection) in section.subsections.iter().enumerate() {
-            if depth < DEEPEST {
-                self.depth = depth + 1;
-                self.place = Place::in_parent(index);
-                self.section(subsection);
-                self.depth = depth;
-            } else {
-                self.separate();
-                self.fenced("markdown", |inner| inner.section(subsection));
-            }
+            self.subsection(index, |writer| writer.section(subsection));
         }
     }
 
@@ -620,7 +681,10 @@ impl Writer {
         T: Extension,
     {
         let (frontmatter, file_start) = match document {
-            RawDocument::Invalid(invalid) => (as_read(&invalid.frontmatter), false),
+            RawDocument::Invalid(invalid) => (
+                as_read(&invalid.frontmatter.text, invalid.frontmatter.format),
+                false,
+            ),
             RawDocument::Valid(valid) => {
                 let written = match (&valid.frontmatter, self.frontmatter) {
                     (None, _) => Ok(String::new()),
@@ -630,32 +694,10 @@ impl Writer {
                 (written, valid.frontmatter.is_none())
             }
         };
-        let mut text = match frontmatter {
-            Ok(text) => text,
-            Err(error) => {
-                self.record(Some(error));
-                return;
-            }
-        };
-        let mut writer = Self {
-            file_start,
-            ..self.inner()
-        };
-        match document {
+        self.file(frontmatter, file_start, |writer| match document {
             RawDocument::Invalid(invalid) => writer.markdown_node(&invalid.body),
             RawDocument::Valid(valid) => writer.node(&valid.kind, Written::Document(valid)),
-        }
-        self.keep_error(&mut writer);
-        let body = writer.finish();
-        // The reader skips a byte-order mark that starts the file.
-        match body.strip_prefix('\u{feff}') {
-            Some(rest) if text.is_empty() => {
-                text.push_str("&#65279;");
-                text.push_str(rest);
-            }
-            Some(_) | None => text.push_str(&body),
-        }
-        self.put(&text);
+        });
     }
 
     /// Keeps `error`, unless an error is kept already.
@@ -670,6 +712,26 @@ impl Writer {
         T: Extension,
     {
         self.node(&section.kind, Written::Section(section));
+    }
+
+    /// Writes the sections of a markdown block, each of which `section`
+    /// writes, in a writer of their own.
+    fn sections<I, F>(&mut self, sections: I, mut section: F)
+    where
+        I: IntoIterator,
+        F: FnMut(&mut Self, I::Item),
+    {
+        let mut inner = Self {
+            file_start: self.at_file_start(),
+            tight: self.tight,
+            ..self.inner()
+        };
+        for (index, each) in sections.into_iter().enumerate() {
+            inner.place = Place::in_block(index);
+            section(&mut inner, each);
+        }
+        self.keep_error(&mut inner);
+        self.put(&inner.finish());
     }
 
     /// Ends the line written last, and makes a blank line due before the
@@ -687,6 +749,38 @@ impl Writer {
             self.blank = true;
         }
     }
+
+    /// Writes what `write` writes on lines of its own.
+    fn standalone<F>(&mut self, write: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        self.separate();
+        write(self);
+        self.end_line();
+    }
+
+    /// Writes the subsection at `index`, which `section` writes, one level
+    /// deeper, or past the deepest level as a `markdown` block.
+    fn subsection<F>(&mut self, index: usize, section: F)
+    where
+        F: FnOnce(&mut Self),
+    {
+        let depth = self.depth;
+        if depth < DEEPEST {
+            self.depth = depth + 1;
+            self.place = Place::in_parent(index);
+            section(self);
+            self.depth = depth;
+        } else {
+            self.separate();
+            self.fenced("markdown", section);
+        }
+    }
+
+    fn thematic_break(&mut self) {
+        self.put("***\n");
+    }
 }
 
 impl<T> Written<'_, T>
@@ -697,16 +791,29 @@ where
     /// it, with `writer`.
     fn write_plain(self, writer: &mut Writer) {
         match self {
-            Self::BlockQuote(quote) => writer.block_quote(quote),
-            Self::Code(code) => writer.inline(|segments, _| segments.code(code)),
-            Self::CodeBlock(code) => writer.code_block(code),
+            Self::BlockQuote(quote) => writer.block_quote(&quote.value),
+            Self::Code(code) => {
+                writer.inline(|segments, _| segments.code(&code.value, code.continues));
+            }
+            Self::CodeBlock(code) => {
+                let info = writer.info_string(code);
+                writer.code_block(&info, &code.value);
+            }
             Self::Document(document) => writer.markdown_node(&document.body),
             Self::Emphasis(emphasis) => {
                 writer.inline(|segments, parent| segments.emphasis(parent, emphasis, false));
             }
             Self::Heading(heading) => writer.heading(heading),
             Self::Html(html) => writer.put(&html.value),
-            Self::Image(image) => writer.inline(|segments, _| segments.image(image)),
+            Self::Image(image) => writer.inline(|segments, _| {
+                segments.image(
+                    image.form,
+                    image.continues,
+                    &image.alt,
+                    &image.target,
+                    image.title.as_deref(),
+                );
+            }),
             Self::Item(item) => writer.markdown_node(&item.body),
             Self::Line(line) => {
                 let mut segments = Segments::new(&Pieces::of(&line.children));
@@ -716,19 +823,7 @@ where
             Self::LineBreak(_) => writer.put("\\"),
             Self::Link(link) => writer.inline(|segments, parent| segments.link(parent, link)),
             Self::List(list) => writer.list(list),
-            Self::MarkdownBlock(block) => {
-                let mut inner = Writer {
-                    file_start: writer.at_file_start(),
-                    tight: writer.tight,
-                    ..writer.inner()
-                };
-                for (index, section) in block.sections.iter().enumerate() {
-                    inner.place = Place::in_block(index);
-                    inner.section(section);
-                }
-                writer.keep_error(&mut inner);
-                writer.put(&inner.finish());
-            }
+            Self::MarkdownBlock(block) => writer.sections(&block.sections, Writer::section),
             Self::Paragraph(paragraph) => writer.paragraph(paragraph),
             Self::Section(section) => writer.plain_section(section),
             Self::Strong(strong) => {
@@ -741,7 +836,7 @@ where
                 writer.put(&line);
             }
             Self::Text(text) => writer.inline(|segments, _| segments.text(&text.value, false)),
-            Self::ThematicBreak(_) => writer.put("***\n"),
+            Self::ThematicBreak(_) => writer.thematic_break(),
         }
     }
 }
@@ -768,24 +863,54 @@ where
     writer.error.take().map_or(Ok(writer.out), Err)
 }
 
-/// The text of `invalid` between the delimiters of its syntax, the only
-/// syntax the text reads in, or an error naming a line of the text that
+/// Writes the archived `document` in place, as `write` writes the same tree:
+/// its frontmatter in the syntax `options` names, YAML by default.
+///
+/// # Errors
+///
+/// The errors `write` returns for the same tree, and an error naming the key
+/// of a date or time that the archived tree holds out of chrono's range.
+pub fn write_archived(
+    document: &ArchivedRawDocument,
+    options: &WriteOptions,
+) -> Result<String, WriteError> {
+    let mut writer = Writer {
+        frontmatter: options.frontmatter,
+        ..Writer::new()
+    };
+    archived::raw_document(&mut writer, document);
+    writer.error.take().map_or(Ok(writer.out), Err)
+}
+
+/// `text`, an invalid frontmatter's, between the delimiters of `format`, the
+/// only syntax the text reads in, or an error naming a line of the text that
 /// would close it, as the reader closes a frontmatter.
-fn as_read(invalid: &InvalidFrontmatter) -> Result<String, WriteError> {
-    if let Some(line) = frontmatter::closing(&invalid.text, 0, invalid.format) {
-        let text = invalid.text[line.start..line.end].trim_end();
+fn as_read(text: &str, format: FrontmatterFormat) -> Result<String, WriteError> {
+    if let Some(line) = frontmatter::closing(text, 0, format) {
+        let closing = text[line.start..line.end].trim_end();
         return Err(WriteError {
             key: String::new(),
             message: format!(
-                "the invalid frontmatter's text holds the line `{text}`, which would close it"
+                "the invalid frontmatter's text holds the line `{closing}`, which would close it"
             ),
         });
     }
-    let delimiter = match invalid.format {
+    let delimiter = match format {
         FrontmatterFormat::Toml => "+++",
         FrontmatterFormat::Yaml => "---",
     };
-    Ok(format!("{delimiter}\n{}\n{delimiter}\n", invalid.text))
+    Ok(format!("{delimiter}\n{text}\n{delimiter}\n"))
+}
+
+/// The info string of a code block: `language`, then a space and `args`,
+/// unless they are empty.
+fn info(language: Option<&str>, args: &str) -> String {
+    let mut info = language.unwrap_or_default().to_owned();
+    if !args.is_empty() {
+        info.push(' ');
+        info.push_str(args);
+    }
+    info
 }
 
 /// A date and time with no offset, such as `2026-10-10T07:32:00`, with the
@@ -812,6 +937,24 @@ fn push_finite(out: &mut String, float: f64) {
     let _: fmt::Result = write!(out, "{float}");
     if !out[start..].contains('.') {
         out.push_str(".0");
+    }
+}
+
+/// The shape of `value`, as the YAML and TOML writers walk it.
+fn shape(value: &Value) -> Shape<'_, Mapping, Value> {
+    match value {
+        Value::Boolean(boolean) => Shape::Scalar(Scalar::Boolean(*boolean)),
+        Value::Date(date) => Shape::Scalar(Scalar::Date(*date)),
+        Value::DateTime(date_time) => Shape::Scalar(Scalar::DateTime(*date_time)),
+        Value::Float(float) => Shape::Scalar(Scalar::Float(*float)),
+        Value::Integer(integer) => Shape::Scalar(Scalar::Integer(*integer)),
+        Value::Mapping(mapping) => Shape::Mapping(mapping),
+        Value::NonFinite(non_finite) => Shape::Scalar(Scalar::NonFinite(*non_finite)),
+        Value::Null => Shape::Scalar(Scalar::Null),
+        Value::OffsetDateTime(date_time) => Shape::Scalar(Scalar::OffsetDateTime(*date_time)),
+        Value::Sequence(sequence) => Shape::Sequence(sequence),
+        Value::String(text) => Shape::Scalar(Scalar::String(text)),
+        Value::Time(time) => Shape::Scalar(Scalar::Time(*time)),
     }
 }
 

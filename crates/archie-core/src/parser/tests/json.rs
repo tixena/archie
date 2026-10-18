@@ -350,7 +350,7 @@ fn scalar(document: &RawDocument, key: &str) -> Value {
 }
 
 /// Empties the `kind` of every node of `document`.
-pub(super) fn unclaim(document: &mut RawDocument) {
+pub fn unclaim(document: &mut RawDocument) {
     match document {
         RawDocument::Invalid(invalid) => unclaim_markdown_block(&mut invalid.body),
         RawDocument::Valid(valid) => {

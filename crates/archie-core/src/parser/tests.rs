@@ -1,7 +1,7 @@
 //! Each sample is a markdown source and the tree it parses into, written as
 //! an outline: one node per line, indented under its parent.
 
-mod blocks;
+pub mod blocks;
 #[cfg(feature = "mongodb")]
 mod bson;
 mod documents;
@@ -10,7 +10,7 @@ mod example;
 mod extension;
 mod frontmatter;
 mod inlines;
-mod json;
+pub mod json;
 mod rkyv;
 mod spans;
 mod tables;
@@ -511,7 +511,7 @@ fn check_spans(source: &str, expected: &[(&str, &str)]) {
 }
 
 /// Runs `test` on a thread with a 2 MB stack, the stack a test thread gets.
-fn on_two_megabytes<F>(test: F)
+pub fn on_two_megabytes<F>(test: F)
 where
     F: FnOnce() + Send + 'static,
 {

@@ -17,7 +17,7 @@ pub(crate) mod html;
 pub(crate) mod inline;
 pub(crate) mod lexer;
 pub(crate) mod line;
-mod mirror;
+pub(crate) mod mirror;
 pub(crate) mod scalar;
 pub(crate) mod table;
 mod toml;
@@ -334,4 +334,4 @@ fn read_lines(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

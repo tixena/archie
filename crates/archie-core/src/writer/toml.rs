@@ -4,7 +4,9 @@
 use core::fmt::{self, Write as _};
 
 use crate::parser::ast::{Mapping, NonFinite, Value};
-use crate::writer::{WriteError, push_date_time, push_finite, push_offset_date_time};
+use crate::writer::{
+    Scalar, Shape, WriteError, push_date_time, push_finite, push_offset_date_time, shape,
+};
 
 /// The pairs of `mapping` on one line, `key = value` separated by `, `: a
 /// code block's args. A pair holding a null, which TOML cannot hold, is left
@@ -36,7 +38,12 @@ pub fn args(mapping: &Mapping) -> (String, Option<WriteError>) {
 pub fn frontmatter(mapping: &Mapping) -> Result<String, WriteError> {
     let mut content = String::new();
     table(&mut content, mapping, &[])?;
-    Ok(format!("+++\n{content}+++\n"))
+    Ok(delimited(&content))
+}
+
+/// `content` between `+++` lines.
+pub fn delimited(content: &str) -> String {
+    format!("+++\n{content}+++\n")
 }
 
 /// The plain keys of `mapping`, then, in the order they were read, a
@@ -100,7 +107,7 @@ fn tables(value: &Value) -> Option<Vec<&Mapping>> {
 
 /// `[path]`, or `[[path]]` for an item of a list of tables, after a blank
 /// line unless it opens the frontmatter.
-fn header(out: &mut String, path: &[&str], array: bool) {
+pub fn header(out: &mut String, path: &[&str], array: bool) {
     if !out.is_empty() {
         out.push('\n');
     }
@@ -109,24 +116,11 @@ fn header(out: &mut String, path: &[&str], array: bool) {
     out.push_str(if array { "]]\n" } else { "]\n" });
 }
 
-/// `value` on one line: an inline table, an array, or a scalar, with text in
-/// double quotes and booleans, numbers, dates and times bare. A null is an
+/// `value` on one line: an inline table, an array, or a scalar. A null is an
 /// error naming `path`, its key.
 fn inline(out: &mut String, value: &Value, path: &[&str]) -> Result<(), WriteError> {
-    match value {
-        Value::Boolean(boolean) => out.push_str(if *boolean { "true" } else { "false" }),
-        Value::Date(date) => {
-            let _: fmt::Result = write!(out, "{date}");
-        }
-        Value::DateTime(date_time) => push_date_time(out, date_time),
-        Value::Float(float) => match NonFinite::of(*float) {
-            Some(non_finite) => push_non_finite(out, non_finite),
-            None => push_finite(out, *float),
-        },
-        Value::Integer(integer) => {
-            let _: fmt::Result = write!(out, "{integer}");
-        }
-        Value::Mapping(mapping) => {
+    match shape(value) {
+        Shape::Mapping(mapping) => {
             out.push('{');
             for (index, (key, item)) in mapping.iter().enumerate() {
                 out.push_str(if index > 0 { ", " } else { " " });
@@ -136,17 +130,8 @@ fn inline(out: &mut String, value: &Value, path: &[&str]) -> Result<(), WriteErr
             }
             out.push_str(if mapping.is_empty() { "}" } else { " }" });
         }
-        Value::NonFinite(non_finite) => push_non_finite(out, *non_finite),
-        Value::Null => {
-            let mut key = String::new();
-            push_path(&mut key, path);
-            return Err(WriteError {
-                key,
-                message: "TOML cannot hold a null".to_owned(),
-            });
-        }
-        Value::OffsetDateTime(date_time) => push_offset_date_time(out, date_time),
-        Value::Sequence(sequence) => {
+        Shape::Scalar(scalar) => push_scalar(out, scalar, path)?,
+        Shape::Sequence(sequence) => {
             out.push('[');
             for (index, item) in sequence.iter().enumerate() {
                 if index > 0 {
@@ -156,12 +141,15 @@ fn inline(out: &mut String, value: &Value, path: &[&str]) -> Result<(), WriteErr
             }
             out.push(']');
         }
-        Value::String(text) => push_string(out, text),
-        Value::Time(time) => {
-            let _: fmt::Result = write!(out, "{time}");
-        }
     }
     Ok(())
+}
+
+/// The keys of `path`, joined by `.`, as an error names them.
+pub fn key_of(path: &[&str]) -> String {
+    let mut key = String::new();
+    push_path(&mut key, path);
+    key
 }
 
 fn push_non_finite(out: &mut String, non_finite: NonFinite) {
@@ -173,7 +161,7 @@ fn push_non_finite(out: &mut String, non_finite: NonFinite) {
 }
 
 /// A bare key when it is one, or else a quoted one.
-fn push_key(out: &mut String, key: &str) {
+pub fn push_key(out: &mut String, key: &str) {
     let bare = !key.is_empty()
         && key
             .bytes()
@@ -193,6 +181,38 @@ fn push_path(out: &mut String, path: &[&str]) {
         }
         push_key(out, key);
     }
+}
+
+/// `scalar` on one line, with text in double quotes and booleans, numbers,
+/// dates and times bare. A null is an error naming `path`, its key.
+pub fn push_scalar(out: &mut String, scalar: Scalar<'_>, path: &[&str]) -> Result<(), WriteError> {
+    match scalar {
+        Scalar::Boolean(boolean) => out.push_str(if boolean { "true" } else { "false" }),
+        Scalar::Date(date) => {
+            let _: fmt::Result = write!(out, "{date}");
+        }
+        Scalar::DateTime(date_time) => push_date_time(out, &date_time),
+        Scalar::Float(float) => match NonFinite::of(float) {
+            Some(non_finite) => push_non_finite(out, non_finite),
+            None => push_finite(out, float),
+        },
+        Scalar::Integer(integer) => {
+            let _: fmt::Result = write!(out, "{integer}");
+        }
+        Scalar::NonFinite(non_finite) => push_non_finite(out, non_finite),
+        Scalar::Null => {
+            return Err(WriteError {
+                key: key_of(path),
+                message: "TOML cannot hold a null".to_owned(),
+            });
+        }
+        Scalar::OffsetDateTime(date_time) => push_offset_date_time(out, &date_time),
+        Scalar::String(text) => push_string(out, text),
+        Scalar::Time(time) => {
+            let _: fmt::Result = write!(out, "{time}");
+        }
+    }
+    Ok(())
 }
 
 /// `text` in double quotes, with its quotes, backslashes and control
@@ -218,7 +238,7 @@ fn push_string(out: &mut String, text: &str) {
 }
 
 /// `path` with `key` after it.
-fn joined<'path>(path: &[&'path str], key: &'path str) -> Vec<&'path str> {
+pub fn joined<'path>(path: &[&'path str], key: &'path str) -> Vec<&'path str> {
     let mut inner = path.to_vec();
     inner.push(key);
     inner
