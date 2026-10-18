@@ -3,7 +3,7 @@
 //! have exactly one header row.
 
 use crate::parser::ast::{Alignment, Table, TableCell, TableRow};
-use crate::parser::extension::{Construct, Extension};
+use crate::parser::extension::{Extension, Written};
 use crate::writer::Writer;
 
 /// The narrowest a column is written.
@@ -22,8 +22,8 @@ fn cell<T>(writer: &mut Writer, cell: &TableCell<T>) -> String
 where
     T: Extension,
 {
-    let mut inner = Writer::new();
-    inner.node(&cell.kind, Construct::TableCell(cell));
+    let mut inner = writer.inner();
+    inner.node(&cell.kind, Written::TableCell(cell));
     writer.keep_error(&mut inner);
     inner.finish().trim_end_matches('\n').to_owned()
 }
@@ -35,7 +35,7 @@ where
     T: Extension,
 {
     if let Some(node) = row.kind.0.as_deref() {
-        let text = writer.claimed(node, Construct::TableRow(row));
+        let text = writer.claimed(node, Written::TableRow(row));
         return Row::Claimed(text.trim_end_matches('\n').to_owned());
     }
     let mut cells: Vec<String> = row.cells.iter().map(|each| cell(writer, each)).collect();

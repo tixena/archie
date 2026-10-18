@@ -3,16 +3,18 @@
 
 use core::ops::Range;
 
-use super::{Rows, on_two_megabytes, outline};
+use super::json::{reads_back_from_json, rebuilds_from_json};
+use super::{Rows, on_two_megabytes, outline, valid_body};
 use crate::parser::ast::{
-    Block, CodeBlock, Document, Inline, Mapping, MarkdownBlock, TableCell, Value,
+    Block, CodeBlock, FrontmatterFormat, Inline, Mapping, MarkdownBlock, RawDocument, TableCell,
+    Value,
 };
 use crate::parser::error::ParseError;
-use crate::parser::extension::{Construct, Context, Either, Extension, Plain, With};
+use crate::parser::extension::{Construct, Context, Either, Extension, Plain, With, Written};
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{
-    ParseOptions, from_json, parse, parse_with, read_toml_lines, read_yaml_lines, rebuild_with,
-    to_json,
+    ParseOptions, from_json, located, parse, parse_located, parse_with, read_toml_lines,
+    read_yaml_lines, rebuild_with, to_json,
 };
 use crate::writer::{WriteOptions, Writer, write};
 
@@ -50,6 +52,19 @@ const HEADER: &str = r#"Mapping
     Scalar String "ada"
 "#;
 
+/// The outline of a document whose frontmatter maps `a` to 1, before the
+/// heading `T`.
+const A_THEN_T: &str = r#"Document
+  Frontmatter
+    Mapping
+      Pair key=a
+        Scalar Integer 1
+  MarkdownBlock
+    Section
+      Heading
+        Text "T"
+"#;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Comments;
 
@@ -85,7 +100,7 @@ impl Extension for Comments {
 
     /// The header's text values, a `key: value` line each, between `---`
     /// lines, then the body.
-    fn write<T>(node: &Comment<T>, _plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(node: &Comment<T>, _plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -137,7 +152,7 @@ impl Extension for Tickets {
         let Value::String(title) = read.mapping.get("title")? else {
             return None;
         };
-        let claimed = code_blocks(&document.body)
+        let claimed = located_code_blocks(&document.body)
             .into_iter()
             .filter(|block| block.kind.0.is_some())
             .count();
@@ -147,7 +162,7 @@ impl Extension for Tickets {
         }))
     }
 
-    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(_node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -175,10 +190,10 @@ impl Extension for Fences {
         let Construct::CodeBlock(block) = construct else {
             return None;
         };
-        Some(Ok(Writer::new().info_string(block)))
+        Some(Ok(Writer::new().info_string(&block.clone().into_model())))
     }
 
-    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(_node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -209,7 +224,7 @@ impl Extension for CellText {
         Some(context.markdown::<T>(cell.span.clone()))
     }
 
-    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(_node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -243,7 +258,7 @@ impl Extension for Raw {
         matches!(construct, Construct::ThematicBreak(_)).then(|| Ok("break".to_owned()))
     }
 
-    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(_node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -281,7 +296,7 @@ impl Extension for Marks {
         matches!(construct, Construct::LineBreak(_)).then(|| Ok("break".to_owned()))
     }
 
-    fn write<T>(_node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(_node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -289,9 +304,49 @@ impl Extension for Marks {
     }
 }
 
+/// Claims every block whose language is `markdown` or `md`, in any case, as
+/// the located tree its content reads as, spans and all.
+#[derive(Debug, Clone, PartialEq)]
+struct Located;
+
+impl Extension for Located {
+    type Node<T>
+        = located::MarkdownBlock<T>
+    where
+        T: Extension;
+
+    fn claim<T>(
+        construct: Construct<'_, T>,
+        context: &Context<'_>,
+    ) -> Option<Result<located::MarkdownBlock<T>, ParseError>>
+    where
+        T: Extension,
+    {
+        let Construct::CodeBlock(block) = construct else {
+            return None;
+        };
+        let language = block.language.as_deref()?;
+        (language.eq_ignore_ascii_case("markdown") || language.eq_ignore_ascii_case("md"))
+            .then(|| context.located_markdown::<T>(block.content.clone()))
+    }
+
+    fn write<T>(_node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
+    where
+        T: Extension,
+    {
+        writer.construct(plain);
+    }
+}
+
+/// Takes, from a document's body, the markdown block a code block lies in.
+type Pick = fn(&MarkdownBlock) -> &MarkdownBlock;
+
 /// A `---` line, the YAML header, a `---` line, then the body; or the same
 /// with a TOML header between `+++` lines.
-fn comment<T>(block: &CodeBlock<T>, context: &Context<'_>) -> Result<Comment<T>, ParseError>
+fn comment<T>(
+    block: &located::CodeBlock<T>,
+    context: &Context<'_>,
+) -> Result<Comment<T>, ParseError>
 where
     T: Extension,
 {
@@ -364,6 +419,85 @@ where
             | Block::ThematicBreak(_) => None,
         })
         .collect()
+}
+
+/// The located code blocks among the blocks of the top-level sections of
+/// `markdown`.
+fn located_code_blocks<T>(markdown: &located::MarkdownBlock<T>) -> Vec<&located::CodeBlock<T>>
+where
+    T: Extension,
+{
+    markdown
+        .sections
+        .iter()
+        .flat_map(|section| &section.blocks)
+        .filter_map(|block| match block {
+            located::Block::CodeBlock(code_block) => Some(code_block),
+            located::Block::BlockQuote(_)
+            | located::Block::Html(_)
+            | located::Block::List(_)
+            | located::Block::Paragraph(_)
+            | located::Block::Table(_)
+            | located::Block::ThematicBreak(_) => None,
+        })
+        .collect()
+}
+
+/// The first code block that `Located` claimed in `source`, at any depth of
+/// its list items and table cells, and the located tree it holds.
+fn located_claim(
+    source: &str,
+) -> Option<(located::CodeBlock<Located>, located::MarkdownBlock<Located>)> {
+    let document = parse_located::<Located>(source, &ParseOptions::default());
+    let mut bodies = vec![&document.body];
+    while let Some(body) = bodies.pop() {
+        let mut sections: Vec<&located::Section<Located>> = body.sections.iter().collect();
+        while let Some(section) = sections.pop() {
+            sections.extend(&section.subsections);
+            for block in &section.blocks {
+                match block {
+                    located::Block::CodeBlock(code) => {
+                        if let Some(claimed) = code.kind.0.as_deref() {
+                            return Some((code.clone(), claimed.clone()));
+                        }
+                    }
+                    located::Block::List(list) => {
+                        bodies.extend(list.items.iter().map(|item| &item.body));
+                    }
+                    located::Block::Table(table) => bodies.extend(
+                        table
+                            .head
+                            .iter()
+                            .chain(&table.rows)
+                            .flat_map(|row| &row.cells)
+                            .map(|cell| &cell.body),
+                    ),
+                    located::Block::BlockQuote(_)
+                    | located::Block::Html(_)
+                    | located::Block::Paragraph(_)
+                    | located::Block::ThematicBreak(_) => {}
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The body of `document`, a valid one.
+fn body_of<T>(document: &RawDocument<T>) -> &MarkdownBlock<T>
+where
+    T: Extension,
+{
+    valid_body(document).unwrap()
+}
+
+/// The body of the document archie's markdown extension claimed a construct
+/// as, in a pair's node.
+fn markdown_body<T, B>(node: &Either<RawDocument<T>, B>) -> Option<&MarkdownBlock<T>>
+where
+    T: Extension,
+{
+    first(node).and_then(valid_body)
 }
 
 /// The node of the first extension of a pair, when it claimed the construct.
@@ -457,13 +591,13 @@ fn indented(text: &str, indent: &str) -> String {
 /// Each node of `block`, with the source text its span covers.
 fn block_spans<'source, T>(
     source: &'source str,
-    block: &MarkdownBlock<T>,
+    block: &located::MarkdownBlock<T>,
 ) -> Vec<(String, &'source str)>
 where
     T: Extension,
 {
     let mut rows = Rows::default();
-    rows.markdown_block(0, block);
+    rows.located_markdown_block(0, block);
     rows.rows
         .into_iter()
         .map(|row| (row.label, &source[row.span.unwrap()]))
@@ -479,12 +613,12 @@ where
     outline(&rows.rows)
 }
 
-fn document_outline<T>(document: &Document<T>) -> String
+fn document_outline<T>(document: &RawDocument<T>) -> String
 where
     T: Extension,
 {
     let mut rows = Rows::default();
-    rows.document(document);
+    rows.raw_document(document);
     outline(&rows.rows)
 }
 
@@ -494,8 +628,10 @@ fn header_outline(
     source: &str,
     pick: fn(&MarkdownBlock<With<Comments>>) -> &MarkdownBlock<With<Comments>>,
 ) -> String {
-    let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
-    let comment = code_blocks(pick(&document.body))[0]
+    let document = parse_with::<Comments>(source, &ParseOptions::strict())
+        .unwrap()
+        .document;
+    let comment = code_blocks(pick(body_of(&document)))[0]
         .kind
         .0
         .as_deref()
@@ -515,8 +651,8 @@ fn refused_at_sign(source: &str) {
 
 /// `document` written to JSON, read back, and its extension nodes built
 /// again.
-fn rebuilt(document: &Document<With<Comments>>) -> Document<With<Comments>> {
-    let back: Document<With<Comments>> = from_json(&to_json(document).unwrap()).unwrap();
+fn rebuilt(document: &RawDocument<With<Comments>>) -> RawDocument<With<Comments>> {
+    let back: RawDocument<With<Comments>> = from_json(&to_json(document).unwrap()).unwrap();
     rebuild_with::<Comments>(&back, &ParseOptions::strict()).unwrap()
 }
 
@@ -562,24 +698,31 @@ fn comment_depth(body: &MarkdownBlock<With<Comments>>) -> (usize, &MarkdownBlock
 /// The value of the code block in the first item of the markdown block
 /// that the first code block of `read` holds, and the outline of the
 /// markdown block it holds.
-fn inner_claimed(read: &Document<With<Plain>>) -> (String, Option<String>) {
-    let outer = code_blocks(&read.body)[0]
+fn inner_claimed(read: &RawDocument<With<Plain>>) -> (String, Option<String>) {
+    let outer = code_blocks(body_of(read))[0]
         .kind
         .0
         .as_deref()
-        .and_then(first)
+        .and_then(markdown_body)
         .unwrap();
     let block = code_blocks(first_item(outer))[0];
     (
         block.value.clone(),
-        block.kind.0.as_deref().and_then(first).map(block_outline),
+        block
+            .kind
+            .0
+            .as_deref()
+            .and_then(markdown_body)
+            .map(block_outline),
     )
 }
 
 #[test]
 fn an_extension_turns_the_blocks_it_claims_into_its_own_typed_node() {
-    let document = parse_with::<Comments>(SOURCE, &ParseOptions::default()).unwrap();
-    let blocks = code_blocks(&document.body);
+    let document = parse_with::<Comments>(SOURCE, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let blocks = code_blocks(body_of(&document));
     let comment = blocks[0].kind.0.as_deref().and_then(second).unwrap();
     assert_eq!(
         block_outline(&comment.body),
@@ -625,7 +768,9 @@ fn an_extension_turns_the_blocks_it_claims_into_its_own_typed_node() {
 #[test]
 fn a_block_the_extension_claims_but_cannot_read_stays_a_plain_code_block() {
     let source = "# Notes\n\n```remargin\njust text, no header\n```\n";
-    let document = parse_with::<Comments>(source, &ParseOptions::default()).unwrap();
+    let document = parse_with::<Comments>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
     assert_eq!(
         document_outline(&document),
         r#"Document
@@ -649,12 +794,14 @@ fn a_strict_parse_fails_with_the_error_of_a_claim_that_cannot_be_read() {
 #[test]
 fn a_claim_that_cannot_be_read_inside_a_markdown_block_falls_back_or_fails_a_strict_parse() {
     let source = "````markdown\n```remargin\nno header\n```\n````\n";
-    let document = parse_with::<Comments>(source, &ParseOptions::default()).unwrap();
-    let markdown = code_blocks(&document.body)[0]
+    let document = parse_with::<Comments>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let markdown = code_blocks(body_of(&document))[0]
         .kind
         .0
         .as_deref()
-        .and_then(first)
+        .and_then(markdown_body)
         .unwrap();
     assert_eq!(
         block_outline(markdown),
@@ -677,26 +824,35 @@ fn a_fenced_block_whose_info_starts_with_markdown_or_md_in_any_case_holds_a_mark
         "```Markdown title\n# A\n```\n",
         "~~~markdown\n# A\n~~~\n",
     ] {
-        let document = parse(source);
-        let block = code_blocks(&document.body)[0];
+        let document = parse(source).document;
+        let block = code_blocks(body_of(&document))[0];
         assert_eq!(block.value, "# A");
         assert_eq!(
-            block_outline(block.kind.0.as_deref().unwrap()),
+            block_outline(body_of(block.kind.0.as_deref().unwrap())),
             "MarkdownBlock\n  Section\n    Heading\n      Text \"A\"\n",
             "{source}"
         );
     }
     for source in ["```mdx\n# A\n```\n", "```text markdown\n# A\n```\n"] {
-        let document = parse(source);
-        assert!(code_blocks(&document.body)[0].kind.0.is_none(), "{source}");
+        let document = parse(source).document;
+        assert!(
+            code_blocks(body_of(&document))[0].kind.0.is_none(),
+            "{source}"
+        );
     }
 }
 
 #[test]
 fn a_markdown_block_inside_a_markdown_block_is_read_the_same_way() {
     let source = "````markdown\n```md\n# B\n```\n````\n";
-    let document = parse(source);
-    let outer = code_blocks(&document.body)[0].kind.0.as_deref().unwrap();
+    let document = parse(source).document;
+    let outer = body_of(
+        code_blocks(body_of(&document))[0]
+            .kind
+            .0
+            .as_deref()
+            .unwrap(),
+    );
     assert_eq!(
         block_outline(outer),
         r##"MarkdownBlock
@@ -704,7 +860,7 @@ fn a_markdown_block_inside_a_markdown_block_is_read_the_same_way() {
     CodeBlock language="md" value="# B" claimed
 "##
     );
-    let inner = code_blocks(outer)[0].kind.0.as_deref().unwrap();
+    let inner = body_of(code_blocks(outer)[0].kind.0.as_deref().unwrap());
     assert_eq!(
         block_outline(inner),
         "MarkdownBlock\n  Section\n    Heading\n      Text \"B\"\n"
@@ -714,12 +870,14 @@ fn a_markdown_block_inside_a_markdown_block_is_read_the_same_way() {
 #[test]
 fn a_comment_inside_a_markdown_block_is_still_a_comment() {
     let source = "````markdown\n```remargin\n---\nid: abc\n---\nInside.\n```\n````\n";
-    let document = parse_with::<Comments>(source, &ParseOptions::default()).unwrap();
-    let markdown = code_blocks(&document.body)[0]
+    let document = parse_with::<Comments>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let markdown = code_blocks(body_of(&document))[0]
         .kind
         .0
         .as_deref()
-        .and_then(first)
+        .and_then(markdown_body)
         .unwrap();
     let comment = code_blocks(markdown)[0]
         .kind
@@ -741,14 +899,16 @@ fn a_comment_inside_a_markdown_block_is_still_a_comment() {
 #[test]
 fn a_tree_holding_a_comment_inside_a_markdown_block_clones_compares_and_prints() {
     let source = "````markdown\n```remargin\n---\nid: abc\n---\nInside.\n```\n````\n";
-    let document = parse_with::<Comments>(source, &ParseOptions::default()).unwrap();
+    let document = parse_with::<Comments>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
     let cloned = document.clone();
     assert_eq!(cloned, document);
-    let markdown = code_blocks(&cloned.body)[0]
+    let markdown = code_blocks(body_of(&cloned))[0]
         .kind
         .0
         .as_deref()
-        .and_then(first)
+        .and_then(markdown_body)
         .unwrap();
     assert!(
         code_blocks(markdown)[0]
@@ -788,14 +948,14 @@ Inside.
 ```
 ````
 ";
-    let document = parse_with::<(Comments, Tickets)>(source, &ParseOptions::default()).unwrap();
-    let ticket = document
-        .kind
-        .0
-        .as_deref()
-        .and_then(second)
-        .and_then(second)
-        .unwrap();
+    let document = parse_with::<(Comments, Tickets)>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let kind = match &document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => valid.kind.0.as_deref(),
+    };
+    let ticket = kind.and_then(second).and_then(second).unwrap();
     assert_eq!(
         ticket,
         &Ticket {
@@ -803,7 +963,7 @@ Inside.
             title: "Parser".to_owned(),
         }
     );
-    let blocks = code_blocks(&document.body);
+    let blocks = code_blocks(body_of(&document));
     let top = blocks[0]
         .kind
         .0
@@ -812,7 +972,7 @@ Inside.
         .and_then(first)
         .unwrap();
     assert!(block_outline(&top.body).ends_with("Text \"Top level.\"\n"));
-    let markdown = blocks[1].kind.0.as_deref().and_then(first).unwrap();
+    let markdown = blocks[1].kind.0.as_deref().and_then(markdown_body).unwrap();
     let inside = code_blocks(markdown)[0]
         .kind
         .0
@@ -829,8 +989,10 @@ fn the_first_extension_listed_that_claims_a_construct_gets_it() {
         "```remargin\n---\nid: abc\n---\n```\n\n```rust\nfn main() {}\n```\n\n```md\n# A\n```\n";
     let options = ParseOptions::default();
 
-    let fences_first = parse_with::<(Fences, Comments)>(source, &options).unwrap();
-    let fenced = code_blocks(&fences_first.body);
+    let fences_first = parse_with::<(Fences, Comments)>(source, &options)
+        .unwrap()
+        .document;
+    let fenced = code_blocks(body_of(&fences_first));
     let fence = |block: &CodeBlock<With<(Fences, Comments)>>| {
         block
             .kind
@@ -844,8 +1006,10 @@ fn the_first_extension_listed_that_claims_a_construct_gets_it() {
     assert_eq!(fence(fenced[1]).as_deref(), Some("rust"));
     assert!(fenced[2].kind.0.as_deref().and_then(first).is_some());
 
-    let comments_first = parse_with::<(Comments, Fences)>(source, &options).unwrap();
-    let commented = code_blocks(&comments_first.body);
+    let comments_first = parse_with::<(Comments, Fences)>(source, &options)
+        .unwrap()
+        .document;
+    let commented = code_blocks(body_of(&comments_first));
     let node = |block: &CodeBlock<With<(Comments, Fences)>>| {
         block.kind.0.as_deref().and_then(second).cloned()
     };
@@ -862,10 +1026,10 @@ fn the_first_extension_listed_that_claims_a_construct_gets_it() {
 
 #[test]
 fn a_markdown_block_inside_a_nested_item_holds_the_section_of_its_heading() {
-    let document = parse("- - ```markdown\n    # A\n    ```\n");
-    let block = code_blocks(first_item(first_item(&document.body)))[0];
+    let document = parse("- - ```markdown\n    # A\n    ```\n").document;
+    let block = code_blocks(first_item(first_item(body_of(&document))))[0];
     assert_eq!(
-        block_outline(block.kind.0.as_deref().unwrap()),
+        block_outline(body_of(block.kind.0.as_deref().unwrap())),
         "MarkdownBlock\n  Section\n    Heading\n      Text \"A\"\n"
     );
 }
@@ -884,20 +1048,23 @@ fn a_markdown_block_inside_a_nested_item_reads_as_it_does_at_the_root() {
     ] {
         let root = format!("````markdown\n{body}````\n");
         let nested = format!("- - ````markdown\n{}    ````\n", indented(body, "    "));
-        let root_document = parse(&root);
-        let nested_document = parse(&nested);
-        let at_root = code_blocks(&root_document.body)[0]
+        let root_document = parse(&root).document;
+        let nested_document = parse(&nested).document;
+        let at_root = code_blocks(body_of(&root_document))[0]
             .kind
             .0
             .as_deref()
+            .map(body_of)
             .unwrap();
-        let in_item = code_blocks(first_item(first_item(&nested_document.body)))[0]
+        let in_item = code_blocks(first_item(first_item(body_of(&nested_document))))[0]
             .kind
             .0
             .as_deref()
+            .map(body_of)
             .unwrap();
         assert_eq!(block_outline(in_item), block_outline(at_root), "{body}");
-        for (label, text) in block_spans(&nested, in_item) {
+        let (_, located) = located_claim(&nested).unwrap();
+        for (label, text) in block_spans(&nested, &located) {
             if label.starts_with("Text ") {
                 assert_eq!(label, format!("Text {text:?}"), "{body}");
             }
@@ -908,10 +1075,11 @@ fn a_markdown_block_inside_a_nested_item_reads_as_it_does_at_the_root() {
 #[test]
 fn a_line_indented_less_than_the_fence_loses_only_the_spaces_it_has() {
     let source = "   ```markdown\n  # A\n text\n   ```\n";
-    let document = parse(source);
-    let block = code_blocks(&document.body)[0];
+    let document = parse(source).document;
+    let block = code_blocks(body_of(&document))[0];
     assert_eq!(block.value, "# A\ntext");
-    let spans = block_spans(source, block.kind.0.as_deref().unwrap());
+    let (_, located) = located_claim(source).unwrap();
+    let spans = block_spans(source, &located);
     let expected = [
         ("MarkdownBlock", "  # A\n text"),
         ("Section", "# A\n text"),
@@ -934,17 +1102,25 @@ fn a_line_indented_less_than_the_fence_loses_only_the_spaces_it_has() {
 fn tab_stops_in_a_markdown_block_count_from_its_fence_as_in_its_value() {
     let source = "- x\n\n    ```md\n   -\ty\n        z\n    ```\n";
     let options = ParseOptions::default();
-    let document = parse_with::<Plain>(source, &options).unwrap();
-    let claimed = |read: &Document<With<Plain>>| {
-        let block = code_blocks(first_item(&read.body))[0];
+    let document = parse_with::<Plain>(source, &options).unwrap().document;
+    let claimed = |read: &RawDocument<With<Plain>>| {
+        let block = code_blocks(first_item(body_of(read)))[0];
         (
             block.value.clone(),
-            block.kind.0.as_deref().and_then(first).map(block_outline),
+            block
+                .kind
+                .0
+                .as_deref()
+                .and_then(markdown_body)
+                .map(block_outline),
         )
     };
     let (value, markdown) = claimed(&document);
     assert_eq!(value, "-\ty\n    z");
-    assert_eq!(markdown, Some(block_outline(&parse(&value).body)));
+    assert_eq!(
+        markdown,
+        Some(block_outline(body_of(&parse(&value).document)))
+    );
     assert_eq!(
         markdown.as_deref(),
         Some(
@@ -962,7 +1138,7 @@ fn tab_stops_in_a_markdown_block_count_from_its_fence_as_in_its_value() {
 "#
         )
     );
-    let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+    let back: RawDocument<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
     let again = rebuild_with::<Plain>(&back, &options).unwrap();
     assert_eq!(claimed(&again), claimed(&document));
     let written = "- x\n\n  ```md\n  - y\n    z\n  ```\n";
@@ -973,10 +1149,13 @@ fn tab_stops_in_a_markdown_block_count_from_its_fence_as_in_its_value() {
 #[test]
 fn a_simple_table_in_a_markdown_block_counts_its_tab_stops_from_the_fence() {
     let source = "- x\n\n  ```md\n  Name\tAge\n  ----\t-\t---\n  Ada\t\t36\n  ```\n";
-    let document = parse(source);
-    let block = code_blocks(first_item(&document.body))[0];
-    let claimed = block_outline(block.kind.0.as_deref().unwrap());
-    assert_eq!(claimed, block_outline(&parse(&block.value).body));
+    let document = parse(source).document;
+    let block = code_blocks(first_item(body_of(&document)))[0];
+    let claimed = block_outline(body_of(block.kind.0.as_deref().unwrap()));
+    assert_eq!(
+        claimed,
+        block_outline(body_of(&parse(&block.value).document))
+    );
     assert_eq!(
         claimed,
         r#"MarkdownBlock
@@ -1019,9 +1198,15 @@ fn a_simple_table_in_a_markdown_block_counts_its_tab_stops_from_the_fence() {
 #[test]
 fn a_markdown_block_at_column_0_counts_its_tab_stops_from_the_start_of_the_line() {
     let source = "```md\n-\ty\n    z\n\n\t\tcode\n\nName\tAge\n----\t---\nAda\t\t36\n```\n";
-    let document = parse(source);
+    let document = parse(source).document;
     assert_eq!(
-        block_outline(code_blocks(&document.body)[0].kind.0.as_deref().unwrap()),
+        block_outline(body_of(
+            code_blocks(body_of(&document))[0]
+                .kind
+                .0
+                .as_deref()
+                .unwrap()
+        )),
         r#"MarkdownBlock
   Section
     List loose
@@ -1069,15 +1254,18 @@ fn a_markdown_block_at_column_0_counts_its_tab_stops_from_the_start_of_the_line(
 fn a_markdown_block_in_a_markdown_block_reads_as_its_value_when_a_tab_comes_before_its_fence() {
     let source = "  ````md\n  -\t```md\n          x\n      ```\n  ````\n";
     let options = ParseOptions::default();
-    let document = parse_with::<Plain>(source, &options).unwrap();
+    let document = parse_with::<Plain>(source, &options).unwrap().document;
     let (value, markdown) = inner_claimed(&document);
     assert_eq!(value, "    x");
-    assert_eq!(markdown, Some(block_outline(&parse(&value).body)));
+    assert_eq!(
+        markdown,
+        Some(block_outline(body_of(&parse(&value).document)))
+    );
     assert_eq!(
         markdown.as_deref(),
         Some("MarkdownBlock\n  Section\n    CodeBlock value=\"x\"\n")
     );
-    let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+    let back: RawDocument<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
     let again = rebuild_with::<Plain>(&back, &options).unwrap();
     assert_eq!(inner_claimed(&again), inner_claimed(&document));
     let written = "`````md\n- ````md\n  ```\n  x\n  ```\n  ````\n`````\n";
@@ -1093,14 +1281,14 @@ fn a_markdown_block_in_a_markdown_block_reads_as_its_value_with_any_white_space_
         for gap in ["\t", " ", "  ", "   "] {
             let source =
                 format!("{pad}````md\n{pad}-{gap}```md\n{pad}        x\n{pad}    ```\n{pad}````\n");
-            let document = parse_with::<Plain>(&source, &options).unwrap();
+            let document = parse_with::<Plain>(&source, &options).unwrap().document;
             let (value, markdown) = inner_claimed(&document);
             assert_eq!(
                 markdown,
-                Some(block_outline(&parse(&value).body)),
+                Some(block_outline(body_of(&parse(&value).document))),
                 "{source:?}"
             );
-            let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+            let back: RawDocument<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
             let again = rebuild_with::<Plain>(&back, &options).unwrap();
             assert_eq!(
                 inner_claimed(&again),
@@ -1119,9 +1307,8 @@ fn a_markdown_block_in_a_markdown_block_reads_as_its_value_with_any_white_space_
 #[test]
 fn every_span_inside_a_nested_markdown_block_covers_its_text_in_the_source() {
     let source = "- - ```markdown\n    # A\n    text\n    ```\n";
-    let document = parse(source);
-    let block = code_blocks(first_item(first_item(&document.body)))[0];
-    let spans = block_spans(source, block.kind.0.as_deref().unwrap());
+    let (_, located) = located_claim(source).unwrap();
+    let spans = block_spans(source, &located);
     let expected = [
         ("MarkdownBlock", "    # A\n    text"),
         ("Section", "# A\n    text"),
@@ -1146,15 +1333,15 @@ fn a_comment_inside_a_nested_item_has_the_same_body_as_at_the_root() {
     let root = format!("```remargin\n{body}```\n");
     let nested = format!("- - ```remargin\n{}    ```\n", indented(body, "    "));
     let options = ParseOptions::strict();
-    let root_document = parse_with::<Comments>(&root, &options).unwrap();
-    let nested_document = parse_with::<Comments>(&nested, &options).unwrap();
-    let at_root = code_blocks(&root_document.body)[0]
+    let root_document = parse_with::<Comments>(&root, &options).unwrap().document;
+    let nested_document = parse_with::<Comments>(&nested, &options).unwrap().document;
+    let at_root = code_blocks(body_of(&root_document))[0]
         .kind
         .0
         .as_deref()
         .and_then(second)
         .unwrap();
-    let in_item = code_blocks(first_item(first_item(&nested_document.body)))[0]
+    let in_item = code_blocks(first_item(first_item(body_of(&nested_document))))[0]
         .kind
         .0
         .as_deref()
@@ -1181,8 +1368,10 @@ fn a_comment_inside_a_nested_item_has_the_same_body_as_at_the_root() {
 
 #[test]
 fn an_extension_may_claim_a_block_quote_an_html_block_or_a_thematic_break() {
-    let document = parse_with::<Raw>("> q\n\n<div>\n\n***\n", &ParseOptions::default()).unwrap();
-    let labels: Vec<Option<&str>> = document.body.sections[0]
+    let document = parse_with::<Raw>("> q\n\n<div>\n\n***\n", &ParseOptions::default())
+        .unwrap()
+        .document;
+    let labels: Vec<Option<&str>> = body_of(&document).sections[0]
         .blocks
         .iter()
         .map(|block| {
@@ -1202,8 +1391,10 @@ fn an_extension_may_claim_a_block_quote_an_html_block_or_a_thematic_break() {
 
 #[test]
 fn an_extension_may_claim_emphasis_strong_inline_html_or_a_line_break() {
-    let document = parse_with::<Marks>("*a* **b** <br>\\\nc\n", &ParseOptions::default()).unwrap();
-    let first = document.body.sections[0]
+    let document = parse_with::<Marks>("*a* **b** <br>\\\nc\n", &ParseOptions::default())
+        .unwrap()
+        .document;
+    let first = body_of(&document).sections[0]
         .blocks
         .iter()
         .find_map(|block| match block {
@@ -1256,10 +1447,10 @@ fn a_markdown_block_in_a_grid_cell_reads_only_that_cells_text() {
 | ```       |   |
 +-----------+---+
 ";
-    let document = parse(source);
-    let block = code_blocks(&first_cell(&document.body).body)[0];
+    let document = parse(source).document;
+    let block = code_blocks(&first_cell(body_of(&document)).body)[0];
     assert_eq!(block.value, "# A\ntext");
-    let claimed = block.kind.0.as_deref().unwrap();
+    let claimed = body_of(block.kind.0.as_deref().unwrap());
     assert_eq!(
         block_outline(claimed),
         r#"MarkdownBlock
@@ -1271,7 +1462,8 @@ fn a_markdown_block_in_a_grid_cell_reads_only_that_cells_text() {
         Text "text"
 "#
     );
-    let spans = block_spans(source, claimed);
+    let (_, located) = located_claim(source).unwrap();
+    let spans = block_spans(source, &located);
     let expected = [
         ("MarkdownBlock", "# A       | y |\n| text"),
         ("Section", "# A       | y |\n| text"),
@@ -1295,15 +1487,15 @@ fn a_markdown_block_in_a_grid_cell_counts_its_columns_from_the_cell() {
     let grid = in_grid_cell("```md\n    code\n```");
     let in_item = format!("- {}", &indented(&grid, "  ")[2..]);
     for (source, in_list) in [(grid, false), (in_item, true)] {
-        let document = parse(&source);
+        let document = parse(&source).document;
         let body = if in_list {
-            first_item(&document.body)
+            first_item(body_of(&document))
         } else {
-            &document.body
+            body_of(&document)
         };
         let block = code_blocks(&first_cell(body).body)[0];
         assert_eq!(
-            block_outline(block.kind.0.as_deref().unwrap()),
+            block_outline(body_of(block.kind.0.as_deref().unwrap())),
             r#"MarkdownBlock
   Section
     CodeBlock value="code"
@@ -1317,17 +1509,25 @@ fn a_markdown_block_in_a_grid_cell_counts_its_columns_from_the_cell() {
 fn tab_stops_in_a_markdown_block_in_a_grid_cell_count_from_its_fence_as_in_its_value() {
     let source = "+-------------+---+\n| a           | x |\n|   ```md     | x |\n|   -\ty       | x |\n|             | x |\n|           z | x |\n|   ```       | x |\n+-------------+---+\n";
     let options = ParseOptions::default();
-    let document = parse_with::<Plain>(source, &options).unwrap();
-    let claimed = |read: &Document<With<Plain>>| {
-        let block = code_blocks(&first_cell(&read.body).body)[0];
+    let document = parse_with::<Plain>(source, &options).unwrap().document;
+    let claimed = |read: &RawDocument<With<Plain>>| {
+        let block = code_blocks(&first_cell(body_of(read)).body)[0];
         (
             block.value.clone(),
-            block.kind.0.as_deref().and_then(first).map(block_outline),
+            block
+                .kind
+                .0
+                .as_deref()
+                .and_then(markdown_body)
+                .map(block_outline),
         )
     };
     let (value, markdown) = claimed(&document);
     assert_eq!(value, "-\ty\n\n        z");
-    assert_eq!(markdown, Some(block_outline(&parse(&value).body)));
+    assert_eq!(
+        markdown,
+        Some(block_outline(body_of(&parse(&value).document)))
+    );
     assert_eq!(
         markdown.as_deref(),
         Some(
@@ -1344,7 +1544,7 @@ fn tab_stops_in_a_markdown_block_in_a_grid_cell_count_from_its_fence_as_in_its_v
 "#
         )
     );
-    let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+    let back: RawDocument<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
     let again = rebuild_with::<Plain>(&back, &options).unwrap();
     assert_eq!(claimed(&again), claimed(&document));
     let written = "+--------+-----+\n| a      | x   |\n|        | x   |\n| ````md | x   |\n| - y    | x   |\n|        | x   |\n|   ```  | x   |\n|   z    |     |\n|   ```  |     |\n| ````   |     |\n+--------+-----+\n";
@@ -1361,9 +1561,9 @@ fn a_markdown_block_in_a_grid_cell_reads_as_its_value_with_its_fence_at_any_colu
         let source = in_grid_cell(&format!(
             "-   a\n\n{pad}```md\n{pad}-\ty\n\n{pad}        z\n{pad}```"
         ));
-        let document = parse_with::<Plain>(&source, &options).unwrap();
-        let claimed = |read: &Document<With<Plain>>| {
-            let body = &first_cell(&read.body).body;
+        let document = parse_with::<Plain>(&source, &options).unwrap().document;
+        let claimed = |read: &RawDocument<With<Plain>>| {
+            let body = &first_cell(body_of(read)).body;
             let block = if column < 4 {
                 code_blocks(body)[0]
             } else {
@@ -1371,17 +1571,22 @@ fn a_markdown_block_in_a_grid_cell_reads_as_its_value_with_its_fence_at_any_colu
             };
             (
                 block.value.clone(),
-                block.kind.0.as_deref().and_then(first).map(block_outline),
+                block
+                    .kind
+                    .0
+                    .as_deref()
+                    .and_then(markdown_body)
+                    .map(block_outline),
             )
         };
         let (value, markdown) = claimed(&document);
         assert_eq!(value, "-\ty\n\n        z", "{source}");
         assert_eq!(
             markdown,
-            Some(block_outline(&parse(&value).body)),
+            Some(block_outline(body_of(&parse(&value).document))),
             "{source}"
         );
-        let back: Document<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
+        let back: RawDocument<With<Plain>> = from_json(&to_json(&document).unwrap()).unwrap();
         let again = rebuild_with::<Plain>(&back, &options).unwrap();
         assert_eq!(claimed(&again), claimed(&document), "{source}");
         assert_eq!(
@@ -1398,15 +1603,15 @@ fn a_comment_in_a_grid_cell_has_the_same_body_as_at_the_root() {
     let root = format!("```remargin\n{body}```\n");
     let grid = in_grid_cell(&format!("```remargin\n{body}```"));
     let options = ParseOptions::strict();
-    let root_document = parse_with::<Comments>(&root, &options).unwrap();
-    let grid_document = parse_with::<Comments>(&grid, &options).unwrap();
-    let at_root = code_blocks(&root_document.body)[0]
+    let root_document = parse_with::<Comments>(&root, &options).unwrap().document;
+    let grid_document = parse_with::<Comments>(&grid, &options).unwrap().document;
+    let at_root = code_blocks(body_of(&root_document))[0]
         .kind
         .0
         .as_deref()
         .and_then(second)
         .unwrap();
-    let in_cell = code_blocks(&first_cell(&grid_document.body).body)[0]
+    let in_cell = code_blocks(&first_cell(body_of(&grid_document)).body)[0]
         .kind
         .0
         .as_deref()
@@ -1476,7 +1681,7 @@ fn a_comment_in_a_markdown_block_in_a_list_item_has_the_same_header_as_at_the_ro
                 .kind
                 .0
                 .as_deref()
-                .and_then(first)
+                .and_then(markdown_body)
                 .unwrap()
         });
         assert_eq!(header, HEADER, "{source:?}");
@@ -1487,27 +1692,29 @@ fn a_comment_in_a_markdown_block_in_a_list_item_has_the_same_header_as_at_the_ro
 #[test]
 fn a_markdown_block_in_a_pipe_cell_is_read_from_the_source() {
     let source = "| ```md | x |\n|---|---|\n";
-    let document = parse(source);
-    let block = code_blocks(&first_cell(&document.body).body)[0];
-    assert_eq!(block.content, 7..7);
-    let claimed = block.kind.0.as_deref().unwrap();
+    let document = parse(source).document;
+    let block = code_blocks(&first_cell(body_of(&document)).body)[0];
+    let claimed = body_of(block.kind.0.as_deref().unwrap());
     assert_eq!(block_outline(claimed), "MarkdownBlock\n");
-    assert_eq!(claimed.span, block.content);
+    let (code, located) = located_claim(source).unwrap();
+    assert_eq!(code.content, 7..7);
+    assert_eq!(located.span, code.content);
 }
 
 #[test]
 fn a_markdown_block_in_a_grid_cell_inside_a_markdown_block_in_a_grid_cell_reads_its_own_cell() {
     let inner = in_grid_cell("```md\n# B\ntext\n```");
     let source = in_grid_cell(&format!("```md\n{inner}```"));
-    let document = parse(&source);
-    let outer = code_blocks(&first_cell(&document.body).body)[0]
+    let document = parse(&source).document;
+    let outer = code_blocks(&first_cell(body_of(&document)).body)[0]
         .kind
         .0
         .as_deref()
+        .map(body_of)
         .unwrap();
     let block = code_blocks(&first_cell(outer).body)[0];
     assert_eq!(
-        block_outline(block.kind.0.as_deref().unwrap()),
+        block_outline(body_of(block.kind.0.as_deref().unwrap())),
         r#"MarkdownBlock
   Section
     Heading
@@ -1522,8 +1729,10 @@ fn a_markdown_block_in_a_grid_cell_inside_a_markdown_block_in_a_grid_cell_reads_
 #[test]
 fn an_extension_that_claims_a_grid_cell_reads_only_that_cells_text() {
     let source = in_grid_cell("# A\n\ntext");
-    let document = parse_with::<CellText>(&source, &ParseOptions::default()).unwrap();
-    let cell = first_cell(&document.body);
+    let document = parse_with::<CellText>(&source, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let cell = first_cell(body_of(&document));
     let read = cell.kind.0.as_deref().and_then(second).unwrap();
     assert_eq!(
         block_outline(read),
@@ -1543,12 +1752,16 @@ fn an_extension_that_claims_a_grid_cell_reads_only_that_cells_text() {
 fn a_comment_is_written_back_as_its_own_text_and_reads_back_to_the_same_node() {
     let source =
         "# Notes\n\n```remargin\n---\nid: abc\nauthor: ada\n---\nLooks *good*.\n\n- one\n```\n";
-    let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
+    let document = parse_with::<Comments>(source, &ParseOptions::strict())
+        .unwrap()
+        .document;
     let text = write(&document, &WriteOptions::default()).unwrap();
     assert_eq!(text, source);
-    let again = parse_with::<Comments>(&text, &ParseOptions::strict()).unwrap();
-    let comment = |read: &Document<With<Comments>>| {
-        code_blocks(&read.body)[0]
+    let again = parse_with::<Comments>(&text, &ParseOptions::strict())
+        .unwrap()
+        .document;
+    let comment = |read: &RawDocument<With<Comments>>| {
+        code_blocks(body_of(read))[0]
             .kind
             .0
             .as_deref()
@@ -1561,13 +1774,17 @@ fn a_comment_is_written_back_as_its_own_text_and_reads_back_to_the_same_node() {
 
 #[test]
 fn an_extension_that_only_reads_writes_the_plain_node_in_archies_form() {
-    let fenced = parse_with::<Fences>("Code:\n\n    indented\n", &ParseOptions::default()).unwrap();
-    assert!(code_blocks(&fenced.body)[0].kind.0.is_some());
+    let fenced = parse_with::<Fences>("Code:\n\n    indented\n", &ParseOptions::default())
+        .unwrap()
+        .document;
+    assert!(code_blocks(body_of(&fenced))[0].kind.0.is_some());
     assert_eq!(
         write(&fenced, &WriteOptions::default()).unwrap(),
         "Code:\n\n```\nindented\n```\n"
     );
-    let marked = parse_with::<Marks>("_a_ __b__ <br>  \nc\n", &ParseOptions::default()).unwrap();
+    let marked = parse_with::<Marks>("_a_ __b__ <br>  \nc\n", &ParseOptions::default())
+        .unwrap()
+        .document;
     assert_eq!(
         write(&marked, &WriteOptions::default()).unwrap(),
         "*a* **b** <br>\\\nc\n"
@@ -1577,11 +1794,13 @@ fn an_extension_that_only_reads_writes_the_plain_node_in_archies_form() {
 #[test]
 fn a_comment_in_a_grid_cell_is_built_again_from_json() {
     let grid = in_grid_cell("```remargin\n---\nid: abc\n---\n# Title\n\n- point\n```");
-    let document = parse_with::<Comments>(&grid, &ParseOptions::strict()).unwrap();
+    let document = parse_with::<Comments>(&grid, &ParseOptions::strict())
+        .unwrap()
+        .document;
     let again = rebuilt(&document);
     assert!(document_outline(&again).contains("Table format=Grid"));
-    let comment = |read: &Document<With<Comments>>| {
-        code_blocks(&first_cell(&read.body).body)[0]
+    let comment = |read: &RawDocument<With<Comments>>| {
+        code_blocks(&first_cell(body_of(read)).body)[0]
             .kind
             .0
             .as_deref()
@@ -1595,13 +1814,15 @@ fn a_comment_in_a_grid_cell_is_built_again_from_json() {
 #[test]
 fn a_markdown_block_in_a_list_item_is_built_again_from_json() {
     let source = "- ```markdown\n  # A\n\n  text\n  ```\n";
-    let document = parse_with::<Comments>(source, &ParseOptions::strict()).unwrap();
-    let markdown = |read: &Document<With<Comments>>| {
-        code_blocks(first_item(&read.body))[0]
+    let document = parse_with::<Comments>(source, &ParseOptions::strict())
+        .unwrap()
+        .document;
+    let markdown = |read: &RawDocument<With<Comments>>| {
+        code_blocks(first_item(body_of(read)))[0]
             .kind
             .0
             .as_deref()
-            .and_then(first)
+            .and_then(markdown_body)
             .map(block_outline)
     };
     assert!(markdown(&document).unwrap().contains("Text \"text\""));
@@ -1612,8 +1833,10 @@ fn a_markdown_block_in_a_list_item_is_built_again_from_json() {
 fn comments_nest_the_block_cap_deep_and_the_comment_past_it_stays_a_code_block() {
     on_two_megabytes(|| {
         let source = nested_comments(1000);
-        let document = parse_with::<Comments>(&source, &ParseOptions::default()).unwrap();
-        let (depth, inner) = comment_depth(&document.body);
+        let document = parse_with::<Comments>(&source, &ParseOptions::default())
+            .unwrap()
+            .document;
+        let (depth, inner) = comment_depth(body_of(&document));
         assert_eq!(depth, BLOCK_CAP);
         assert!(matches!(code_blocks(inner).as_slice(),
             [code] if code.kind.0.is_none() && code.language.as_deref() == Some("remargin")));
@@ -1636,8 +1859,10 @@ fn a_comment_inside_the_block_cap_of_items_stays_a_code_block_and_inside_one_les
                 "- ".repeat(items),
                 indented("---\nid: c\n---\nx\n```\n", &"  ".repeat(items))
             );
-            let document = parse_with::<Comments>(&source, &ParseOptions::default()).unwrap();
-            let mut body = &document.body;
+            let document = parse_with::<Comments>(&source, &ParseOptions::default())
+                .unwrap()
+                .document;
+            let mut body = body_of(&document);
             for _ in 0..items {
                 body = first_item(body);
             }
@@ -1650,4 +1875,157 @@ fn a_comment_inside_the_block_cap_of_items_stays_a_code_block_and_inside_one_les
             );
         }
     });
+}
+
+#[test]
+fn a_markdown_block_holds_a_whole_document_its_frontmatter_read() {
+    for source in [
+        "```markdown\n---\na: 1\n---\n# T\n```\n",
+        "```MD\n+++\na = 1\n+++\n# T\n```\n",
+    ] {
+        let document = parse(source).document;
+        let claimed = code_blocks(body_of(&document))[0]
+            .kind
+            .0
+            .as_deref()
+            .unwrap();
+        assert_eq!(document_outline(claimed), A_THEN_T, "{source:?}");
+        reads_back_from_json(source);
+    }
+    rebuilds_from_json("```markdown\n---\na: 1\n---\n# T\n```\n");
+}
+
+#[test]
+fn a_markdown_blocks_frontmatter_is_written_in_the_syntax_the_write_picks() {
+    let source = "```md\n+++\na = 1\n+++\n# T\n```\n";
+    let document = parse(source).document;
+    let toml = WriteOptions {
+        frontmatter: FrontmatterFormat::Toml,
+    };
+    let yaml = "```md\n---\na: 1\n---\n# T\n```\n";
+    assert_eq!(write(&document, &WriteOptions::default()).unwrap(), yaml);
+    assert_eq!(write(&document, &toml).unwrap(), source);
+    let claimed = |read: &RawDocument| code_blocks(body_of(read))[0].kind.clone();
+    assert_eq!(claimed(&parse(yaml).document), claimed(&document));
+}
+
+#[test]
+fn a_markdown_block_whose_frontmatter_no_entry_of_reads_holds_an_invalid_document() {
+    let source = "```md\n---\n: : :\n---\ntext\n```\n";
+    let parsed = parse(source);
+    assert_eq!(parsed.dropped, Vec::<ParseError>::new());
+    let claimed = code_blocks(body_of(&parsed.document))[0]
+        .kind
+        .0
+        .as_deref()
+        .unwrap();
+    assert_eq!(
+        document_outline(claimed),
+        r#"InvalidDocument
+  InvalidFrontmatter format=Yaml error="a plain value cannot start with `:` and a space; quote it"
+  MarkdownBlock
+    Section
+      Paragraph
+        Line
+          Text "text"
+"#
+    );
+    assert_eq!(
+        write(&parsed.document, &WriteOptions::default()).unwrap(),
+        source
+    );
+    let strict = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
+    let at_root = parse_with::<Plain>("---\n: : :\n---\ntext\n", &ParseOptions::strict())
+        .unwrap_err()
+        .span;
+    let fence = "```md\n".len();
+    assert_eq!(strict.span, at_root.start + fence..at_root.end + fence);
+    reads_back_from_json(source);
+    rebuilds_from_json(source);
+}
+
+#[test]
+fn the_entries_a_markdown_blocks_frontmatter_drops_are_not_listed_and_fail_a_strict_parse() {
+    let source = "- ```md\n  ---\n  status: open\n  bad: [\n  ---\n  # T\n  ```\n";
+    let parsed = parse(source);
+    assert_eq!(parsed.dropped, Vec::<ParseError>::new());
+    let claimed = code_blocks(first_item(body_of(&parsed.document)))[0]
+        .kind
+        .0
+        .as_deref()
+        .unwrap();
+    assert_eq!(
+        document_outline(claimed),
+        r#"Document
+  Frontmatter
+    Mapping
+      Pair key=status
+        Scalar String "open"
+  MarkdownBlock
+    Section
+      Heading
+        Text "T"
+"#
+    );
+    let strict = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
+    let root = "---\nstatus: open\nbad: [\n---\n# T\n";
+    let at_root = parse_with::<Plain>(root, &ParseOptions::strict()).unwrap_err();
+    assert_eq!(strict.message, at_root.message);
+    assert_eq!(&root[at_root.span.start..], "---\n# T\n");
+    assert_eq!(&source[strict.span.start..], "---\n  # T\n  ```\n");
+}
+
+#[test]
+fn a_markdown_block_in_a_grid_cell_reads_its_frontmatter_from_the_cells_lines() {
+    let source = in_grid_cell("```md\n---\na: 1\n---\n# T\n```");
+    let document = parse(&source).document;
+    let block = code_blocks(&first_cell(body_of(&document)).body)[0];
+    assert_eq!(block.value, "---\na: 1\n---\n# T");
+    assert_eq!(document_outline(block.kind.0.as_deref().unwrap()), A_THEN_T);
+    let text = write(&document, &WriteOptions::default()).unwrap();
+    let again = parse(&text).document;
+    let read_again = code_blocks(&first_cell(body_of(&again)).body)[0];
+    assert_eq!(
+        document_outline(read_again.kind.0.as_deref().unwrap()),
+        A_THEN_T,
+        "{text}"
+    );
+}
+
+#[test]
+fn the_body_of_an_invalid_document_is_claimed_by_archies_markdown_extension_alone() {
+    let source = "---\n: : :\n---\n```remargin\n---\nid: abc\n---\nBody.\n```\n\n```md\n# A\n```\n";
+    let document = parse_with::<Comments>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let body = match &document {
+        RawDocument::Invalid(invalid) => Some(&invalid.body),
+        RawDocument::Valid(_) => None,
+    };
+    let blocks = code_blocks(body.unwrap());
+    assert!(blocks[0].kind.0.is_none());
+    assert_eq!(
+        block_outline(body_of(blocks[1].kind.0.as_deref().unwrap())),
+        "MarkdownBlock\n  Section\n    Heading\n      Text \"A\"\n"
+    );
+}
+
+#[test]
+fn a_markdown_block_reads_its_frontmatter_as_its_value_whatever_white_space_comes_before_it() {
+    let grid = in_grid_cell("a\n\n  ```md\n  ---\n  a: 1\n  ---\n  # T\n  ```");
+    let cases: [(&str, Pick); 4] = [
+        ("  ```md\n \t---\n \ta: 1\n \t---\n  ```\n", |body| body),
+        ("-\t```md\n\t---\n\ta: 1\n\t---\n\t# T\n\t```\n", first_item),
+        (
+            "- x\n\n    ```md\n   \t---\n   \ta: 1\n   \t---\n   \t# T\n    ```\n",
+            first_item,
+        ),
+        (&grid, |body| &first_cell(body).body),
+    ];
+    for (source, pick) in cases {
+        let document = parse(source).document;
+        let block = code_blocks(pick(body_of(&document)))[0];
+        let claimed = block.kind.0.as_deref().unwrap();
+        assert_eq!(claimed, &parse(&block.value).document, "{source:?}");
+    }
 }

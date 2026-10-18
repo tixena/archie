@@ -6,6 +6,7 @@
 
 use super::json::{reads_back_from_json, rebuilds_from_json};
 use super::{check, check_spans};
+use crate::parser::ast::RawDocument;
 use crate::parser::parse;
 
 macro_rules! document {
@@ -17,8 +18,9 @@ macro_rules! document {
                 source,
                 include_str!(concat!("fixtures/", stringify!($name), ".tree")),
             );
-            let frontmatter = parse(source).frontmatter;
-            assert!(frontmatter.is_none_or(|read| read.is_ok_and(|kept| kept.dropped.is_empty())));
+            let parsed = parse(source);
+            assert!(matches!(parsed.document, RawDocument::Valid(_)));
+            assert!(parsed.dropped.is_empty());
             reads_back_from_json(source);
             rebuilds_from_json(source);
         }

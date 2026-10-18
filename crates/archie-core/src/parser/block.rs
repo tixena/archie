@@ -7,17 +7,16 @@ use core::mem;
 use core::ops::Range;
 use std::collections::HashMap;
 
-use crate::parser::ast::{
-    Args, Block, BlockQuote, CodeBlock, Continues, Heading, Html, Inline, Item, Kind, Line, List,
-    MarkdownBlock, Paragraph, Section, Table, TableCell, TableFormat, TableRow, Text,
-    ThematicBreak,
-};
+use crate::parser::ast::{Args, Continues, Kind, TableFormat};
 use crate::parser::definition::{Definitions, fold_label};
 use crate::parser::extension::Extension;
 use crate::parser::inline::{self, children_mut};
 use crate::parser::lexer::{Marker, Token, TokenKind, lex_from, lex_lines};
 use crate::parser::line::Base;
-use crate::parser::located::{Mapping, Value};
+use crate::parser::located::{
+    Block, BlockQuote, CodeBlock, Heading, Html, Inline, Item, Line, List, Mapping, MarkdownBlock,
+    Paragraph, Section, Table, TableCell, TableRow, Text, ThematicBreak, Value,
+};
 use crate::parser::table::{Cell, RowToken, TableToken};
 use crate::parser::toml;
 

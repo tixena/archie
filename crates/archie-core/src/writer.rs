@@ -13,10 +13,10 @@ use chrono::{DateTime, FixedOffset, NaiveDateTime};
 use thiserror::Error;
 
 use crate::parser::ast::{
-    Args, Block, BlockQuote, BrokenFrontmatter, CodeBlock, Document, FrontmatterFormat, Heading,
-    Kind, Line, List, MarkdownBlock, Paragraph, Section,
+    Args, Block, BlockQuote, CodeBlock, FrontmatterFormat, Heading, InvalidFrontmatter, Kind, Line,
+    List, MarkdownBlock, Paragraph, RawDocument, Section,
 };
-use crate::parser::extension::{Construct, Extension};
+use crate::parser::extension::{Extension, Written};
 use crate::parser::frontmatter;
 use crate::writer::inline::{Near, Pieces, Segments};
 
@@ -75,8 +75,8 @@ impl Place {
 /// Why a document could not be written: the key, of the frontmatter or of a
 /// code block's TOML args, whose value the chosen syntax cannot hold.
 ///
-/// The key is empty when the text of a broken frontmatter holds a line that
-/// would close it.
+/// The key is empty when the text of an invalid frontmatter holds a line
+/// that would close it.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{message}")]
 #[non_exhaustive]
@@ -106,6 +106,8 @@ pub struct Writer {
     /// Whether the text written starts the file, with no frontmatter before
     /// it.
     file_start: bool,
+    /// The syntax a valid document's frontmatter is written in.
+    frontmatter: FrontmatterFormat,
     /// The marker the list written next takes.
     marker: Marker,
     out: String,
@@ -127,19 +129,16 @@ impl Writer {
         T: Extension,
     {
         match block {
-            Block::BlockQuote(quote) => self.node(&quote.kind, Construct::BlockQuote(quote)),
-            Block::CodeBlock(code) => self.node(&code.kind, Construct::CodeBlock(code)),
-            Block::Html(html) => self.node(&html.kind, Construct::Html(html)),
-            Block::List(list) => self.node(&list.kind, Construct::List(list)),
+            Block::BlockQuote(quote) => self.node(&quote.kind, Written::BlockQuote(quote)),
+            Block::CodeBlock(code) => self.node(&code.kind, Written::CodeBlock(code)),
+            Block::Html(html) => self.node(&html.kind, Written::Html(html)),
+            Block::List(list) => self.node(&list.kind, Written::List(list)),
             Block::Paragraph(paragraph) => {
-                self.node(&paragraph.kind, Construct::Paragraph(paragraph));
+                self.node(&paragraph.kind, Written::Paragraph(paragraph));
             }
-            Block::Table(table) => self.node(&table.kind, Construct::Table(table)),
+            Block::Table(table) => self.node(&table.kind, Written::Table(table)),
             Block::ThematicBreak(thematic_break) => {
-                self.node(
-                    &thematic_break.kind,
-                    Construct::ThematicBreak(thematic_break),
-                );
+                self.node(&thematic_break.kind, Written::ThematicBreak(thematic_break));
             }
         }
     }
@@ -161,7 +160,7 @@ impl Writer {
     }
 
     /// What `T` writes for `node`, which it claimed in place of `plain`.
-    fn claimed<T>(&mut self, node: &T::Node<T>, plain: Construct<'_, T>) -> String
+    fn claimed<T>(&mut self, node: &T::Node<T>, plain: Written<'_, T>) -> String
     where
         T: Extension,
     {
@@ -175,7 +174,7 @@ impl Writer {
             file_start: self.at_file_start(),
             place: mem::take(&mut self.place),
             tight: self.tight,
-            ..Self::new()
+            ..self.inner()
         };
         T::write(node, plain, &mut writer);
         self.keep_error(&mut writer);
@@ -199,7 +198,7 @@ impl Writer {
     /// Writes `construct` as archie writes it when no extension claims it.
     /// Its children are written as usual, each by the extension that
     /// claimed it, if one did.
-    pub fn construct<T>(&mut self, construct: Construct<'_, T>)
+    pub fn construct<T>(&mut self, construct: Written<'_, T>)
     where
         T: Extension,
     {
@@ -222,7 +221,7 @@ impl Writer {
     where
         F: FnOnce(&mut Self),
     {
-        let mut inner = Self::new();
+        let mut inner = self.inner();
         content(&mut inner);
         self.keep_error(&mut inner);
         let text = inner.finish();
@@ -322,6 +321,15 @@ impl Writer {
         self.put(&text);
     }
 
+    /// A writer for text this one holds, writing a valid document's
+    /// frontmatter in the same syntax.
+    fn inner(&self) -> Self {
+        Self {
+            frontmatter: self.frontmatter,
+            ..Self::new()
+        }
+    }
+
     /// Takes the error that `inner`, a writer this one built, recorded,
     /// unless this one has one already.
     fn keep_error(&mut self, inner: &mut Self) {
@@ -335,7 +343,7 @@ impl Writer {
         T: Extension,
     {
         if let Some(node) = line.kind.0.as_deref() {
-            let text = self.claimed(node, Construct::Line(line));
+            let text = self.claimed(node, Written::Line(line));
             (text.trim_end_matches('\n').to_owned(), false)
         } else {
             segments.nodes(self, &line.children, false);
@@ -369,9 +377,9 @@ impl Writer {
             );
             let mut inner = Self {
                 tight: !list.loose,
-                ..Self::new()
+                ..self.inner()
             };
-            inner.node(&item.kind, Construct::Item(item));
+            inner.node(&item.kind, Written::Item(item));
             self.keep_error(&mut inner);
             self.marked(&marker, &inner.finish());
         }
@@ -384,7 +392,7 @@ impl Writer {
     {
         let mut inner = Self {
             file_start: self.at_file_start(),
-            ..Self::new()
+            ..self.inner()
         };
         inner.markdown_node(block);
         self.keep_error(&mut inner);
@@ -396,7 +404,7 @@ impl Writer {
     where
         T: Extension,
     {
-        self.node(&block.kind, Construct::MarkdownBlock(block));
+        self.node(&block.kind, Written::MarkdownBlock(block));
     }
 
     /// Writes `content`, an item's lines, after `marker`, the rest indented to
@@ -439,6 +447,7 @@ impl Writer {
             depth: 1,
             error: None,
             file_start: false,
+            frontmatter: FrontmatterFormat::Yaml,
             marker: Marker::First,
             out: String::new(),
             place: Place::BlockFirst,
@@ -448,7 +457,7 @@ impl Writer {
 
     /// Writes a node that stands on its own lines: what the extension that
     /// claimed it writes, or else its plain form.
-    fn node<T>(&mut self, kind: &Kind<T>, plain: Construct<'_, T>)
+    fn node<T>(&mut self, kind: &Kind<T>, plain: Written<'_, T>)
     where
         T: Extension,
     {
@@ -516,7 +525,7 @@ impl Writer {
         T: Extension,
     {
         match (&section.heading, mem::take(&mut self.place)) {
-            (Some(heading), _) => self.node(&heading.kind, Construct::Heading(heading)),
+            (Some(heading), _) => self.node(&heading.kind, Written::Heading(heading)),
             (None, Place::BlockFirst)
                 if !section.blocks.is_empty() || !section.subsections.is_empty() => {}
             (None, Place::SubsectionFirst)
@@ -603,6 +612,52 @@ impl Writer {
         }
     }
 
+    /// Writes `document` as a file holds it: its frontmatter, then its body.
+    /// A valid document's frontmatter is written in this writer's syntax, and
+    /// an invalid one's as it was read.
+    pub fn raw_document<T>(&mut self, document: &RawDocument<T>)
+    where
+        T: Extension,
+    {
+        let (frontmatter, file_start) = match document {
+            RawDocument::Invalid(invalid) => (as_read(&invalid.frontmatter), false),
+            RawDocument::Valid(valid) => {
+                let written = match (&valid.frontmatter, self.frontmatter) {
+                    (None, _) => Ok(String::new()),
+                    (Some(mapping), FrontmatterFormat::Toml) => toml::frontmatter(mapping),
+                    (Some(mapping), FrontmatterFormat::Yaml) => Ok(yaml::frontmatter(mapping)),
+                };
+                (written, valid.frontmatter.is_none())
+            }
+        };
+        let mut text = match frontmatter {
+            Ok(text) => text,
+            Err(error) => {
+                self.record(Some(error));
+                return;
+            }
+        };
+        let mut writer = Self {
+            file_start,
+            ..self.inner()
+        };
+        match document {
+            RawDocument::Invalid(invalid) => writer.markdown_node(&invalid.body),
+            RawDocument::Valid(valid) => writer.node(&valid.kind, Written::Document(valid)),
+        }
+        self.keep_error(&mut writer);
+        let body = writer.finish();
+        // The reader skips a byte-order mark that starts the file.
+        match body.strip_prefix('\u{feff}') {
+            Some(rest) if text.is_empty() => {
+                text.push_str("&#65279;");
+                text.push_str(rest);
+            }
+            Some(_) | None => text.push_str(&body),
+        }
+        self.put(&text);
+    }
+
     /// Keeps `error`, unless an error is kept already.
     fn record(&mut self, error: Option<WriteError>) {
         if self.error.is_none() {
@@ -614,7 +669,7 @@ impl Writer {
     where
         T: Extension,
     {
-        self.node(&section.kind, Construct::Section(section));
+        self.node(&section.kind, Written::Section(section));
     }
 
     /// Ends the line written last, and makes a blank line due before the
@@ -634,7 +689,7 @@ impl Writer {
     }
 }
 
-impl<T> Construct<'_, T>
+impl<T> Written<'_, T>
 where
     T: Extension,
 {
@@ -665,7 +720,7 @@ where
                 let mut inner = Writer {
                     file_start: writer.at_file_start(),
                     tight: writer.tight,
-                    ..Writer::new()
+                    ..writer.inner()
                 };
                 for (index, section) in block.sections.iter().enumerate() {
                     inner.place = Place::in_block(index);
@@ -699,93 +754,38 @@ where
 ///
 /// Returns an error naming the key when TOML is picked and the frontmatter
 /// holds a null, which TOML cannot hold, or when the `Toml` args of a code
-/// block hold one, and an error naming the line when the text of a broken
+/// block hold one, and an error naming the line when the text of an invalid
 /// frontmatter holds one that would close it.
-pub fn write<E>(document: &Document<E>, options: &WriteOptions) -> Result<String, WriteError>
-where
-    E: Extension,
-{
-    let frontmatter = match (&document.frontmatter, options.frontmatter) {
-        (None, _) => String::new(),
-        (Some(Err(broken)), _) => as_read(broken)?,
-        (Some(Ok(frontmatter)), FrontmatterFormat::Toml) => {
-            toml::frontmatter(&frontmatter.mapping)?
-        }
-        (Some(Ok(frontmatter)), FrontmatterFormat::Yaml) => yaml::frontmatter(&frontmatter.mapping),
-    };
-    let (text, error) = with_body(frontmatter, document);
-    error.map_or(Ok(text), Err)
-}
-
-/// Writes `document` in archie's form, its frontmatter in the syntax it was
-/// read in, or in YAML when that syntax is TOML and the frontmatter holds a
-/// null, which TOML cannot hold, or as it was read when no entry of it reads.
-///
-/// # Errors
-///
-/// Returns an error naming the key when the `Toml` args of a code block hold
-/// a null, and an error naming the line when the text of a broken
-/// frontmatter holds one that would close it.
-pub(crate) fn write_for_rebuild<E>(document: &Document<E>) -> Result<String, WriteError>
-where
-    E: Extension,
-{
-    let frontmatter = match &document.frontmatter {
-        None => String::new(),
-        Some(Err(broken)) => as_read(broken)?,
-        Some(Ok(frontmatter)) => match frontmatter.format {
-            FrontmatterFormat::Toml => toml::frontmatter(&frontmatter.mapping)
-                .unwrap_or_else(|_| yaml::frontmatter(&frontmatter.mapping)),
-            FrontmatterFormat::Yaml => yaml::frontmatter(&frontmatter.mapping),
-        },
-    };
-    let (text, error) = with_body(frontmatter, document);
-    error.map_or(Ok(text), Err)
-}
-
-/// The text of `broken` between the delimiters of its syntax, the only
-/// syntax the text reads in, or an error naming a line of the text that
-/// would close it, as the reader closes a frontmatter.
-fn as_read(broken: &BrokenFrontmatter) -> Result<String, WriteError> {
-    if let Some(line) = frontmatter::closing(&broken.text, 0, broken.format) {
-        let text = broken.text[line.start..line.end].trim_end();
-        return Err(WriteError {
-            key: String::new(),
-            message: format!(
-                "the broken frontmatter's text holds the line `{text}`, which would close it"
-            ),
-        });
-    }
-    let delimiter = match broken.format {
-        FrontmatterFormat::Toml => "+++",
-        FrontmatterFormat::Yaml => "---",
-    };
-    Ok(format!("{delimiter}\n{}\n{delimiter}\n", broken.text))
-}
-
-/// `frontmatter`, the written frontmatter of `document`, then its body, and
-/// the first error met while writing the body, if any. A byte-order mark
-/// that would start the file is written `&#65279;`, since the reader skips a
-/// plain one there.
-fn with_body<E>(mut frontmatter: String, document: &Document<E>) -> (String, Option<WriteError>)
+pub fn write<E>(document: &RawDocument<E>, options: &WriteOptions) -> Result<String, WriteError>
 where
     E: Extension,
 {
     let mut writer = Writer {
-        file_start: document.frontmatter.is_none(),
+        frontmatter: options.frontmatter,
         ..Writer::new()
     };
-    writer.node(&document.kind, Construct::Document(document));
-    let error = writer.error.take();
-    let body = writer.finish();
-    match body.strip_prefix('\u{feff}') {
-        Some(rest) if frontmatter.is_empty() => {
-            frontmatter.push_str("&#65279;");
-            frontmatter.push_str(rest);
-        }
-        Some(_) | None => frontmatter.push_str(&body),
+    writer.raw_document(document);
+    writer.error.take().map_or(Ok(writer.out), Err)
+}
+
+/// The text of `invalid` between the delimiters of its syntax, the only
+/// syntax the text reads in, or an error naming a line of the text that
+/// would close it, as the reader closes a frontmatter.
+fn as_read(invalid: &InvalidFrontmatter) -> Result<String, WriteError> {
+    if let Some(line) = frontmatter::closing(&invalid.text, 0, invalid.format) {
+        let text = invalid.text[line.start..line.end].trim_end();
+        return Err(WriteError {
+            key: String::new(),
+            message: format!(
+                "the invalid frontmatter's text holds the line `{text}`, which would close it"
+            ),
+        });
     }
-    (frontmatter, error)
+    let delimiter = match invalid.format {
+        FrontmatterFormat::Toml => "+++",
+        FrontmatterFormat::Yaml => "---",
+    };
+    Ok(format!("{delimiter}\n{}\n{delimiter}\n", invalid.text))
 }
 
 /// A date and time with no offset, such as `2026-10-10T07:32:00`, with the

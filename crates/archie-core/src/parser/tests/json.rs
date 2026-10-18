@@ -4,11 +4,12 @@
 
 use super::blocks::{nested_grid_tables, nested_markdown_blocks};
 use super::extension::Comments;
-use super::on_two_megabytes;
+use super::{on_two_megabytes, valid_body};
 use crate::parser::ast::{
-    Args, Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Frontmatter, FrontmatterFormat,
-    Heading, Html, Image, Inline, Item, Kind, Line, LineBreak, Link, List, MarkdownBlock,
-    NonFinite, Paragraph, Section, Strong, Table, TableCell, TableRow, Text, ThematicBreak, Value,
+    Args, Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Inline,
+    InvalidDocument, InvalidFrontmatter, Item, Kind, Line, LineBreak, Link, List, MarkdownBlock,
+    NonFinite, Paragraph, RawDocument, Section, Strong, Table, TableCell, TableRow, Text,
+    ThematicBreak, Value,
 };
 use crate::parser::error::RebuildError;
 use crate::parser::extension::{Plain, With};
@@ -20,92 +21,82 @@ use crate::writer::{WriteOptions, write};
 /// Parses `source`, writes the tree to JSON and reads it back: the same
 /// tree, every `kind` empty.
 pub(super) fn reads_back_from_json(source: &str) {
-    let mut parsed = parse(source);
-    let back: Document = from_json(&to_json(&parsed).unwrap()).unwrap();
+    let mut parsed = parse(source).document;
+    let back: RawDocument = from_json(&to_json(&parsed).unwrap()).unwrap();
     unclaim(&mut parsed);
     assert_eq!(back, parsed);
 }
 
 /// Parses `source` with `Comments`, writes the tree to JSON, reads it back
 /// and builds its extension nodes again: the tree that `source` written in
-/// archie's form, its frontmatter in its own syntax, parses into.
+/// archie's form, its frontmatter in YAML, parses into.
 pub(super) fn rebuilds_from_json(source: &str) {
     let options = ParseOptions::default();
-    let parsed = parse_with::<Comments>(source, &options).unwrap();
-    let back: Document<With<Comments>> = from_json(&to_json(&parsed).unwrap()).unwrap();
-    let own = WriteOptions {
-        frontmatter: parsed.frontmatter.as_ref().map_or_else(
-            FrontmatterFormat::default,
-            |frontmatter| match frontmatter {
-                Ok(read) => read.format,
-                Err(broken) => broken.format,
-            },
-        ),
-    };
-    let written = parse_with::<Comments>(&write(&parsed, &own).unwrap(), &options).unwrap();
+    let parsed = parse_with::<Comments>(source, &options).unwrap().document;
+    let back: RawDocument<With<Comments>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+    let text = write(&parsed, &WriteOptions::default()).unwrap();
+    let written = parse_with::<Comments>(&text, &options).unwrap().document;
     assert_eq!(rebuild_with::<Comments>(&back, &options).unwrap(), written);
 }
 
 #[test]
 fn the_sample_document_reads_back_from_json() {
-    let document = parse("---\ntitle: Notes\n---\n# A\ntext\n");
+    let document = parse("---\ntitle: Notes\n---\n# A\ntext\n").document;
     let json = to_json(&document).unwrap();
     assert_eq!(
         json,
         concat!(
-            r#"{"body":{"sections":[{"blocks":[{"Paragraph":{"lines":[{"children":[{"Text":"#,
-            r#"{"span":{"start":25,"end":29},"value":"text"}}],"span":{"start":25,"end":29}}],"#,
-            r#""span":{"start":25,"end":29}}}],"heading":{"children":[{"Text":"#,
-            r#"{"span":{"start":23,"end":24},"value":"A"}}],"span":{"start":21,"end":24}},"#,
-            r#""span":{"start":21,"end":29},"subsections":[]}],"span":{"start":21,"end":30}},"#,
-            r#""frontmatter":{"Ok":{"format":"Yaml","mapping":{"title":{"String":"Notes"}},"#,
-            r#""span":{"start":0,"end":20}}},"span":{"start":0,"end":30}}"#,
+            r#"{"Valid":{"body":{"sections":[{"blocks":[{"Paragraph":{"lines":[{"children":"#,
+            r#"[{"Text":{"value":"text"}}]}]}}],"heading":{"children":[{"Text":"#,
+            r#"{"value":"A"}}]},"subsections":[]}]},"frontmatter":{"title":{"String":"Notes"}}}}"#,
         )
     );
-    let back: Document = from_json(&json).unwrap();
+    let back: RawDocument = from_json(&json).unwrap();
     assert_eq!(back, document);
 }
 
 #[test]
-fn the_entries_a_frontmatter_drops_are_written_to_json_and_read_back() {
-    let document = parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n");
-    let json = to_json(&document).unwrap();
+fn the_entries_a_frontmatter_drops_are_listed_beside_the_document_and_not_written_to_json() {
+    let source = "---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n";
+    let parsed = parse(source);
+    let spans: Vec<&str> = parsed
+        .dropped
+        .iter()
+        .map(|drop| &source[drop.span.clone()])
+        .collect();
+    assert_eq!(spans, ["tags: [a, b"]);
+    let json = to_json(&parsed.document).unwrap();
     assert!(
-        json.contains(concat!(
-            r#""dropped":[{"message":"a line of a flow collection must be indented "#,
-            r#"more than its key","span":{"start":17,"end":28}}]"#,
-        )),
+        !json.contains("tags") && !json.contains("message"),
         "{json}"
     );
-    let back: Document = from_json(&json).unwrap();
-    assert_eq!(back, document);
-    let definition = Frontmatter::ts_definition();
-    assert!(
-        definition.contains("dropped?: Array<ParseError>;"),
-        "{definition}"
-    );
+    let back: RawDocument = from_json(&json).unwrap();
+    assert_eq!(back, parsed.document);
+    let definition = <Document>::ts_definition();
+    assert!(!definition.contains("dropped"), "{definition}");
 }
 
 #[test]
-fn a_broken_frontmatter_is_written_to_json_as_err_and_read_back() {
+fn an_invalid_document_is_written_to_json_and_read_back() {
     let source = "---\n{a: 1, b: [}\n---\n# A\n";
-    let document = parse(source);
+    let document = parse(source).document;
     let json = to_json(&document).unwrap();
     assert!(
-        json.contains(concat!(
-            r#""frontmatter":{"Err":{"error":{"message":"expected `,` or `]` in the list","#,
-            r#""span":{"start":15,"end":15}},"format":"Yaml","span":{"start":0,"end":20},"#,
-            r#""text":"{a: 1, b: [}"}}"#,
-        )),
+        json.starts_with(r#"{"Invalid":{"body":"#)
+            && json.contains(concat!(
+                r#""frontmatter":{"error":"expected `,` or `]` in the list","#,
+                r#""format":"Yaml","text":"{a: 1, b: [}"}"#,
+            )),
         "{json}"
     );
-    let back: Document = from_json(&json).unwrap();
+    let back: RawDocument = from_json(&json).unwrap();
     assert_eq!(back, document);
     reads_back_from_json(source);
     rebuilds_from_json(source);
-    let definition = <Document>::ts_definition();
+    let definition = <RawDocument>::ts_definition();
     assert!(
-        definition.contains("{ Ok: Frontmatter } | { Err: BrokenFrontmatter }"),
+        definition.contains(r#""Invalid": InvalidDocument;"#)
+            && definition.contains(r#""Valid": Document<E>;"#),
         "{definition}"
     );
 }
@@ -122,37 +113,41 @@ fn a_tree_at_the_caps_reads_back_from_json() {
             reads_back_from_json(&source);
         }
         let options = ParseOptions::default();
-        let parsed = parse_with::<Plain>(&nested_markdown_blocks(BLOCK_CAP), &options).unwrap();
-        let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+        let parsed = parse_with::<Plain>(&nested_markdown_blocks(BLOCK_CAP), &options)
+            .unwrap()
+            .document;
+        let back: RawDocument<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
         assert_eq!(rebuild_with::<Plain>(&back, &options).unwrap(), parsed);
     });
 }
 
 #[test]
 fn json_that_is_not_a_document_does_not_read() {
-    let read: Result<Document, _> = from_json("{}");
+    for text in ["{}", r#"{"Valid":{}}"#] {
+        let read: Result<RawDocument, _> = from_json(text);
+        assert!(read.is_err(), "{text}");
+    }
+    let read: Result<RawDocument, _> = from_json(r#"{"Valid":{}}"#);
     let error = read.unwrap_err().to_string();
     assert!(error.starts_with("missing field `body`"), "{error}");
 }
 
 #[test]
-fn a_span_is_written_as_its_start_and_its_end() {
-    let json = to_json(&parse("  text\n")).unwrap();
-    assert!(
-        json.contains(r#"{"Text":{"span":{"start":2,"end":6},"value":"text"}}"#),
-        "{json}"
-    );
+fn no_node_is_written_with_a_span() {
+    let json = to_json(&parse("  text\n").document).unwrap();
+    assert!(json.contains(r#"{"Text":{"value":"text"}}"#), "{json}");
+    assert!(!json.contains("span"), "{json}");
 }
 
 #[test]
 fn the_claim_pass_builds_a_claimed_block_again_from_json() {
     let source = "```markdown\n# Inner\n```\n";
     let options = ParseOptions::default();
-    let parsed = parse_with::<Plain>(source, &options).unwrap();
-    let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
-    let claimed = |document: &Document<With<Plain>>| {
+    let parsed = parse_with::<Plain>(source, &options).unwrap().document;
+    let back: RawDocument<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+    let claimed = |document: &RawDocument<With<Plain>>| {
         matches!(
-            &document.body.sections[0].blocks[0],
+            &valid_body(document).unwrap().sections[0].blocks[0],
             Block::CodeBlock(block) if block.kind.0.is_some()
         )
     };
@@ -165,35 +160,33 @@ fn the_claim_pass_builds_a_claimed_block_again_from_json() {
 fn a_toml_frontmatter_holding_a_null_is_rebuilt_in_yaml() {
     let options = ParseOptions::default();
     let source = "+++\ntitle = \"Notes\"\n+++\n```markdown\n# A\n```\n";
-    let mut parsed = parse_with::<Plain>(source, &options).unwrap();
-    let frontmatter = parsed.frontmatter.as_mut().unwrap().as_mut().unwrap();
-    frontmatter.mapping["title"] = Value::Null;
-    let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+    let mut parsed = parse_with::<Plain>(source, &options).unwrap().document;
+    if let RawDocument::Valid(valid) = &mut parsed
+        && let Some(mapping) = &mut valid.frontmatter
+    {
+        mapping["title"] = Value::Null;
+    }
+    let back: RawDocument<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options).unwrap();
-    let yaml = WriteOptions {
-        frontmatter: FrontmatterFormat::Yaml,
-    };
-    let written = parse_with::<Plain>(&write(&parsed, &yaml).unwrap(), &options).unwrap();
-    assert_eq!(
-        rebuilt
-            .frontmatter
-            .as_ref()
-            .map(|read| read.as_ref().unwrap().format),
-        Some(FrontmatterFormat::Yaml)
-    );
+    let yaml = write(&parsed, &WriteOptions::default()).unwrap();
+    assert!(yaml.starts_with("---\ntitle: null\n---\n"), "{yaml}");
+    let written = parse_with::<Plain>(&yaml, &options).unwrap().document;
     assert_eq!(rebuilt, written);
 }
 
 #[test]
 fn a_null_in_the_toml_args_of_a_code_block_fails_the_rebuild_naming_the_key() {
     let options = ParseOptions::default();
-    let mut parsed = parse_with::<Plain>("```sh a = 1, b = 2\n```\n", &options).unwrap();
-    if let Block::CodeBlock(code) = &mut parsed.body.sections[0].blocks[0]
+    let mut parsed = parse_with::<Plain>("```sh a = 1, b = 2\n```\n", &options)
+        .unwrap()
+        .document;
+    if let RawDocument::Valid(valid) = &mut parsed
+        && let Block::CodeBlock(code) = &mut valid.body.sections[0].blocks[0]
         && let Args::Toml(mapping) = &mut code.args
     {
         mapping["a"] = Value::Null;
     }
-    let back: Document<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
+    let back: RawDocument<With<Plain>> = from_json(&to_json(&parsed).unwrap()).unwrap();
     let rebuilt = rebuild_with::<Plain>(&back, &options);
     assert!(
         matches!(&rebuilt, Err(RebuildError::Write(error)) if error.key == "a"),
@@ -209,8 +202,8 @@ fn a_non_finite_float_reads_back_from_json() {
         ("---\nx: -.inf\n---\n", NonFinite::NegativeInfinity),
         ("+++\nx = nan\n+++\n", NonFinite::Nan),
     ] {
-        let document = parse(source);
-        let back: Document = from_json(&to_json(&document).unwrap()).unwrap();
+        let document = parse(source).document;
+        let back: RawDocument = from_json(&to_json(&document).unwrap()).unwrap();
         assert_eq!(back, document);
         assert_eq!(scalar(&back, "x"), Value::NonFinite(value));
     }
@@ -218,7 +211,7 @@ fn a_non_finite_float_reads_back_from_json() {
 
 #[test]
 fn a_non_finite_float_is_written_as_its_name() {
-    let json = to_json(&parse("---\nx: .nan\n---\n")).unwrap();
+    let json = to_json(&parse("---\nx: .nan\n---\n").document).unwrap();
     assert!(json.contains(r#""x":{"NonFinite":"Nan"}"#), "{json}");
 }
 
@@ -237,22 +230,25 @@ fn the_typescript_of_a_value_names_the_non_finite_floats() {
 
 #[test]
 fn the_typescript_of_a_document_names_its_nodes() {
+    let raw = <RawDocument>::ts_definition();
     let document = <Document>::ts_definition();
     let block = <MarkdownBlock>::ts_definition();
-    eprintln!("{document}\n{block}");
+    assert!(raw.contains(r#""Valid": Document<E>;"#), "{raw}");
     assert!(document.contains("body: MarkdownBlock<E>;"), "{document}");
     assert!(
-        document.contains("span: { start: number; end: number };"),
+        document.contains("frontmatter: Mapping | undefined;"),
         "{document}"
     );
     assert!(block.contains("sections: Array<Section<E>>;"), "{block}");
 }
 
 #[test]
-fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
+fn no_node_writes_a_span_or_its_kind() {
     let definitions = [
+        <RawDocument>::ts_definition(),
+        InvalidDocument::ts_definition(),
+        InvalidFrontmatter::ts_definition(),
         <Document>::ts_definition(),
-        Frontmatter::ts_definition(),
         <MarkdownBlock>::ts_definition(),
         <BlockQuote>::ts_definition(),
         <Html>::ts_definition(),
@@ -274,37 +270,35 @@ fn every_span_is_a_start_and_an_end_and_no_node_writes_its_kind() {
         <Link>::ts_definition(),
         <Image>::ts_definition(),
         <Code>::ts_definition(),
+        Value::ts_definition(),
     ];
     for definition in definitions {
         assert!(
-            definition.contains("  span: { start: number; end: number };"),
+            !definition.contains("span:") && !definition.contains("content:"),
             "{definition}"
         );
         assert!(!definition.contains("kind"), "{definition}");
     }
-    let value = Value::ts_definition();
-    assert!(
-        !value.contains("span") && !value.contains("kind"),
-        "{value}"
-    );
 }
 
 /// The value under `key` in the frontmatter of `document`.
-fn scalar(document: &Document, key: &str) -> Value {
-    let mapping = &document
-        .frontmatter
-        .as_ref()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .mapping;
-    mapping[key].clone()
+fn scalar(document: &RawDocument, key: &str) -> Value {
+    let mapping = match document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => valid.frontmatter.as_ref(),
+    };
+    mapping.unwrap()[key].clone()
 }
 
 /// Empties the `kind` of every node of `document`.
-fn unclaim(document: &mut Document) {
-    document.kind = Kind(None);
-    unclaim_markdown_block(&mut document.body);
+fn unclaim(document: &mut RawDocument) {
+    match document {
+        RawDocument::Invalid(invalid) => unclaim_markdown_block(&mut invalid.body),
+        RawDocument::Valid(valid) => {
+            valid.kind = Kind(None);
+            unclaim_markdown_block(&mut valid.body);
+        }
+    }
 }
 
 fn unclaim_markdown_block(block: &mut MarkdownBlock) {

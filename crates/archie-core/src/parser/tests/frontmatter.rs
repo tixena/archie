@@ -1,8 +1,13 @@
+use core::slice;
+
 use super::{broken, check, check_spans, located_frontmatter, on_two_megabytes};
-use crate::parser::ast::{BrokenFrontmatter, Document, Frontmatter, FrontmatterFormat, Value};
+use crate::parser::ast::{
+    FrontmatterFormat, InvalidDocument, InvalidFrontmatter, Mapping, RawDocument, Value,
+};
 use crate::parser::error::ParseError;
 use crate::parser::extension::Plain;
 use crate::parser::frontmatter::VALUE_CAP;
+use crate::parser::located::BrokenFrontmatter;
 use crate::parser::{ParseOptions, parse, parse_with, yaml};
 use crate::writer::{WriteOptions, write};
 
@@ -15,8 +20,8 @@ const EMPTY_YAML: &str = "Document
 
 /// The outline of a YAML frontmatter whose every pair is dropped for a key
 /// that is a list or a mapping, before an empty body.
-const LIST_OR_MAPPING_KEY: &str = r#"Document
-  BrokenFrontmatter format=Yaml error="a key cannot be a list or a mapping"
+const LIST_OR_MAPPING_KEY: &str = r#"InvalidDocument
+  InvalidFrontmatter format=Yaml error="a key cannot be a list or a mapping"
   MarkdownBlock
 "#;
 
@@ -713,8 +718,8 @@ fn a_tag_that_ends_its_line_over_a_mapping_whose_every_pair_is_dropped_holds_it_
 
 #[test]
 fn a_frontmatter_with_a_dropped_tag_is_written_without_its_key() {
-    let document = parse("---\ntitle: Notes\nshape: !point {x: 1, y: 2}\n---\n# Notes\n");
-    let mapping = &frontmatter_of(&document).mapping;
+    let document = parse("---\ntitle: Notes\nshape: !point {x: 1, y: 2}\n---\n# Notes\n").document;
+    let mapping = frontmatter_of(&document);
     assert_eq!(mapping.keys().collect::<Vec<_>>(), ["title"]);
     assert_eq!(
         write(&document, &WriteOptions::default()).unwrap(),
@@ -747,8 +752,8 @@ fn a_yaml_value_nested_past_the_value_cap_drops_the_key_that_holds_it() {
             check(&source, &only_b("Yaml"));
         }
         for source in deep_yaml_lists(VALUE_CAP) {
-            let document = parse(&source);
-            let mapping = &frontmatter_of(&document).mapping;
+            let document = parse(&source).document;
+            let mapping = frontmatter_of(&document);
             assert_eq!(mapping.keys().collect::<Vec<_>>(), ["deep", "b"]);
         }
     });
@@ -819,7 +824,7 @@ fn a_toml_table_keeps_its_span_to_its_last_pair_that_is_not_dropped() {
 fn a_yaml_frontmatter_that_holds_one_value_or_one_list_is_empty() {
     for source in ["---\nabc\n---\n# A\n", "---\n- a\n- b\n---\n# A\n"] {
         check(source, EMPTY_BEFORE_A);
-        let document = parse(source);
+        let document = parse(source).document;
         assert_eq!(
             write(&document, &WriteOptions::default()).unwrap(),
             "---\n---\n# A\n"
@@ -1135,8 +1140,8 @@ fn an_alias_of_a_list_or_a_mapping_as_a_key_drops_its_pair() {
         "---\nm: &m {x: 1}\n*m : 2\nb: 2\n---\n",
         "---\nm: &m [1]\n? *m\n: v\nb: 2\n---\n",
     ] {
-        let document = parse(source);
-        let mapping = &frontmatter_of(&document).mapping;
+        let document = parse(source).document;
+        let mapping = frontmatter_of(&document);
         assert_eq!(mapping.keys().collect::<Vec<_>>(), ["m", "b"], "{source:?}");
     }
     check(
@@ -1339,8 +1344,8 @@ fn ten_anchors_of_ten_aliases() -> String {
 #[test]
 fn aliases_that_copy_more_than_the_cap_drop_the_key_that_passes_it_and_every_later_alias() {
     on_two_megabytes(|| {
-        let document = parse(&ten_anchors_of_ten_aliases());
-        let mapping = &frontmatter_of(&document).mapping;
+        let document = parse(&ten_anchors_of_ten_aliases()).document;
+        let mapping = frontmatter_of(&document);
         // With the copy each anchor keeps, `a3` brings the copies to 24674
         // values, and the seventh alias in `a4` passes 100000.
         assert_eq!(
@@ -1364,8 +1369,8 @@ fn nested_anchors_that_keep_more_than_the_cap_drop_the_key_that_holds_them() {
     on_two_megabytes(|| {
         check(&nested_anchors(20_000), &only_b("Yaml"));
         // Around 100 integers, the anchors keep 37145 values.
-        let document = parse(&nested_anchors(100));
-        let mapping = &frontmatter_of(&document).mapping;
+        let document = parse(&nested_anchors(100)).document;
+        let mapping = frontmatter_of(&document);
         assert_eq!(mapping.keys().collect::<Vec<_>>(), ["a", "b"]);
     });
 }
@@ -1395,8 +1400,8 @@ fn aliases_that_copy_more_than_the_text_cap_drop_the_key_that_holds_them() {
         check(&aliases_of_a_long_string(10_000), &only_a);
         // The anchor's own copy and 99 aliases come to 1000000 bytes, and a
         // hundredth alias passes.
-        let document = parse(&aliases_of_a_long_string(99));
-        let mapping = &frontmatter_of(&document).mapping;
+        let document = parse(&aliases_of_a_long_string(99)).document;
+        let mapping = frontmatter_of(&document);
         assert_eq!(mapping.keys().collect::<Vec<_>>(), ["a", "b"]);
         check(&aliases_of_a_long_string(100), &only_a);
     });
@@ -1429,23 +1434,27 @@ fn anchors_and_aliases_under_the_copy_budget_read_as_before() {
 }
 
 /// The frontmatter of `document`, one of which an entry reads.
-fn frontmatter_of(document: &Document) -> &Frontmatter {
-    document.frontmatter.as_ref().unwrap().as_ref().unwrap()
+fn frontmatter_of(document: &RawDocument) -> &Mapping {
+    let read = match document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => valid.frontmatter.as_ref(),
+    };
+    read.unwrap()
 }
 
 /// The keys of the frontmatter `source` reads, and the message and the text
 /// of each entry it dropped. A strict parse fails with the error of the
 /// first, which points into the entry, at its text or after.
 fn kept_and_dropped(source: &str) -> (Vec<String>, Vec<(String, &str)>) {
-    let frontmatter = parse(source).frontmatter.unwrap().unwrap();
-    let keys = frontmatter.mapping.keys().cloned().collect();
-    let dropped: Vec<(String, &str)> = frontmatter
+    let parsed = parse(source);
+    let keys = frontmatter_of(&parsed.document).keys().cloned().collect();
+    let dropped: Vec<(String, &str)> = parsed
         .dropped
         .iter()
         .map(|drop| (drop.message.clone(), &source[drop.span.clone()]))
         .collect();
     let strict = parse_with::<Plain>(source, &ParseOptions::strict());
-    match frontmatter.dropped.first() {
+    match parsed.dropped.first() {
         Some(first) => {
             let error = strict.unwrap_err();
             assert_eq!(error.message, first.message, "{source:?}");
@@ -1563,7 +1572,7 @@ fn a_pair_of_a_flow_mapping_over_several_lines_is_dropped_up_to_the_next_line_at
         one_dropped(&["title", "date"], list, "tags: [a, b,")
     );
     let nested = "---\na: {x: [1,\n    y: 2}\nb: 3\n---\n";
-    let mapping = parse(nested).frontmatter.unwrap().unwrap().mapping;
+    let mapping = frontmatter_of(&parse(nested).document).clone();
     assert_eq!(mapping.keys().collect::<Vec<_>>(), ["a", "b"]);
     let inner = if let Value::Mapping(inner) = &mapping["a"] {
         inner.keys().collect()
@@ -2126,8 +2135,8 @@ fn a_flow_mapping_that_does_not_read_is_kept_as_its_text_with_its_error() {
     let source = "---\n{a: 1, b: [}\n---\n# A\n";
     check(
         source,
-        r#"Document
-  BrokenFrontmatter format=Yaml error="expected `,` or `]` in the list"
+        r#"InvalidDocument
+  InvalidFrontmatter format=Yaml error="expected `,` or `]` in the list"
   MarkdownBlock
     Section
       Heading
@@ -2135,14 +2144,32 @@ fn a_flow_mapping_that_does_not_read_is_kept_as_its_text_with_its_error() {
 "#,
     );
     let at = source.find('}').unwrap();
+    let error = ParseError::new("expected `,` or `]` in the list", at..at);
     assert_eq!(
         broken(source),
         BrokenFrontmatter {
-            error: ParseError::new("expected `,` or `]` in the list", at..at),
+            error: error.clone(),
             format: FrontmatterFormat::Yaml,
             span: 0..source.find("\n# A").unwrap(),
             text: "{a: 1, b: [}".to_owned(),
         }
+    );
+    let parsed = parse(source);
+    assert_eq!(parsed.dropped, slice::from_ref(&error));
+    let invalid = match parsed.document {
+        RawDocument::Invalid(InvalidDocument {
+            body: _,
+            frontmatter,
+        }) => Some(frontmatter),
+        RawDocument::Valid(_) => None,
+    };
+    assert_eq!(
+        invalid,
+        Some(InvalidFrontmatter {
+            error: error.message,
+            format: FrontmatterFormat::Yaml,
+            text: "{a: 1, b: [}".to_owned(),
+        })
     );
     assert_eq!(
         broken("---\r\n{a: 1, b: [}\r\n---\r\n").text,
@@ -2174,8 +2201,8 @@ fn a_toml_frontmatter_whose_first_entry_opens_a_string_it_never_closes_is_broken
     let source = "+++\na = \"\"\"never closed\n+++\n# A\n";
     check(
         source,
-        r#"Document
-  BrokenFrontmatter format=Toml error="the string is not closed"
+        r#"InvalidDocument
+  InvalidFrontmatter format=Toml error="the string is not closed"
   MarkdownBlock
     Section
       Heading
@@ -2194,8 +2221,8 @@ fn an_empty_frontmatter_or_one_that_holds_no_key_is_an_empty_mapping() {
         "---\n- a\n- b\n---\n",
         "---\n[a, !point b]\n---\n",
     ] {
-        let frontmatter = parse(source).frontmatter.unwrap().unwrap();
-        assert!(frontmatter.mapping.is_empty(), "{source:?}");
+        let document = parse(source).document;
+        assert!(frontmatter_of(&document).is_empty(), "{source:?}");
     }
 }
 
@@ -2219,7 +2246,52 @@ fn a_frontmatter_with_no_drop_lists_none() {
         "---\n---\n",
         "---\n- a\n---\n",
     ] {
-        let frontmatter = parse(source).frontmatter.unwrap().unwrap();
-        assert!(frontmatter.dropped.is_empty(), "{source:?}");
+        let parsed = parse(source);
+        assert!(
+            matches!(parsed.document, RawDocument::Valid(_)),
+            "{source:?}"
+        );
+        assert!(parsed.dropped.is_empty(), "{source:?}");
+    }
+}
+
+#[test]
+fn an_entry_that_does_not_read_is_listed_beside_the_valid_document_with_its_span() {
+    let source = "---\nstatus: open\nbad: [\n---\n# Task\n";
+    let parsed = parse(source);
+    let read = frontmatter_of(&parsed.document);
+    assert_eq!(read.keys().collect::<Vec<_>>(), ["status"]);
+    assert_eq!(read["status"], Value::String("open".to_owned()));
+    assert_eq!(parsed.dropped.len(), 1);
+    assert_eq!(parsed.dropped[0].span, 17..23);
+    assert_eq!(&source[17..23], "bad: [");
+    let strict = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
+    assert_eq!(strict.message, parsed.dropped[0].message);
+}
+
+#[test]
+fn a_frontmatter_no_entry_of_reads_makes_an_invalid_document_written_back_as_read() {
+    let source = "---\n: : :\n---\ntext\n";
+    let parsed = parse(source);
+    let invalid = match &parsed.document {
+        RawDocument::Invalid(invalid) => Some(&invalid.frontmatter),
+        RawDocument::Valid(_) => None,
+    };
+    assert_eq!(
+        invalid,
+        Some(&InvalidFrontmatter {
+            error: "a plain value cannot start with `:` and a space; quote it".to_owned(),
+            format: FrontmatterFormat::Yaml,
+            text: ": : :".to_owned(),
+        })
+    );
+    assert_eq!(parsed.dropped, slice::from_ref(&broken(source).error));
+    for options in [
+        WriteOptions::default(),
+        WriteOptions {
+            frontmatter: FrontmatterFormat::Toml,
+        },
+    ] {
+        assert_eq!(write(&parsed.document, &options).unwrap(), source);
     }
 }

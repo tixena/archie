@@ -4,17 +4,18 @@
 use core::ops::Range;
 use core::{iter, mem};
 
-use crate::parser::ast::{
-    Block, BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Inline, Item, Kind, Line,
-    LineBreak, List, MarkdownBlock, Paragraph, Section, Table, TableCell, TableRow, Text,
-    ThematicBreak,
-};
+use crate::parser::ast::Kind;
 use crate::parser::block::Cells;
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Extension, Frame};
 use crate::parser::inline::children_mut;
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::line::{Base, line_from, width};
+use crate::parser::located::{
+    Block, BlockQuote, Code, CodeBlock, Document, Heading, Html, Image, Inline, Item, Line,
+    LineBreak, List, MarkdownBlock, Paragraph, Section, Table, TableCell, TableRow, Text,
+    ThematicBreak,
+};
 
 /// What the pass carries down the tree: the context of the nodes it offers,
 /// each grid cell's lines, by the cell's span, and where each line of the

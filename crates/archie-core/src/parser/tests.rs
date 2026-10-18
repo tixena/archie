@@ -23,18 +23,18 @@ use chrono::{
 };
 
 use crate::parser::ast::{
-    Args, Block, BrokenFrontmatter, CodeBlock, Continues, Document, Frontmatter, FrontmatterFormat,
-    Inline, Mapping, MarkdownBlock, Section, Value,
+    Alignment, Args, Block, CodeBlock, Continues, Document, FrontmatterFormat, Inline, Kind,
+    LinkForm, Mapping, MarkdownBlock, RawDocument, Section, TableFormat, Value,
 };
-use crate::parser::extension::Extension;
+use crate::parser::extension::{Extension, Markdown};
 use crate::parser::line::line_at;
-use crate::parser::{located, parse};
+use crate::parser::{ParseOptions, located, parse, parse_located};
 use crate::writer::Writer;
 
-/// One node of a parsed tree: how deep it sits, how it reads, what it covers.
+/// One node of a tree: how deep it sits, how it reads, what it covers.
 /// `merged` marks a pair whose key is written more than once, and `spread` a
-/// cell of a table row written over several lines. A value of the model's
-/// `Mapping` covers nothing: it holds no span.
+/// cell of a table row written over several lines. A node of the model
+/// covers nothing: it holds no span.
 struct Row {
     depth: usize,
     label: String,
@@ -58,58 +58,161 @@ impl Rows<'_> {
     {
         match block {
             Block::BlockQuote(block_quote) => {
-                let label = format!("BlockQuote {:?}", block_quote.value);
-                self.push(depth, label, &block_quote.span);
+                self.push_unlocated(depth, format!("BlockQuote {:?}", block_quote.value));
             }
             Block::CodeBlock(code_block) => {
-                let claimed = if code_block.kind.0.is_some() {
-                    " claimed"
-                } else {
-                    ""
-                };
-                let language = code_block
-                    .language
-                    .as_ref()
-                    .map_or_else(String::new, |language| format!(" language={language:?}"));
-                let label = format!(
-                    "CodeBlock{language}{} value={:?}{claimed}",
-                    args_label(code_block),
-                    code_block.value
+                let label = code_block_label(
+                    code_block.language.as_deref(),
+                    &code_block.args,
+                    &code_block.value,
+                    code_block.kind.0.is_some(),
                 );
-                self.push(depth, label, &code_block.span);
+                self.push_unlocated(depth, label);
             }
-            Block::Html(html) => {
-                self.push(depth, format!("Html {:?}", html.value), &html.span);
-            }
+            Block::Html(html) => self.push_unlocated(depth, format!("Html {:?}", html.value)),
             Block::List(list) => {
-                let start = list
-                    .start
-                    .map_or_else(String::new, |start| format!(" start={start}"));
-                let loose = if list.loose { " loose" } else { "" };
-                self.push(depth, format!("List{start}{loose}"), &list.span);
+                self.push_unlocated(depth, list_label(list.start, list.loose));
                 for item in &list.items {
-                    self.push(depth + 1, "Item".to_owned(), &item.span);
+                    self.push_unlocated(depth + 1, "Item".to_owned());
                     self.markdown_block(depth + 2, &item.body);
                 }
             }
             Block::Paragraph(paragraph) => {
-                self.push(depth, "Paragraph".to_owned(), &paragraph.span);
+                self.push_unlocated(depth, "Paragraph".to_owned());
                 for line in &paragraph.lines {
-                    self.push(depth + 1, "Line".to_owned(), &line.span);
+                    self.push_unlocated(depth + 1, "Line".to_owned());
                     self.inlines(depth + 2, &line.children);
                 }
             }
             Block::Table(table) => {
-                let alignments: Vec<String> = table
-                    .alignments
-                    .iter()
-                    .map(|alignment| format!("{alignment:?}"))
-                    .collect();
-                let label = format!(
-                    "Table format={:?} alignments={}",
-                    table.format,
-                    alignments.join(",")
+                self.push_unlocated(depth, table_label(table.format, &table.alignments));
+                let head = table.head.iter().map(|row| ("TableRow head", row));
+                let rows = table.rows.iter().map(|row| ("TableRow", row));
+                for (name, row) in head.chain(rows) {
+                    self.push_unlocated(depth + 1, name.to_owned());
+                    for cell in &row.cells {
+                        self.push_unlocated(depth + 2, "TableCell".to_owned());
+                        self.markdown_block(depth + 3, &cell.body);
+                    }
+                }
+            }
+            Block::ThematicBreak(_) => self.push_unlocated(depth, "ThematicBreak".to_owned()),
+        }
+    }
+
+    /// A frontmatter is outlined as its reader reads it again from the
+    /// source, with the syntax it is written in and each key written more
+    /// than once, once that reading is checked to be the model's mapping.
+    fn document<E>(&mut self, document: &Document<E>)
+    where
+        E: Extension,
+    {
+        self.push_unlocated(0, "Document".to_owned());
+        if let Some(mapping) = &document.frontmatter {
+            if self.source.is_empty() {
+                self.push_unlocated(1, "Frontmatter".to_owned());
+                self.mapping(2, mapping);
+            } else {
+                let frontmatter = located_frontmatter_node(self.source);
+                let read = read_again(self.source, &frontmatter);
+                assert_eq!(&read.clone().into_model(), mapping);
+                let label = format!("Frontmatter format={:?}", frontmatter.format);
+                self.push(1, label, &frontmatter.span);
+                self.located_mapping(2, &read);
+            }
+        }
+        self.markdown_block(1, &document.body);
+    }
+
+    fn inlines<E>(&mut self, depth: usize, inlines: &[Inline<E>])
+    where
+        E: Extension,
+    {
+        for inline in inlines {
+            match inline {
+                Inline::Code(code) => {
+                    let label = format!("Code {:?}{}", code.value, continues_label(code.continues));
+                    self.push_unlocated(depth, label);
+                }
+                Inline::Emphasis(emphasis) => {
+                    let label = format!("Emphasis{}", continues_label(emphasis.continues));
+                    self.push_unlocated(depth, label);
+                    self.inlines(depth + 1, &emphasis.children);
+                }
+                Inline::Html(html) => {
+                    let label = format!("Html {:?}{}", html.value, continues_label(html.continues));
+                    self.push_unlocated(depth, label);
+                }
+                Inline::Image(image) => {
+                    let label = image_label(
+                        image.form,
+                        &image.target,
+                        image.title.as_deref(),
+                        &image.alt,
+                        image.continues,
+                    );
+                    self.push_unlocated(depth, label);
+                }
+                Inline::LineBreak(_) => self.push_unlocated(depth, "LineBreak".to_owned()),
+                Inline::Link(link) => {
+                    let label = link_label(
+                        link.form,
+                        &link.target,
+                        link.title.as_deref(),
+                        link.continues,
+                    );
+                    self.push_unlocated(depth, label);
+                    self.inlines(depth + 1, &link.children);
+                }
+                Inline::Strong(strong) => {
+                    let label = format!("Strong{}", continues_label(strong.continues));
+                    self.push_unlocated(depth, label);
+                    self.inlines(depth + 1, &strong.children);
+                }
+                Inline::Text(text) => {
+                    self.push_unlocated(depth, format!("Text {:?}", text.value));
+                }
+            }
+        }
+    }
+
+    fn located_block<E>(&mut self, depth: usize, block: &located::Block<E>)
+    where
+        E: Extension,
+    {
+        match block {
+            located::Block::BlockQuote(block_quote) => {
+                let label = format!("BlockQuote {:?}", block_quote.value);
+                self.push(depth, label, &block_quote.span);
+            }
+            located::Block::CodeBlock(code_block) => {
+                let label = code_block_label(
+                    code_block.language.as_deref(),
+                    &code_block.args,
+                    &code_block.value,
+                    code_block.kind.0.is_some(),
                 );
+                self.push(depth, label, &code_block.span);
+            }
+            located::Block::Html(html) => {
+                self.push(depth, format!("Html {:?}", html.value), &html.span);
+            }
+            located::Block::List(list) => {
+                self.push(depth, list_label(list.start, list.loose), &list.span);
+                for item in &list.items {
+                    self.push(depth + 1, "Item".to_owned(), &item.span);
+                    self.located_markdown_block(depth + 2, &item.body);
+                }
+            }
+            located::Block::Paragraph(paragraph) => {
+                self.push(depth, "Paragraph".to_owned(), &paragraph.span);
+                for line in &paragraph.lines {
+                    self.push(depth + 1, "Line".to_owned(), &line.span);
+                    self.located_inlines(depth + 2, &line.children);
+                }
+            }
+            located::Block::Table(table) => {
+                let label = table_label(table.format, &table.alignments);
                 self.push(depth, label, &table.span);
                 let head = table.head.iter().map(|row| ("TableRow head", row));
                 let rows = table.rows.iter().map(|row| ("TableRow", row));
@@ -127,17 +230,17 @@ impl Rows<'_> {
                             span: Some(cell.span.clone()),
                             spread,
                         });
-                        self.markdown_block(depth + 3, &cell.body);
+                        self.located_markdown_block(depth + 3, &cell.body);
                     }
                 }
             }
-            Block::ThematicBreak(thematic_break) => {
+            located::Block::ThematicBreak(thematic_break) => {
                 self.push(depth, "ThematicBreak".to_owned(), &thematic_break.span);
             }
         }
     }
 
-    fn document<E>(&mut self, document: &Document<E>)
+    fn located_document<E>(&mut self, document: &located::Document<E>)
     where
         E: Extension,
     {
@@ -146,13 +249,9 @@ impl Rows<'_> {
             Some(Ok(frontmatter)) => {
                 let label = format!("Frontmatter format={:?}", frontmatter.format);
                 self.push(1, label, &frontmatter.span);
-                if self.source.is_empty() {
-                    self.mapping(2, &frontmatter.mapping);
-                } else {
-                    let read = read_again(self.source, frontmatter);
-                    assert_eq!(read.clone().into_model(), frontmatter.mapping);
-                    self.located_mapping(2, &read);
-                }
+                let read = read_again(self.source, frontmatter);
+                assert_eq!(read.clone().into_model(), frontmatter.mapping);
+                self.located_mapping(2, &read);
             }
             Some(Err(broken)) => {
                 let label = format!(
@@ -163,63 +262,57 @@ impl Rows<'_> {
             }
             None => {}
         }
-        self.markdown_block(1, &document.body);
+        self.located_markdown_block(1, &document.body);
     }
 
-    fn inlines<E>(&mut self, depth: usize, inlines: &[Inline<E>])
+    fn located_inlines<E>(&mut self, depth: usize, inlines: &[located::Inline<E>])
     where
         E: Extension,
     {
         for inline in inlines {
             match inline {
-                Inline::Code(code) => {
+                located::Inline::Code(code) => {
                     let label = format!("Code {:?}{}", code.value, continues_label(code.continues));
                     self.push(depth, label, &code.span);
                 }
-                Inline::Emphasis(emphasis) => {
+                located::Inline::Emphasis(emphasis) => {
                     let label = format!("Emphasis{}", continues_label(emphasis.continues));
                     self.push(depth, label, &emphasis.span);
-                    self.inlines(depth + 1, &emphasis.children);
+                    self.located_inlines(depth + 1, &emphasis.children);
                 }
-                Inline::Html(html) => {
+                located::Inline::Html(html) => {
                     let label = format!("Html {:?}{}", html.value, continues_label(html.continues));
                     self.push(depth, label, &html.span);
                 }
-                Inline::Image(image) => {
-                    let alt = if image.alt.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" alt={:?}", image.alt)
-                    };
-                    let label = format!(
-                        "Image form={:?} target={:?}{}{alt}{}",
+                located::Inline::Image(image) => {
+                    let label = image_label(
                         image.form,
-                        image.target,
-                        title_label(image.title.as_deref()),
-                        continues_label(image.continues)
+                        &image.target,
+                        image.title.as_deref(),
+                        &image.alt,
+                        image.continues,
                     );
                     self.push(depth, label, &image.span);
                 }
-                Inline::LineBreak(line_break) => {
+                located::Inline::LineBreak(line_break) => {
                     self.push(depth, "LineBreak".to_owned(), &line_break.span);
                 }
-                Inline::Link(link) => {
-                    let label = format!(
-                        "Link form={:?} target={:?}{}{}",
+                located::Inline::Link(link) => {
+                    let label = link_label(
                         link.form,
-                        link.target,
-                        title_label(link.title.as_deref()),
-                        continues_label(link.continues)
+                        &link.target,
+                        link.title.as_deref(),
+                        link.continues,
                     );
                     self.push(depth, label, &link.span);
-                    self.inlines(depth + 1, &link.children);
+                    self.located_inlines(depth + 1, &link.children);
                 }
-                Inline::Strong(strong) => {
+                located::Inline::Strong(strong) => {
                     let label = format!("Strong{}", continues_label(strong.continues));
                     self.push(depth, label, &strong.span);
-                    self.inlines(depth + 1, &strong.children);
+                    self.located_inlines(depth + 1, &strong.children);
                 }
-                Inline::Text(text) => {
+                located::Inline::Text(text) => {
                     self.push(depth, format!("Text {:?}", text.value), &text.span);
                 }
             }
@@ -245,6 +338,33 @@ impl Rows<'_> {
                 spread: false,
             });
             self.located_value(depth + 2, &pair.value);
+        }
+    }
+
+    fn located_markdown_block<E>(&mut self, depth: usize, block: &located::MarkdownBlock<E>)
+    where
+        E: Extension,
+    {
+        self.push(depth, "MarkdownBlock".to_owned(), &block.span);
+        for section in &block.sections {
+            self.located_section(depth + 1, section);
+        }
+    }
+
+    fn located_section<E>(&mut self, depth: usize, section: &located::Section<E>)
+    where
+        E: Extension,
+    {
+        self.push(depth, "Section".to_owned(), &section.span);
+        if let Some(heading) = &section.heading {
+            self.push(depth + 1, "Heading".to_owned(), &heading.span);
+            self.located_inlines(depth + 2, &heading.children);
+        }
+        for block in &section.blocks {
+            self.located_block(depth + 1, block);
+        }
+        for subsection in &section.subsections {
+            self.located_section(depth + 1, subsection);
         }
     }
 
@@ -277,7 +397,7 @@ impl Rows<'_> {
     where
         E: Extension,
     {
-        self.push(depth, "MarkdownBlock".to_owned(), &block.span);
+        self.push_unlocated(depth, "MarkdownBlock".to_owned());
         for section in &block.sections {
             self.section(depth + 1, section);
         }
@@ -303,13 +423,31 @@ impl Rows<'_> {
         });
     }
 
+    fn raw_document<E>(&mut self, document: &RawDocument<E>)
+    where
+        E: Extension,
+    {
+        match document {
+            RawDocument::Invalid(invalid) => {
+                self.push_unlocated(0, "InvalidDocument".to_owned());
+                let label = format!(
+                    "InvalidFrontmatter format={:?} error={:?}",
+                    invalid.frontmatter.format, invalid.frontmatter.error
+                );
+                self.push_unlocated(1, label);
+                self.markdown_block(1, &invalid.body);
+            }
+            RawDocument::Valid(valid) => self.document(valid),
+        }
+    }
+
     fn section<E>(&mut self, depth: usize, section: &Section<E>)
     where
         E: Extension,
     {
-        self.push(depth, "Section".to_owned(), &section.span);
+        self.push_unlocated(depth, "Section".to_owned());
         if let Some(heading) = &section.heading {
-            self.push(depth + 1, "Heading".to_owned(), &heading.span);
+            self.push_unlocated(depth + 1, "Heading".to_owned());
             self.inlines(depth + 2, &heading.children);
         }
         for block in &section.blocks {
@@ -334,11 +472,16 @@ impl Rows<'_> {
     }
 }
 
-/// Parses `source` and checks the tree against `expected`, an outline.
+/// Parses `source` and checks the model's tree against `expected`, an
+/// outline, and that every span of the located tree nests.
 fn check(source: &str, expected: &str) {
-    let found = rows(source);
-    assert_nested(source, &found);
-    let actual = outline(&found);
+    assert_nested(source, &located_rows(source));
+    let mut rows = Rows {
+        rows: Vec::new(),
+        source,
+    };
+    rows.raw_document(&parse(source).document);
+    let actual = outline(&rows.rows);
     assert!(
         actual == expected,
         "the tree differs.\n--- expected\n{expected}\n--- actual\n{actual}"
@@ -346,14 +489,17 @@ fn check(source: &str, expected: &str) {
 }
 
 /// The frontmatter of `source`, one of which no entry reads.
-fn broken(source: &str) -> BrokenFrontmatter {
-    parse(source).frontmatter.unwrap().unwrap_err()
+fn broken(source: &str) -> located::BrokenFrontmatter {
+    parse_located::<Markdown>(source, &ParseOptions::default())
+        .frontmatter
+        .unwrap()
+        .unwrap_err()
 }
 
-/// Parses `source` and checks, node by node, the source text each span
-/// covers.
+/// Parses `source` into its located tree and checks, node by node, the
+/// source text each span covers.
 fn check_spans(source: &str, expected: &[(&str, &str)]) {
-    let found = rows(source);
+    let found = located_rows(source);
     let actual: Vec<(&str, &str)> = found
         .iter()
         .map(|row| (row.label.as_str(), &source[row.span.clone().unwrap()]))
@@ -385,14 +531,15 @@ fn outline(rows: &[Row]) -> String {
     text
 }
 
-fn rows(source: &str) -> Vec<Row> {
-    let document = parse(source);
+/// The rows of the located tree `source` parses into, each with its span.
+fn located_rows(source: &str) -> Vec<Row> {
+    let document = parse_located::<Markdown>(source, &ParseOptions::default());
     assert_eq!(document.span, 0..source.len());
     let mut rows = Rows {
         rows: Vec::new(),
         source,
     };
-    rows.document(&document);
+    rows.located_document(&document);
     rows.rows
 }
 
@@ -448,13 +595,20 @@ fn assert_nested(source: &str, rows: &[Row]) {
 
 /// The frontmatter `source` opens with as its reader reads it, with spans.
 fn located_frontmatter(source: &str) -> located::Mapping {
-    let frontmatter = parse(source).frontmatter.unwrap().unwrap();
-    read_again(source, &frontmatter)
+    read_again(source, &located_frontmatter_node(source))
+}
+
+/// The located frontmatter `source` opens with, one that reads.
+fn located_frontmatter_node(source: &str) -> located::Frontmatter {
+    parse_located::<Markdown>(source, &ParseOptions::default())
+        .frontmatter
+        .unwrap()
+        .unwrap()
 }
 
 /// The frontmatter of `source` read again by its reader, which keeps the
 /// span of each value and every place each key is written.
-fn read_again(source: &str, frontmatter: &Frontmatter) -> located::Mapping {
+fn read_again(source: &str, frontmatter: &located::Frontmatter) -> located::Mapping {
     let content = line_at(source, frontmatter.span.start).next..frontmatter.span.end - 3;
     let read = match frontmatter.format {
         FrontmatterFormat::Toml => super::toml::read(source, content),
@@ -463,21 +617,95 @@ fn read_again(source: &str, frontmatter: &Frontmatter) -> located::Mapping {
     read.unwrap().0
 }
 
-/// ` args=Text "..."`, or ` args=Toml {...}` with the pairs as the writer
-/// writes them, else nothing when the args are an empty mapping.
-fn args_label<E>(code_block: &CodeBlock<E>) -> String
+/// The document `source` parses into, whose frontmatter, if it has one,
+/// reads.
+fn valid(source: &str) -> Document {
+    let read = match parse(source).document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => Some(valid),
+    };
+    read.unwrap()
+}
+
+/// The body of `document` when it is valid.
+const fn valid_body<E>(document: &RawDocument<E>) -> Option<&MarkdownBlock<E>>
 where
     E: Extension,
 {
-    match &code_block.args {
+    match document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => Some(&valid.body),
+    }
+}
+
+/// `CodeBlock`, its language, its args, its value, and ` claimed` when an
+/// extension claimed it.
+fn code_block_label(language: Option<&str>, args: &Args, value: &str, claimed: bool) -> String {
+    let named = language.map_or_else(String::new, |written| format!(" language={written:?}"));
+    let mark = if claimed { " claimed" } else { "" };
+    format!("CodeBlock{named}{} value={value:?}{mark}", args_label(args))
+}
+
+/// ` args=Text "..."`, or ` args=Toml {...}` with the pairs as the writer
+/// writes them, else nothing when the args are an empty mapping.
+fn args_label(args: &Args) -> String {
+    match args {
         Args::Text(text) => format!(" args=Text {text:?}"),
         Args::Toml(mapping) if mapping.is_empty() => String::new(),
         Args::Toml(_) => {
-            let info = Writer::new().info_string(code_block);
-            let language = code_block.language.as_deref().unwrap_or_default();
-            format!(" args=Toml {{{}}}", info[language.len()..].trim_start())
+            let block = CodeBlock::<Markdown> {
+                args: args.clone(),
+                kind: Kind(None),
+                language: None,
+                value: String::new(),
+            };
+            let info = Writer::new().info_string(&block);
+            format!(" args=Toml {{{}}}", info.trim_start())
         }
     }
+}
+
+/// `List`, its first number when it is ordered, and ` loose` when it is.
+fn list_label(start: Option<u64>, loose: bool) -> String {
+    let numbered = start.map_or_else(String::new, |first| format!(" start={first}"));
+    let mark = if loose { " loose" } else { "" };
+    format!("List{numbered}{mark}")
+}
+
+/// `Table`, its syntax and the alignment of each of its columns.
+fn table_label(format: TableFormat, alignments: &[Alignment]) -> String {
+    let names: Vec<String> = alignments
+        .iter()
+        .map(|alignment| format!("{alignment:?}"))
+        .collect();
+    format!("Table format={format:?} alignments={}", names.join(","))
+}
+
+fn image_label(
+    form: LinkForm,
+    target: &str,
+    title: Option<&str>,
+    alt: &str,
+    continues: Continues,
+) -> String {
+    let shown = if alt.is_empty() {
+        String::new()
+    } else {
+        format!(" alt={alt:?}")
+    };
+    format!(
+        "Image form={form:?} target={target:?}{}{shown}{}",
+        title_label(title),
+        continues_label(continues)
+    )
+}
+
+fn link_label(form: LinkForm, target: &str, title: Option<&str>, continues: Continues) -> String {
+    format!(
+        "Link form={form:?} target={target:?}{}{}",
+        title_label(title),
+        continues_label(continues)
+    )
 }
 
 /// ` continues=...` for a piece of a node cut at a line end, else nothing.

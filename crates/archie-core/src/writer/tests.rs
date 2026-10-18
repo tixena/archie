@@ -4,14 +4,14 @@
 use indexmap::IndexMap;
 
 use crate::parser::ast::{
-    Alignment, Args, Block, CodeBlock, Document, Frontmatter, FrontmatterFormat, Heading, Inline,
-    Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Paragraph, Section,
+    Alignment, Args, Block, CodeBlock, Document, FrontmatterFormat, Heading, Inline, Item, Kind,
+    Line, LineBreak, List, Mapping, MarkdownBlock, NonFinite, Paragraph, RawDocument, Section,
     Table, TableCell, TableFormat, TableRow, Text, Value,
 };
-use crate::parser::error::ParseError;
-use crate::parser::extension::{Construct, Context, Extension, Markdown};
-use crate::parser::{ParseOptions, parse, parse_with};
-use crate::writer::{WriteError, WriteOptions, Writer, write, write_for_rebuild};
+use crate::parser::error::{ParseError, RebuildError};
+use crate::parser::extension::{Construct, Context, Extension, Markdown, Plain, Written};
+use crate::parser::{ParseOptions, Parsed, parse, parse_with, rebuild_with};
+use crate::writer::{WriteError, WriteOptions, Writer, write};
 
 /// Every file under `parser/tests/fixtures/`.
 const FIXTURES: [(&str, &str); 21] = [
@@ -139,7 +139,7 @@ impl Extension for Headings {
         matches!(construct, Construct::Heading(_)).then_some(Ok(()))
     }
 
-    fn write<T>(_node: &(), plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(_node: &(), plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension,
     {
@@ -148,12 +148,32 @@ impl Extension for Headings {
 }
 
 fn written(source: &str) -> String {
-    write(&parse(source), &WriteOptions::default()).unwrap()
+    write(&parse(source).document, &WriteOptions::default()).unwrap()
 }
 
-/// The body `source` reads as, every span emptied.
+/// The document `parsed` holds, a valid one.
+fn valid<E>(parsed: Parsed<E>) -> Document<E>
+where
+    E: Extension,
+{
+    let read = match parsed.document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => Some(valid),
+    };
+    read.unwrap()
+}
+
+/// Writes `document`, a valid one.
+fn write_valid<E>(document: &Document<E>, options: &WriteOptions) -> Result<String, WriteError>
+where
+    E: Extension,
+{
+    write(&RawDocument::Valid(document.clone()), options)
+}
+
+/// The body `source` reads as, every table in pipe syntax.
 fn body(source: &str) -> MarkdownBlock {
-    let mut read = parse(source).body;
+    let mut read = valid(parse(source)).body;
     clear_block(&mut read);
     read
 }
@@ -168,7 +188,6 @@ fn round_trip(source: &str) -> String {
 }
 
 fn clear_block(block: &mut MarkdownBlock) {
-    block.span = 0..0;
     clear_kind(&mut block.kind);
     for section in &mut block.sections {
         clear_section(section);
@@ -176,16 +195,16 @@ fn clear_block(block: &mut MarkdownBlock) {
 }
 
 fn clear_kind(kind: &mut Kind<Markdown>) {
-    if let Some(block) = kind.0.as_deref_mut() {
-        clear_block(block);
+    match kind.0.as_deref_mut() {
+        Some(RawDocument::Invalid(invalid)) => clear_block(&mut invalid.body),
+        Some(RawDocument::Valid(valid)) => clear_block(&mut valid.body),
+        None => {}
     }
 }
 
 fn clear_section(section: &mut Section) {
-    section.span = 0..0;
     clear_kind(&mut section.kind);
     if let Some(heading) = &mut section.heading {
-        heading.span = 0..0;
         clear_kind(&mut heading.kind);
         clear_inlines(&mut heading.children);
     }
@@ -200,39 +219,30 @@ fn clear_section(section: &mut Section) {
 fn clear_block_node(block: &mut Block) {
     match block {
         Block::BlockQuote(quote) => {
-            quote.span = 0..0;
             clear_kind(&mut quote.kind);
         }
         Block::CodeBlock(code) => {
-            code.content = 0..0;
-            code.span = 0..0;
             clear_kind(&mut code.kind);
         }
         Block::Html(html) => {
-            html.span = 0..0;
             clear_kind(&mut html.kind);
         }
         Block::List(list) => {
-            list.span = 0..0;
             clear_kind(&mut list.kind);
             for item in &mut list.items {
-                item.span = 0..0;
                 clear_kind(&mut item.kind);
                 clear_block(&mut item.body);
             }
         }
         Block::Paragraph(paragraph) => {
-            paragraph.span = 0..0;
             clear_kind(&mut paragraph.kind);
             for line in &mut paragraph.lines {
-                line.span = 0..0;
                 clear_kind(&mut line.kind);
                 clear_inlines(&mut line.children);
             }
         }
         Block::Table(table) => clear_table(table),
         Block::ThematicBreak(thematic_break) => {
-            thematic_break.span = 0..0;
             clear_kind(&mut thematic_break.kind);
         }
     }
@@ -240,13 +250,10 @@ fn clear_block_node(block: &mut Block) {
 
 fn clear_table(table: &mut Table) {
     table.format = TableFormat::Pipe;
-    table.span = 0..0;
     clear_kind(&mut table.kind);
     for row in table.head.iter_mut().chain(&mut table.rows) {
-        row.span = 0..0;
         clear_kind(&mut row.kind);
         for cell in &mut row.cells {
-            cell.span = 0..0;
             clear_kind(&mut cell.kind);
             clear_block(&mut cell.body);
         }
@@ -257,38 +264,30 @@ fn clear_inlines(inlines: &mut [Inline]) {
     for inline in inlines {
         match inline {
             Inline::Code(code) => {
-                code.span = 0..0;
                 clear_kind(&mut code.kind);
             }
             Inline::Emphasis(emphasis) => {
-                emphasis.span = 0..0;
                 clear_kind(&mut emphasis.kind);
                 clear_inlines(&mut emphasis.children);
             }
             Inline::Html(html) => {
-                html.span = 0..0;
                 clear_kind(&mut html.kind);
             }
             Inline::Image(image) => {
-                image.span = 0..0;
                 clear_kind(&mut image.kind);
             }
             Inline::LineBreak(line_break) => {
-                line_break.span = 0..0;
                 clear_kind(&mut line_break.kind);
             }
             Inline::Link(link) => {
-                link.span = 0..0;
                 clear_kind(&mut link.kind);
                 clear_inlines(&mut link.children);
             }
             Inline::Strong(strong) => {
-                strong.span = 0..0;
                 clear_kind(&mut strong.kind);
                 clear_inlines(&mut strong.children);
             }
             Inline::Text(text) => {
-                text.span = 0..0;
                 clear_kind(&mut text.kind);
             }
         }
@@ -298,7 +297,6 @@ fn clear_inlines(inlines: &mut [Inline]) {
 fn text_node(value: &str) -> Inline {
     Inline::Text(Text {
         kind: Kind(None),
-        span: 0..0,
         value: value.to_owned(),
     })
 }
@@ -312,17 +310,13 @@ fn titled(title: &str, text: &str, subsections: Vec<Section>) -> Section {
             lines: vec![Line {
                 children: vec![text_node(text)],
                 kind: Kind(None),
-                span: 0..0,
             }],
-            span: 0..0,
         })],
         heading: Some(Heading {
             children: vec![text_node(title)],
             kind: Kind(None),
-            span: 0..0,
         }),
         kind: Kind(None),
-        span: 0..0,
         subsections,
     }
 }
@@ -334,10 +328,8 @@ fn headed(children: Vec<Inline>, subsections: Vec<Section>) -> Section {
         heading: Some(Heading {
             children,
             kind: Kind(None),
-            span: 0..0,
         }),
         kind: Kind(None),
-        span: 0..0,
         subsections,
     }
 }
@@ -361,11 +353,9 @@ fn document(sections: Vec<Section>) -> Document {
         body: MarkdownBlock {
             kind: Kind(None),
             sections,
-            span: 0..0,
         },
         frontmatter: None,
         kind: Kind(None),
-        span: 0..0,
     }
 }
 
@@ -377,9 +367,10 @@ fn lifted(mut section: Section) -> Section {
     while let Some(Block::CodeBlock(code)) = section.blocks.last()
         && code.language.as_deref() == Some("markdown")
         && let Some(Block::CodeBlock(claimed)) = section.blocks.pop()
-        && let Some(block) = claimed.kind.0
+        && let Some(nested) = claimed.kind.0
+        && let RawDocument::Valid(document) = *nested
     {
-        let mut sections = block.sections;
+        let mut sections = document.body.sections;
         sections.append(&mut deeper);
         deeper = sections;
     }
@@ -478,7 +469,7 @@ fn a_heading_is_written_without_its_closing_hashes_and_keeps_the_hashes_of_its_t
 #[test]
 fn a_built_heading_whose_text_ends_with_hashes_after_a_space_escapes_the_first_hash() {
     let built = document(vec![headed(vec![text_node("Title ##")], Vec::new())]);
-    let text = write(&built, &WriteOptions::default()).unwrap();
+    let text = write_valid(&built, &WriteOptions::default()).unwrap();
     assert_eq!(text, "# Title \\##\n");
     assert_eq!(body(&text), built.body);
     assert_eq!(written(&text), text);
@@ -507,7 +498,7 @@ fn a_section_with_no_heading_after_a_sibling_writes_an_empty_heading_line() {
         ),
     ] {
         let built = document(sections);
-        let written_once = write(&built, &WriteOptions::default()).unwrap();
+        let written_once = write_valid(&built, &WriteOptions::default()).unwrap();
         assert_eq!(written_once, text);
         assert_eq!(written(text), text);
         let mut read_back = built.body;
@@ -541,7 +532,7 @@ fn a_first_section_with_no_heading_that_a_read_would_not_build_writes_an_empty_h
     let texts = ["# A\n\n##\n\nfoo\n", "# A\n\n##\n", "#\n\n# B\n"];
     let read_backs = trees(headed(Vec::new(), Vec::new()).heading);
     for ((sections, read_back), text) in trees(None).into_iter().zip(read_backs).zip(texts) {
-        let written_once = write(&document(sections), &WriteOptions::default()).unwrap();
+        let written_once = write_valid(&document(sections), &WriteOptions::default()).unwrap();
         assert_eq!(written_once, text);
         assert_eq!(written(text), text);
         assert_eq!(body(text), document(read_back).body, "{text:?}");
@@ -550,7 +541,7 @@ fn a_first_section_with_no_heading_that_a_read_would_not_build_writes_an_empty_h
 
 #[test]
 fn a_section_seven_levels_deep_is_a_markdown_block_inside_its_parent() {
-    let text = write(&document(vec![levels(1, 7)]), &WriteOptions::default()).unwrap();
+    let text = write_valid(&document(vec![levels(1, 7)]), &WriteOptions::default()).unwrap();
     assert!(
         text.ends_with("###### Level 6\n\ntext 6\n\n```markdown\n# Level 7\n\ntext 7\n```\n"),
         "{text}"
@@ -562,7 +553,7 @@ fn a_section_seven_levels_deep_is_a_markdown_block_inside_its_parent() {
 #[test]
 fn a_section_twenty_two_levels_deep_reads_back_to_the_same_tree() {
     let built = document(vec![levels(1, 22)]);
-    let text = write(&built, &WriteOptions::default()).unwrap();
+    let text = write_valid(&built, &WriteOptions::default()).unwrap();
     let fences: Vec<&str> = text.lines().filter(|line| line.starts_with('`')).collect();
     assert_eq!(
         fences,
@@ -576,7 +567,7 @@ fn a_section_twenty_two_levels_deep_reads_back_to_the_same_tree() {
         ]
     );
     assert_eq!(written(&text), text);
-    let read = parse(&text).body;
+    let read = valid(parse(&text)).body;
     let mut read_back = MarkdownBlock {
         sections: read.sections.into_iter().map(lifted).collect(),
         ..read
@@ -776,7 +767,7 @@ fn a_later_line_led_by_inline_html_or_a_code_span_piece_that_would_start_a_block
 fn a_first_body_line_that_would_open_a_toml_frontmatter_is_escaped() {
     let text = round_trip("\\+++\nx = 1\n\\+++\n");
     assert_eq!(text, "\\+++\nx = 1\n+++\n");
-    assert!(parse(&text).frontmatter.is_none());
+    assert!(valid(parse(&text)).frontmatter.is_none());
     assert_eq!(round_trip("+++ x\n"), "+++ x\n");
     assert_eq!(round_trip("\\---\nx: 1\n\\---\n"), "\\---\nx: 1\n\\---\n");
 }
@@ -883,17 +874,16 @@ fn a_star_item_opening_with_a_thematic_break_and_a_destination_with_a_line_endin
 
 #[test]
 fn a_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line() {
-    let mut built = parse("- p\n  # h\n- q\n");
+    let mut built = valid(parse("- p\n  # h\n- q\n"));
     if let Some(Block::List(list)) = built.body.sections[0].blocks.first_mut()
         && let Some(heading) = &mut list.items[0].body.sections[1].heading
     {
-        heading.children.push(Inline::LineBreak(LineBreak {
-            kind: Kind(None),
-            span: 0..0,
-        }));
+        heading
+            .children
+            .push(Inline::LineBreak(LineBreak { kind: Kind(None) }));
         heading.children.push(text_node("b"));
     }
-    let text = write(&built, &WriteOptions::default()).unwrap();
+    let text = write_valid(&built, &WriteOptions::default()).unwrap();
     assert_eq!(text, "- p\n  # h&#10;b\n- q\n");
     assert_eq!(written(&text), text);
 }
@@ -901,23 +891,21 @@ fn a_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line
 #[test]
 fn a_claimed_heading_with_a_line_break_after_text_in_a_tight_item_is_written_on_one_line() {
     let options = ParseOptions::default();
-    let mut built = parse_with::<Headings>("- p\n  # h\n- q\n", &options).unwrap();
+    let mut built = valid(parse_with::<Headings>("- p\n  # h\n- q\n", &options).unwrap());
     if let Some(Block::List(list)) = built.body.sections[0].blocks.first_mut()
         && let Some(heading) = &mut list.items[0].body.sections[1].heading
     {
-        heading.children.push(Inline::LineBreak(LineBreak {
-            kind: Kind(None),
-            span: 0..0,
-        }));
+        heading
+            .children
+            .push(Inline::LineBreak(LineBreak { kind: Kind(None) }));
         heading.children.push(Inline::Text(Text {
             kind: Kind(None),
-            span: 0..0,
             value: "b".to_owned(),
         }));
     }
-    let text = write(&built, &WriteOptions::default()).unwrap();
+    let text = write_valid(&built, &WriteOptions::default()).unwrap();
     assert_eq!(text, "- p\n  # h&#10;b\n- q\n");
-    let again = parse_with::<Headings>(&text, &options).unwrap();
+    let again = parse_with::<Headings>(&text, &options).unwrap().document;
     assert_eq!(write(&again, &WriteOptions::default()).unwrap(), text);
 }
 
@@ -937,17 +925,14 @@ fn strong_around_emphasis_and_emphasis_inside_emphasis_keep_their_form() {
 
 #[test]
 fn a_line_break_in_a_heading_deeper_than_two_is_written_as_a_reference() {
-    let line_break = Inline::LineBreak(LineBreak {
-        kind: Kind(None),
-        span: 0..0,
-    });
+    let line_break = Inline::LineBreak(LineBreak { kind: Kind(None) });
     let third = headed(vec![text_node("a"), line_break, text_node("b")], Vec::new());
     let built = document(vec![headed(
         Vec::new(),
         vec![headed(Vec::new(), vec![third])],
     )]);
     assert_eq!(
-        write(&built, &WriteOptions::default()).unwrap(),
+        write_valid(&built, &WriteOptions::default()).unwrap(),
         "#\n\n##\n\n### a&#10;b\n"
     );
 }
@@ -1048,7 +1033,7 @@ fn a_markdown_block_keeps_its_info_string_and_its_claimed_content() {
         | Block::Table(_)
         | Block::ThematicBreak(_) => None,
     };
-    assert_eq!(claimed, Some(body("# A\n")));
+    assert_eq!(claimed, Some(parse("# A\n").document));
 }
 
 /// A code block whose language is `language` and whose `Toml` args map
@@ -1060,10 +1045,8 @@ fn code_with_args(language: &str, value: Value, kind: Kind<Markdown>) -> Block {
     ]);
     Block::CodeBlock(CodeBlock {
         args: Args::Toml(mapping),
-        content: 0..0,
         kind,
         language: Some(language.to_owned()),
-        span: 0..0,
         value: "x".to_owned(),
     })
 }
@@ -1076,10 +1059,8 @@ fn holding(blocks: Vec<Block>) -> MarkdownBlock {
             blocks,
             heading: None,
             kind: Kind(None),
-            span: 0..0,
             subsections: Vec::new(),
         }],
-        span: 0..0,
     }
 }
 
@@ -1095,11 +1076,9 @@ fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
         items: vec![Item {
             body: holding(vec![null()]),
             kind: Kind(None),
-            span: 0..0,
         }],
         kind: Kind(None),
         loose: false,
-        span: 0..0,
         start: None,
     });
     let in_cell = Block::Table(Table {
@@ -1109,18 +1088,18 @@ fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
             cells: vec![TableCell {
                 body: holding(vec![null()]),
                 kind: Kind(None),
-                span: 0..0,
             }],
             kind: Kind(None),
-            span: 0..0,
         }],
         kind: Kind(None),
         rows: Vec::new(),
-        span: 0..0,
     });
-    let claimed = Kind(Some(Box::new(holding(vec![null()]))));
+    let claimed = Kind(Some(Box::new(RawDocument::Valid(Document {
+        body: holding(vec![null()]),
+        ..document(Vec::new())
+    }))));
     let in_markdown = code_with_args("md", Value::Integer(2), claimed);
-    let claimed_null = Kind(Some(Box::new(holding(Vec::new()))));
+    let claimed_null = Kind(Some(Box::new(RawDocument::Valid(document(Vec::new())))));
     let markdown_null = code_with_args("md", Value::Null, claimed_null);
     for block in [null(), in_item, in_cell, in_markdown, markdown_null] {
         let built = Document {
@@ -1128,7 +1107,7 @@ fn toml_args_holding_a_null_fail_the_write_with_an_error_naming_the_key() {
             ..document(Vec::new())
         };
         assert_eq!(
-            write(&built, &WriteOptions::default()),
+            write_valid(&built, &WriteOptions::default()),
             Err(null_error("title"))
         );
     }
@@ -1140,12 +1119,12 @@ fn a_broken_frontmatter_is_written_back_as_it_was_read_whatever_syntax_is_picked
         "---\n{a: 1, b: [}\n---\n# A\n",
         "+++\na = \"\"\"never closed\n+++\n# A\n",
     ] {
-        let document = parse(source);
-        assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");
+        let document = parse(source).document;
+        assert!(matches!(document, RawDocument::Invalid(_)), "{source:?}");
         for options in [WriteOptions::default(), TOML] {
             let text = write(&document, &options).unwrap();
             assert_eq!(text, source);
-            assert_eq!(parse(&text), document);
+            assert_eq!(parse(&text).document, document);
         }
     }
 }
@@ -1157,24 +1136,27 @@ fn a_broken_frontmatter_whose_text_holds_a_line_that_would_close_it_fails_the_wr
         ("---\na: [\n---\n# A\n", "a: [\n...  \nb: 1", "..."),
         ("+++\na = [\n+++\n# A\n", "a = [\n+++\nb = 1", "+++"),
     ] {
-        let mut document = parse(source);
-        document
-            .frontmatter
-            .as_mut()
+        let parse_options = ParseOptions::default();
+        let mut document = parse_with::<Plain>(source, &parse_options)
             .unwrap()
-            .as_mut()
-            .unwrap_err()
-            .text = text.to_owned();
+            .document;
+        if let RawDocument::Invalid(invalid) = &mut document {
+            invalid.frontmatter.text = text.to_owned();
+        }
         let error = WriteError {
             key: String::new(),
             message: format!(
-                "the broken frontmatter's text holds the line `{line}`, which would close it"
+                "the invalid frontmatter's text holds the line `{line}`, which would close it"
             ),
         };
         for options in [WriteOptions::default(), TOML] {
             assert_eq!(write(&document, &options), Err(error.clone()), "{text:?}");
         }
-        assert_eq!(write_for_rebuild(&document), Err(error), "{text:?}");
+        assert_eq!(
+            rebuild_with::<Plain>(&document, &parse_options),
+            Err(RebuildError::Write(error)),
+            "{text:?}"
+        );
     }
 }
 
@@ -1185,27 +1167,27 @@ fn a_broken_frontmatter_whose_text_holds_a_delimiter_inside_a_line_is_written_as
         "---\n{a: 1, b: [}\n---x\n---\n# A\n",
         "+++\na = \"\"\"never closed\n---\n+++\n# A\n",
     ] {
-        let document = parse(source);
-        assert!(matches!(document.frontmatter, Some(Err(_))), "{source:?}");
+        let document = parse(source).document;
+        assert!(matches!(document, RawDocument::Invalid(_)), "{source:?}");
         for options in [WriteOptions::default(), TOML] {
             let text = write(&document, &options).unwrap();
             assert_eq!(text, source);
-            assert_eq!(parse(&text), document);
+            assert_eq!(parse(&text).document, document);
         }
     }
 }
 
 fn toml(source: &str) -> String {
-    write(&parse(source), &TOML).unwrap()
+    write(&parse(source).document, &TOML).unwrap()
 }
 
 fn toml_error(source: &str) -> WriteError {
-    write(&parse(source), &TOML).unwrap_err()
+    write(&parse(source).document, &TOML).unwrap_err()
 }
 
 /// The frontmatter mapping `source` reads as.
 fn mapping(source: &str) -> Mapping {
-    parse(source).frontmatter.unwrap().unwrap().mapping
+    valid(parse(source)).frontmatter.unwrap()
 }
 
 /// `mapping` with each time of day turned into the text it is written as
@@ -1245,12 +1227,7 @@ fn text(value: &str) -> Value {
 /// A document whose frontmatter holds `mapping` and whose body is empty.
 fn with_frontmatter(mapping: Mapping) -> Document {
     Document {
-        frontmatter: Some(Ok(Frontmatter {
-            dropped: Vec::new(),
-            format: FrontmatterFormat::Yaml,
-            mapping,
-            span: 0..0,
-        })),
+        frontmatter: Some(mapping),
         ..document(Vec::new())
     }
 }
@@ -1261,11 +1238,11 @@ fn with_frontmatter_value(value: Value) -> Document {
 }
 
 fn written_yaml(document: &Document) -> String {
-    write(document, &WriteOptions::default()).unwrap()
+    write_valid(document, &WriteOptions::default()).unwrap()
 }
 
 fn written_toml(document: &Document) -> String {
-    write(document, &TOML).unwrap()
+    write_valid(document, &TOML).unwrap()
 }
 
 /// The value `x` reads back as from the YAML and the TOML that `document`
@@ -1574,7 +1551,7 @@ fn a_null_cannot_be_written_into_toml() {
 fn every_fixture_frontmatter_reads_back_to_the_same_mapping_in_yaml_and_in_toml() {
     let mut with_frontmatter_count = 0_usize;
     for (name, source) in FIXTURES {
-        if parse(source).frontmatter.is_none() {
+        if valid(parse(source)).frontmatter.is_none() {
             continue;
         }
         with_frontmatter_count += 1;
@@ -1646,12 +1623,13 @@ fn an_alias_is_written_as_a_copy_of_its_anchors_value_and_no_anchor_is_written()
 
 #[test]
 fn a_write_leaves_every_dropped_entry_out() {
-    let document = parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n");
+    let document =
+        parse("---\ntitle: Notes\ntags: [a, b\ndate: 2026-10-17\n---\n# Body\n").document;
     assert_eq!(
         write(&document, &WriteOptions::default()).unwrap(),
         "---\ntitle: Notes\ndate: !!timestamp 2026-10-17\n---\n# Body\n"
     );
-    let toml = parse("+++\ntitle = Notes\ndate = 2026-10-17\n+++\n# Body\n");
+    let toml = parse("+++\ntitle = Notes\ndate = 2026-10-17\n+++\n# Body\n").document;
     assert_eq!(
         write(&toml, &TOML).unwrap(),
         "+++\ndate = 2026-10-17\n+++\n# Body\n"
@@ -1733,9 +1711,9 @@ fn text_reads_back_as_the_same_text_whether_it_is_quoted_or_not() {
     let list = Value::Sequence(texts.iter().map(|value| text(value)).collect());
     texts_by_key.insert("list".to_owned(), list);
     let built = with_frontmatter(texts_by_key);
-    let expected = built.frontmatter.clone().unwrap().unwrap().mapping;
+    let expected = built.frontmatter.clone().unwrap();
     for frontmatter in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
-        let written_text = write(&built, &WriteOptions { frontmatter }).unwrap();
+        let written_text = write_valid(&built, &WriteOptions { frontmatter }).unwrap();
         assert_eq!(mapping(&written_text), expected, "{written_text}");
     }
 }

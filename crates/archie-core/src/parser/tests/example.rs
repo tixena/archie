@@ -7,12 +7,13 @@ use core::ops::Range;
 use chrono::NaiveDate;
 use indexmap::IndexMap;
 
-use crate::parser::ast::{
-    Block, Continues, Document, Frontmatter, FrontmatterFormat, Heading, Inline, Item, Kind, Line,
-    Link, LinkForm, List, MarkdownBlock, Paragraph, Section, Text,
+use crate::parser::ast::{self, Continues, FrontmatterFormat, Kind, LinkForm, RawDocument};
+use crate::parser::extension::Markdown;
+use crate::parser::located::{
+    Block, Document, Frontmatter, Heading, Inline, Item, Line, Link, List, Mapping, MarkdownBlock,
+    Pair, Paragraph, Scalar, ScalarValue, Section, Sequence, Text, Value,
 };
-use crate::parser::located::{Mapping, Pair, Scalar, ScalarValue, Sequence, Value};
-use crate::parser::{parse, toml};
+use crate::parser::{ParseOptions, Parsed, parse, parse_located, toml};
 
 const SOURCE: &str = r#"+++
 type = "task"
@@ -247,7 +248,22 @@ fn the_example_parses_into_the_tree_written_by_hand() {
         span: span(0, SOURCE),
     };
 
-    assert_eq!(parse(SOURCE), document);
+    assert_eq!(
+        parse_located::<Markdown>(SOURCE, &ParseOptions::default()),
+        document
+    );
+    let model = ast::Document {
+        body: document.body.into_model(),
+        frontmatter: Some(mapping().into_model()),
+        kind: Kind(None),
+    };
+    assert_eq!(
+        parse(SOURCE),
+        Parsed {
+            document: RawDocument::Valid(model),
+            dropped: Vec::new(),
+        }
+    );
     let content = span(4, &format!("{TOML_PAIRS}\n"));
     assert_eq!(toml::read(SOURCE, content).unwrap().0, mapping());
 }

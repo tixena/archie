@@ -7,7 +7,7 @@ use core::mem;
 use crate::parser::ast::{Code, Continues, Emphasis, Image, Inline, Link, LinkForm, Strong};
 use crate::parser::definition;
 use crate::parser::entity;
-use crate::parser::extension::{Construct, Extension};
+use crate::parser::extension::{Extension, Written};
 use crate::parser::html;
 use crate::parser::inline::{is_punctuation, is_whitespace};
 use crate::parser::lexer;
@@ -366,14 +366,14 @@ impl Segments {
         T: Extension,
     {
         let (kind, plain) = match node {
-            Inline::Code(code) => (&code.kind, Construct::Code(code)),
-            Inline::Emphasis(emphasis) => (&emphasis.kind, Construct::Emphasis(emphasis)),
-            Inline::Html(html) => (&html.kind, Construct::Html(html)),
-            Inline::Image(image) => (&image.kind, Construct::Image(image)),
-            Inline::LineBreak(line_break) => (&line_break.kind, Construct::LineBreak(line_break)),
-            Inline::Link(anchor) => (&anchor.kind, Construct::Link(anchor)),
-            Inline::Strong(strong) => (&strong.kind, Construct::Strong(strong)),
-            Inline::Text(text) => (&text.kind, Construct::Text(text)),
+            Inline::Code(code) => (&code.kind, Written::Code(code)),
+            Inline::Emphasis(emphasis) => (&emphasis.kind, Written::Emphasis(emphasis)),
+            Inline::Html(html) => (&html.kind, Written::Html(html)),
+            Inline::Image(image) => (&image.kind, Written::Image(image)),
+            Inline::LineBreak(line_break) => (&line_break.kind, Written::LineBreak(line_break)),
+            Inline::Link(anchor) => (&anchor.kind, Written::Link(anchor)),
+            Inline::Strong(strong) => (&strong.kind, Written::Strong(strong)),
+            Inline::Text(text) => (&text.kind, Written::Text(text)),
         };
         match kind.0.as_deref() {
             Some(claimed) => self.markup(&writer.claimed(claimed, plain)),

@@ -1,8 +1,7 @@
 use chrono::{Datelike as _, Timelike as _};
 
-use super::{broken, check};
+use super::{broken, check, valid};
 use crate::parser::ast::Value;
-use crate::parser::parse;
 
 #[test]
 fn every_scalar_type_is_read_from_how_the_value_is_written() {
@@ -1134,7 +1133,7 @@ pattern = '''
 
 /// The value under `key` in the frontmatter of `source`.
 fn scalar(source: &str, key: &str) -> Option<Value> {
-    parse(source).frontmatter?.ok()?.mapping.swap_remove(key)
+    valid(source).frontmatter?.swap_remove(key)
 }
 
 #[test]

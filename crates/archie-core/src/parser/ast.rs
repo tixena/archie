@@ -1,17 +1,13 @@
 //! The document tree a markdown file parses into.
 //!
-//! Every node carries `span`, the byte range it covers in the source file,
-//! and `kind`, the type an extension gave it. The frontmatter's values hold
-//! no span, whichever syntax they were written in.
-
-use core::ops::Range;
+//! Every node carries `kind`, the type an extension gave it, and none holds
+//! a span: a parse reports positions beside the document.
 
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use tixschema::model_schema;
 
-use crate::parser::error::{ParseError, parse_error_schema};
 use crate::parser::extension::{Extension, Markdown, markdown_schema};
 
 /// The type an extension gave a node, or `None`. Boxed, because a markdown
@@ -35,7 +31,42 @@ where
     }
 }
 
-/// A whole markdown file.
+/// What `parse` builds: a document whose frontmatter reads, or one whose
+/// frontmatter no entry of reads.
+#[model_schema(default_types(E = Markdown))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
+#[non_exhaustive]
+pub enum RawDocument<E = Markdown>
+where
+    E: Extension,
+{
+    Invalid(InvalidDocument),
+    Valid(Document<E>),
+}
+
+/// A document whose frontmatter no entry of reads: its body, claimed by
+/// archie's markdown extension alone, and the frontmatter as written.
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct InvalidDocument {
+    pub body: MarkdownBlock<Markdown>,
+    pub frontmatter: InvalidFrontmatter,
+}
+
+/// A frontmatter no entry of reads: the reader's message, its syntax, and its
+/// text as written, so that a write gives it back.
+#[model_schema()]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct InvalidFrontmatter {
+    pub error: String,
+    pub format: FrontmatterFormat,
+    pub text: String,
+}
+
+/// A markdown file whose frontmatter, if it has one, reads.
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -46,37 +77,9 @@ where
 {
     pub body: MarkdownBlock<E>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frontmatter: Option<Result<Frontmatter, BrokenFrontmatter>>,
+    pub frontmatter: Option<Mapping>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
-}
-
-/// A frontmatter that archie could read no entry of: its text as written,
-/// kept so that a write gives it back, and the reader's error.
-#[model_schema()]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct BrokenFrontmatter {
-    pub error: ParseError,
-    pub format: FrontmatterFormat,
-    pub span: Range<usize>,
-    pub text: String,
-}
-
-/// The metadata block at the top of a file: TOML between `+++` lines or
-/// YAML between `---` lines.
-#[model_schema()]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct Frontmatter {
-    /// Each entry and key that could not be read and was left out, in file
-    /// order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub dropped: Vec<ParseError>,
-    pub format: FrontmatterFormat,
-    pub mapping: Mapping,
-    pub span: Range<usize>,
 }
 
 /// The syntax a frontmatter block is written in.
@@ -156,7 +159,6 @@ where
     #[serde(skip)]
     pub kind: Kind<E>,
     pub sections: Vec<Section<E>>,
-    pub span: Range<usize>,
 }
 
 /// A node that stands on its own lines.
@@ -177,25 +179,6 @@ where
     ThematicBreak(ThematicBreak<E>),
 }
 
-impl<E> Block<E>
-where
-    E: Extension,
-{
-    /// The byte range the block covers.
-    #[must_use]
-    pub const fn span(&self) -> &Range<usize> {
-        match self {
-            Self::BlockQuote(block_quote) => &block_quote.span,
-            Self::CodeBlock(code_block) => &code_block.span,
-            Self::Html(html) => &html.span,
-            Self::List(list) => &list.span,
-            Self::Paragraph(paragraph) => &paragraph.span,
-            Self::Table(table) => &table.span,
-            Self::ThematicBreak(thematic_break) => &thematic_break.span,
-        }
-    }
-}
-
 /// Quoted text, without its `>` marks. Nothing inside it is read.
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -207,7 +190,6 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub value: String,
 }
 
@@ -224,7 +206,6 @@ where
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub value: String,
 }
 
@@ -239,7 +220,6 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// A heading, the blocks under it, then its subsections. Its level is its
@@ -260,12 +240,10 @@ where
     pub heading: Option<Heading<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub subsections: Vec<Self>,
 }
 
-/// A heading line, such as `# Ship parser`. An empty heading has no children
-/// and an empty span at the start of its section.
+/// A heading line, such as `# Ship parser`. An empty heading has no children.
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -277,7 +255,6 @@ where
     pub children: Vec<Inline<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// A set of lines, ended by a blank line.
@@ -292,7 +269,6 @@ where
     #[serde(skip)]
     pub kind: Kind<E>,
     pub lines: Vec<Line<E>>,
-    pub span: Range<usize>,
 }
 
 /// One line of a paragraph and the inline nodes written on it.
@@ -307,7 +283,6 @@ where
     pub children: Vec<Inline<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// A bullet or ordered list.
@@ -328,7 +303,6 @@ where
     #[serde(skip)]
     pub kind: Kind<E>,
     pub loose: bool,
-    pub span: Range<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<u64>,
 }
@@ -345,16 +319,14 @@ where
     pub body: MarkdownBlock<E>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// Lines between two fences of backticks or of tildes, or indented four
 /// columns past their parent's.
 ///
-/// `content` is the range of those lines in the source, and `value` the lines
-/// as the block holds them. The info string, the text after the opening
-/// fence, is split into `language`, its first word, `None` when there is no
-/// info string, and `args`, the rest.
+/// `value` holds the lines as the block holds them. The info string, the
+/// text after the opening fence, is split into `language`, its first word,
+/// `None` when there is no info string, and `args`, the rest.
 #[model_schema(default_types(E = Markdown))]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -364,12 +336,10 @@ where
     E: Extension,
 {
     pub args: Args,
-    pub content: Range<usize>,
     #[serde(skip)]
     pub kind: Kind<E>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
-    pub span: Range<usize>,
     pub value: String,
 }
 
@@ -401,7 +371,6 @@ where
     #[serde(skip)]
     pub kind: Kind<E>,
     pub rows: Vec<TableRow<E>>,
-    pub span: Range<usize>,
 }
 
 /// One row of a table.
@@ -416,7 +385,6 @@ where
     pub cells: Vec<TableCell<E>>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// One cell of a table row.
@@ -431,7 +399,6 @@ where
     pub body: MarkdownBlock<E>,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// How a column's cells are aligned.
@@ -477,26 +444,6 @@ where
     Text(Text<E>),
 }
 
-impl<E> Inline<E>
-where
-    E: Extension,
-{
-    /// The byte range the node covers.
-    #[must_use]
-    pub const fn span(&self) -> &Range<usize> {
-        match self {
-            Self::Code(code) => &code.span,
-            Self::Emphasis(emphasis) => &emphasis.span,
-            Self::Html(html) => &html.span,
-            Self::Image(image) => &image.span,
-            Self::LineBreak(line_break) => &line_break.span,
-            Self::Link(link) => &link.span,
-            Self::Strong(strong) => &strong.span,
-            Self::Text(text) => &text.span,
-        }
-    }
-}
-
 /// Whether an inline node goes on from the line before or into the line
 /// after. A node written across lines of a paragraph is cut into one piece
 /// per line.
@@ -526,7 +473,6 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub value: String,
 }
 
@@ -543,7 +489,6 @@ where
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// Text between `**` or `__`, such as `**b**`.
@@ -559,7 +504,6 @@ where
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// A hard line break: the two or more spaces, or the backslash, that end a
@@ -574,7 +518,6 @@ where
 {
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
 }
 
 /// A link: `[text](target "title")`, a reference link, an autolink,
@@ -596,7 +539,6 @@ where
     pub form: LinkForm,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -630,7 +572,6 @@ where
     pub form: LinkForm,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub target: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -648,6 +589,5 @@ where
     pub continues: Continues,
     #[serde(skip)]
     pub kind: Kind<E>,
-    pub span: Range<usize>,
     pub value: String,
 }

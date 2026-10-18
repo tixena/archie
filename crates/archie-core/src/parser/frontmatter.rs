@@ -6,11 +6,11 @@ use core::{iter, mem};
 use indexmap::IndexMap;
 use indexmap::map::Entry;
 
-use crate::parser::ast::{BrokenFrontmatter, Frontmatter, FrontmatterFormat};
+use crate::parser::ast::FrontmatterFormat;
 use crate::parser::cursor::{Cursor, Dropped, Undo};
 use crate::parser::error::{Failure, ParseError};
 use crate::parser::line::{Line, line_at};
-use crate::parser::located::{Mapping, Pair, Sequence, Value};
+use crate::parser::located::{BrokenFrontmatter, Frontmatter, Mapping, Pair, Sequence, Value};
 use crate::parser::{toml, yaml};
 
 /// How deep the values the TOML and YAML readers build nest, counted

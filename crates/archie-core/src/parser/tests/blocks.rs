@@ -1,7 +1,7 @@
 use core::iter;
 
-use super::{Rows, check, on_two_megabytes, outline};
-use crate::parser::ast::{Args, Block, Document, Inline, Mapping, MarkdownBlock, Section};
+use super::{Rows, check, on_two_megabytes, outline, valid, valid_body};
+use crate::parser::ast::{Args, Block, Inline, Mapping, MarkdownBlock, RawDocument, Section};
 use crate::parser::block;
 use crate::parser::extension::Markdown;
 use crate::parser::frontmatter::VALUE_CAP;
@@ -185,7 +185,7 @@ fn a_heading_line_with_no_text_is_a_heading_with_no_children() {
           Text "foo"
 "#,
     );
-    let written = write(&parse(source), &WriteOptions::default()).unwrap();
+    let written = write(&parse(source).document, &WriteOptions::default()).unwrap();
     assert_eq!(written, source);
 }
 
@@ -1518,8 +1518,8 @@ fn args_nested_past_the_value_cap_are_text_and_written_back_as_they_were() {
         );
         for args in [lists, tables] {
             let source = format!("```md {args}\nx\n```\n");
-            let document = parse(&source);
-            let read = match &document.body.sections[0].blocks[0] {
+            let document = parse(&source).document;
+            let read = match &valid_body(&document).unwrap().sections[0].blocks[0] {
                 Block::CodeBlock(code) => Some(&code.args),
                 Block::BlockQuote(_)
                 | Block::Html(_)
@@ -1538,7 +1538,7 @@ fn args_nested_past_the_value_cap_are_text_and_written_back_as_they_were() {
 fn a_fence_with_no_info_string_has_no_language_and_empty_toml_args() {
     let source = "```\nx\n```\n";
     check(source, &code_block_outline(None, "x"));
-    let document = parse(source);
+    let document = valid(source);
     let read = match &document.body.sections[0].blocks[0] {
         Block::CodeBlock(code) => Some((code.language.as_deref(), &code.args)),
         Block::BlockQuote(_)
@@ -1566,7 +1566,7 @@ fn toml_args_in_a_grid_cell_read_as_after_a_fence_at_the_root() {
         .collect();
     let grid = format!("{}\n", lines.join("\n"));
     for source in [format!("{fence}\nx\n```\n"), grid] {
-        let document = parse(&source);
+        let document = valid(&source);
         let mut rows = Rows::default();
         rows.mapping(0, toml_args(&document.body).unwrap());
         assert_eq!(
@@ -2320,8 +2320,8 @@ fn list_depth(body: &MarkdownBlock) -> (usize, &MarkdownBlock) {
 
 /// Checks that `document` holds lists nested `BLOCK_CAP` deep, the
 /// innermost item holding one line of the text `rest`.
-fn assert_block_capped(document: &Document, rest: &str) {
-    let (depth, innermost) = list_depth(&document.body);
+fn assert_block_capped(document: &RawDocument, rest: &str) {
+    let (depth, innermost) = list_depth(valid_body(document).unwrap());
     assert_eq!(depth, BLOCK_CAP);
     let lines = match innermost.sections.as_slice() {
         [section] => match section.blocks.as_slice() {
@@ -2337,12 +2337,12 @@ fn assert_block_capped(document: &Document, rest: &str) {
 #[test]
 fn lists_nest_the_block_cap_deep_and_the_markers_past_it_stay_text() {
     on_two_megabytes(|| {
-        let document = parse(&format!("{}a\n", "- ".repeat(10_000)));
+        let document = parse(&format!("{}a\n", "- ".repeat(10_000))).document;
         let rest = format!("{}a", "- ".repeat(10_000 - BLOCK_CAP));
         assert_block_capped(&document, &rest);
         let written = write(&document, &WriteOptions::default()).unwrap();
         assert_eq!(written, format!("{}\\{rest}\n", "- ".repeat(BLOCK_CAP)));
-        assert_block_capped(&parse(&written), &rest);
+        assert_block_capped(&parse(&written).document, &rest);
         let copy = document.clone();
         assert_eq!(copy, document);
         let printed = format!("{document:?}");
@@ -2356,11 +2356,11 @@ fn lists_nest_the_block_cap_deep_and_the_markers_past_it_stay_text() {
 fn lists_at_the_block_cap_read_back_from_their_written_text_to_the_same_tree() {
     on_two_megabytes(|| {
         let source = format!("{}a\n", "- ".repeat(BLOCK_CAP));
-        let document = parse(&source);
-        assert_eq!(list_depth(&document.body).0, BLOCK_CAP);
+        let document = parse(&source).document;
+        assert_eq!(list_depth(valid_body(&document).unwrap()).0, BLOCK_CAP);
         let written = write(&document, &WriteOptions::default()).unwrap();
         assert_eq!(written, source);
-        assert_eq!(parse(&written), document);
+        assert_eq!(parse(&written).document, document);
     });
 }
 
@@ -2372,7 +2372,7 @@ fn an_item_past_the_block_cap_on_its_own_line_continues_the_innermost_paragraph(
             source.push_str(&"  ".repeat(depth));
             source.push_str("- a\n");
         }
-        let document = parse(&source);
+        let document = valid(&source);
         let mut blocks = document.body.sections[0].blocks.as_slice();
         let mut depth = 0_usize;
         while let Some(Block::List(list)) = blocks.last()
@@ -2405,7 +2405,7 @@ fn only_container(body: &MarkdownBlock) -> Option<&MarkdownBlock> {
         return None;
     };
     match section.blocks.as_slice() {
-        [Block::CodeBlock(code)] => code.kind.0.as_deref(),
+        [Block::CodeBlock(code)] => code.kind.0.as_deref().and_then(valid_body),
         [Block::List(list)] => match list.items.as_slice() {
             [item] => Some(&item.body),
             _ => None,
@@ -2446,7 +2446,8 @@ fn container_depth(body: &MarkdownBlock) -> usize {
             for each in &section.blocks {
                 match each {
                     Block::CodeBlock(code) => {
-                        bodies.extend(code.kind.0.as_deref().map(|inner| (inner, depth + 1)));
+                        let inner = code.kind.0.as_deref().and_then(valid_body);
+                        bodies.extend(inner.map(|claimed| (claimed, depth + 1)));
                     }
                     Block::List(list) => {
                         bodies.extend(list.items.iter().map(|item| (&item.body, depth + 1)));
@@ -2553,8 +2554,8 @@ fn mixed_containers(levels: usize) -> String {
 fn markdown_blocks_nest_the_block_cap_deep_and_the_block_past_it_stays_a_code_block() {
     on_two_megabytes(|| {
         let source = nested_markdown_blocks(1000);
-        let document = parse(&source);
-        let (depth, inner) = innermost(&document.body);
+        let document = parse(&source).document;
+        let (depth, inner) = innermost(valid_body(&document).unwrap());
         assert_eq!(depth, BLOCK_CAP);
         let rest = nested_markdown_blocks(1000 - BLOCK_CAP - 1);
         let plain = match inner.sections.as_slice() {
@@ -2582,8 +2583,8 @@ fn markdown_blocks_nest_the_block_cap_deep_and_the_block_past_it_stays_a_code_bl
 fn grid_tables_nest_the_block_cap_deep_and_the_tables_past_it_stay_text() {
     on_two_megabytes(|| {
         let source = nested_grid_tables(1000);
-        let document = parse(&source);
-        let (depth, inner) = innermost(&document.body);
+        let document = parse(&source).document;
+        let (depth, inner) = innermost(valid_body(&document).unwrap());
         assert_eq!(depth, BLOCK_CAP);
         let lines = match inner.sections.as_slice() {
             [section] => match section.blocks.as_slice() {
@@ -2615,7 +2616,7 @@ fn grid_tables_nest_the_block_cap_deep_and_the_tables_past_it_stay_text() {
 #[test]
 fn lists_markdown_blocks_and_grid_tables_in_turn_nest_the_block_cap_deep_together() {
     on_two_megabytes(|| {
-        let document = parse(&mixed_containers(1000));
+        let document = valid(&mixed_containers(1000));
         assert_eq!(innermost(&document.body).0, BLOCK_CAP);
         assert_eq!(container_depth(&document.body), BLOCK_CAP);
     });
@@ -2677,8 +2678,8 @@ fn containers_that_hold_headings_of_every_level_nest_the_block_cap_deep() {
             &[Container::List, Container::Markdown, Container::Grid],
         ];
         for cycle in shapes {
-            let document = parse(&headed_containers(cycle));
-            assert_eq!(container_depth(&document.body), BLOCK_CAP);
+            let document = parse(&headed_containers(cycle)).document;
+            assert_eq!(container_depth(valid_body(&document).unwrap()), BLOCK_CAP);
             let written = write(&document, &WriteOptions::default()).unwrap();
             assert_eq!(written.matches("###### h").count(), BLOCK_CAP);
             let copy = document.clone();
@@ -2687,7 +2688,7 @@ fn containers_that_hold_headings_of_every_level_nest_the_block_cap_deep() {
             assert_eq!(printed.matches("Section {").count(), 1 + 6 * BLOCK_CAP);
             drop(copy);
             let json = to_json(&document).unwrap();
-            let back: Document = from_json(&json).unwrap();
+            let back: RawDocument = from_json(&json).unwrap();
             assert_eq!(to_json(&back).unwrap(), json);
             drop(back);
             drop(document);

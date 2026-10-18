@@ -1,5 +1,7 @@
-use super::{broken, on_two_megabytes};
-use crate::parser::ast::{Document, FrontmatterFormat, Mapping, Value};
+use core::slice;
+
+use super::{broken, on_two_megabytes, valid};
+use crate::parser::ast::{FrontmatterFormat, Mapping, RawDocument, Value};
 use crate::parser::error::ParseError;
 use crate::parser::extension::Plain;
 use crate::parser::frontmatter::VALUE_CAP;
@@ -7,16 +9,22 @@ use crate::parser::{ParseOptions, from_json, parse, parse_with, to_json};
 use crate::writer::{WriteOptions, write};
 
 /// The error a strict parse of `source` fails with. A parse that is not
-/// strict holds it in a broken frontmatter when no entry of the frontmatter
-/// reads, and else drops an entry first with its message.
+/// strict lists it alone and holds its message in an invalid frontmatter when
+/// no entry of the frontmatter reads, and else drops an entry first with its
+/// message.
 fn strict_error(source: &str) -> ParseError {
     let error = parse_with::<Plain>(source, &ParseOptions::strict()).unwrap_err();
-    match parse(source).frontmatter.unwrap() {
-        Ok(frontmatter) => {
-            let first = frontmatter.dropped.first().map(|drop| &drop.message);
+    let parsed = parse(source);
+    match parsed.document {
+        RawDocument::Invalid(invalid) => {
+            assert_eq!(invalid.frontmatter.error, error.message, "{source:?}");
+            assert_eq!(parsed.dropped, slice::from_ref(&error), "{source:?}");
+            assert_eq!(broken(source).error, error, "{source:?}");
+        }
+        RawDocument::Valid(_) => {
+            let first = parsed.dropped.first().map(|drop| &drop.message);
             assert_eq!(first, Some(&error.message), "{source:?}");
         }
-        Err(broken) => assert_eq!(broken.error, error, "{source:?}"),
     }
     error
 }
@@ -624,11 +632,10 @@ fn value_depth(mapping: &Mapping) -> usize {
 
 /// The depth of the values of the frontmatter of `document`, or `None` when
 /// no entry of it reads.
-fn frontmatter_depth(document: &Document) -> Option<usize> {
-    match &document.frontmatter {
-        Some(Ok(frontmatter)) => Some(value_depth(&frontmatter.mapping)),
-        Some(Err(_)) => None,
-        None => Some(0),
+fn frontmatter_depth(document: &RawDocument) -> Option<usize> {
+    match document {
+        RawDocument::Invalid(_) => None,
+        RawDocument::Valid(valid) => Some(valid.frontmatter.as_ref().map_or(0, value_depth)),
     }
 }
 
@@ -636,23 +643,23 @@ fn frontmatter_depth(document: &Document) -> Option<usize> {
 fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
     on_two_megabytes(|| {
         for source in nested_frontmatter(VALUE_CAP) {
-            let document = parse(&source);
+            let document = parse(&source).document;
             assert_eq!(frontmatter_depth(&document), Some(VALUE_CAP));
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
                 let options = WriteOptions {
                     frontmatter: format,
                 };
                 let written = write(&document, &options).unwrap();
-                let depth = frontmatter_depth(&parse(&written));
+                let depth = frontmatter_depth(&parse(&written).document);
                 assert_eq!(depth, Some(VALUE_CAP));
             }
             let copy = document.clone();
             assert_eq!(copy, document);
             let printed = format!("{document:?}");
-            assert!(printed.starts_with("Document {"));
+            assert!(printed.starts_with("Valid(Document {"));
             drop(copy);
             let json = to_json(&document).unwrap();
-            let back: Document = from_json(&json).unwrap();
+            let back: RawDocument = from_json(&json).unwrap();
             assert_eq!(to_json(&back).unwrap(), json);
             drop(back);
             drop(document);
@@ -664,14 +671,14 @@ fn frontmatter_nested_to_the_value_cap_goes_through_every_operation() {
 /// when no entry of it reads, and writes it in YAML and in TOML, each written
 /// text reading back to that depth.
 fn reads_and_writes_at_depth(source: &str, depth: Option<usize>) {
-    let document = parse(source);
+    let document = parse(source).document;
     assert_eq!(frontmatter_depth(&document), depth);
     for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
         let options = WriteOptions {
             frontmatter: format,
         };
         let written = write(&document, &options).unwrap();
-        assert_eq!(frontmatter_depth(&parse(&written)), depth);
+        assert_eq!(frontmatter_depth(&parse(&written).document), depth);
     }
 }
 
@@ -682,9 +689,8 @@ fn a_copy_counts_toward_the_value_cap_from_where_its_alias_stands() {
         let lists = VALUE_CAP - 1;
         let deep = format!("{}1{}", "[".repeat(lists), "]".repeat(lists));
         let source = format!("---\na: &d {deep}\nb: [*d]\nc: [[*d]]\ne: 1\n---\n");
-        let document = parse(&source);
-        let read = document.frontmatter.as_ref().unwrap().as_ref().unwrap();
-        assert_eq!(read.mapping.keys().collect::<Vec<_>>(), ["a", "b", "e"]);
+        let read = valid(&source).frontmatter.unwrap();
+        assert_eq!(read.keys().collect::<Vec<_>>(), ["a", "b", "e"]);
         reads_and_writes_at_depth(&source, Some(VALUE_CAP));
     });
 }
@@ -750,23 +756,23 @@ fn tags_and_explicit_keys_nested_to_the_value_cap_go_through_every_operation() {
     on_two_megabytes(|| {
         let levels = VALUE_CAP / 2;
         for source in tagged_frontmatter(levels) {
-            let document = parse(&source);
+            let document = parse(&source).document;
             assert_eq!(frontmatter_depth(&document), Some(levels));
             for format in [FrontmatterFormat::Toml, FrontmatterFormat::Yaml] {
                 let options = WriteOptions {
                     frontmatter: format,
                 };
                 let written = write(&document, &options).unwrap();
-                let depth = frontmatter_depth(&parse(&written));
+                let depth = frontmatter_depth(&parse(&written).document);
                 assert_eq!(depth, Some(levels));
             }
             let copy = document.clone();
             assert_eq!(copy, document);
             let printed = format!("{document:?}");
-            assert!(printed.starts_with("Document {"));
+            assert!(printed.starts_with("Valid(Document {"));
             drop(copy);
             let json = to_json(&document).unwrap();
-            let back: Document = from_json(&json).unwrap();
+            let back: RawDocument = from_json(&json).unwrap();
             assert_eq!(to_json(&back).unwrap(), json);
             drop(back);
             drop(document);

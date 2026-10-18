@@ -6,12 +6,12 @@ use std::collections::HashMap;
 
 use unicode_properties::{GeneralCategory, GeneralCategoryGroup, UnicodeGeneralCategory as _};
 
-use crate::parser::ast::{
-    Code, Continues, Emphasis, Html, Image, Inline, Kind, Line, LineBreak, Link, LinkForm, Strong,
-    Text,
-};
+use crate::parser::ast::{Continues, Kind, LinkForm};
 use crate::parser::definition::{self, Definitions, Target, fold_label};
 use crate::parser::extension::Extension;
+use crate::parser::located::{
+    Code, Emphasis, Html, Image, Inline, Line, LineBreak, Link, Strong, Text,
+};
 use crate::parser::{entity, html};
 
 /// How deep inline nodes nest: at 1270, the tree's derived Clone overflows a 2 MB debug stack.

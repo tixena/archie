@@ -81,27 +81,30 @@ frontmatter := TOML_OPEN toml TOML_CLOSE
 A frontmatter entry that archie cannot read is refused: it is dropped, and archie reads
 the rest of the file. The innermost entry that holds the error is dropped, at any depth;
 where a refused entry ends is stated under [TOML frontmatter](#toml-frontmatter) and
-[YAML frontmatter](#yaml-frontmatter). `Frontmatter::dropped` lists every dropped entry
-and key in file order, each a `ParseError` whose `message` is the error and whose `span`
-covers the dropped text, up to its last line that holds more than white space or a
-comment. The keys dropped by the value cap, by a tag archie does not read, for being a
-list or a mapping, or by an alias that cannot be copied are listed too. A write leaves
-the dropped text out.
+[YAML frontmatter](#yaml-frontmatter). `Parsed.dropped`, beside the document a parse
+gives, lists every dropped entry and key in file order, each a `ParseError` whose
+`message` is the error and whose `span` covers the dropped text, up to its last line
+that holds more than white space or a comment. The keys dropped by the value cap, by a
+tag archie does not read, for being a list or a mapping, or by an alias that cannot be
+copied are listed too. A write leaves the dropped text out.
 
-A frontmatter that keeps no entry, and refuses or drops at least one, is broken, and
-archie reads the body after it. `Document::frontmatter` holds it as
-`Err(BrokenFrontmatter)`: its `format`, its `span`, its `text`, which is its content
-between the delimiters without the line ending of its last line, and the `error` of
-the first entry it refuses or drops, at any depth, pointing at the place.
-`{a: 1, b: [}`, `a: !point 1` then `b: !point 2`, and `a = """never closed` are
-broken. Any other frontmatter is `Ok(Frontmatter)`: an empty one, and one that holds
-one list or one scalar that reads, keep no entry, drop none, and hold an empty
-mapping. A strict parse, `ParseOptions::strict()`, fails with the error of the first
-entry the frontmatter drops, or of a broken frontmatter, pointing at the place, as for
-an extension's error (see [Extensions](#extensions)). The markdown never fails: what
-no rule recognizes is text.
+A frontmatter that keeps no entry, and refuses or drops at least one, is invalid, and
+archie reads the body after it. The parse gives `RawDocument::Invalid`, an
+`InvalidDocument` whose body archie's markdown extension alone claims, and whose
+`InvalidFrontmatter` holds the frontmatter's `format`, its `text`, which is its content
+between the delimiters without the line ending of its last line, and the `error`
+message of the first entry it refuses or drops, at any depth. `Parsed.dropped` lists
+that error alone, pointing at the place. `{a: 1, b: [}`, `a: !point 1` then
+`b: !point 2`, and `a = """never closed` are invalid. Any other file is
+`RawDocument::Valid`: a `Document`, whose `frontmatter` is `None` when the file has
+none. An empty frontmatter, and one that holds one list or one scalar that reads, keep
+no entry, drop none, and hold an empty mapping. A strict parse,
+`ParseOptions::strict()`, fails with the error of the first entry the frontmatter
+drops, or of an invalid frontmatter, pointing at the place, as for an extension's
+error (see [Extensions](#extensions)). The markdown never fails: what no rule
+recognizes is text.
 
-A `Frontmatter`'s `mapping` is a `Mapping`, each key and its `Value` in the order the
+A `Document`'s `frontmatter` is a `Mapping`, each key and its `Value` in the order the
 keys were first written. A `Value` is a `Boolean`, a `Date`, a `DateTime` with no
 offset, a `Float`, an `Integer`, a `Mapping`, a `NonFinite`, a `Null`, an
 `OffsetDateTime`, a `Sequence` of values, a `String` or a `Time`, and holds no span.
@@ -110,8 +113,8 @@ offset, a `Float`, an `Integer`, a `Mapping`, a `NonFinite`, a `Null`, an
 
 A markdown block, `MarkdownBlock` in the tree, is any stretch of markdown read by the
 same rules: the document's body after its frontmatter, the content of every list item
-and of every table cell, and the content of a code block whose language is `markdown`
-or `md`.
+and of every table cell, and the body of the document a code block whose language is
+`markdown` or `md` holds.
 
 ### Tokens
 
@@ -506,7 +509,7 @@ inline_table  := "{" ( pair ( "," pair )* )? "}"
   the next header, even after an open bracket: each pair under it ends as a refused
   pair's value does. Strings and comments are passed over whole, so a `"""` or `'''`
   string left open runs to the end of the frontmatter, dropping the rest, and a
-  frontmatter that keeps no statement before it is broken. `title = Notes` then
+  frontmatter that keeps no statement before it is invalid. `title = Notes` then
   `date = 2026-10-17` is `{date: 2026-10-17}`, and so is `tags = ["a", "b"` then
   `date = 2026-10-17`. `a = [`, `[1],`, `@` and `]` on four lines, then `b = 2`, is
   `{b: 2}`, with one drop. `[a]`, `x = 1`, `[owner` then `y = 2` is `{a: {x: 1}}`, and
@@ -581,7 +584,7 @@ PROPERTIES    := TAG ANCHOR? | ANCHOR TAG?
   after it. A frontmatter that holds one list or one scalar, with nothing but comments
   after it, holds no key, and is an empty mapping: `abc`, `[a, b]`, and `- a` then
   `- b` are all `{}`. One whose list or scalar does not read, an entry inside it
-  included, is broken with `the frontmatter must be a mapping`, as `[unclosed`,
+  included, is invalid with `the frontmatter must be a mapping`, as `[unclosed`,
   `!!int abc` and `- !!int abc` are, and so is one whose first line starts a flow list
   with more after it, as `[a, b]` then `c: 1` is. A first line that holds a scalar or
   starts a block list, with a key after it, is an entry that does not read:
@@ -923,9 +926,13 @@ A `PLAIN` value's type comes from how it is written:
 
 ## What each node's span covers
 
-A frontmatter's values hold no span. The rows `Mapping`, `Pair`, `Sequence` and
-`Scalar` give the ranges the TOML and YAML readers keep for them while they read,
-which the error of a dropped entry or of a broken frontmatter points into.
+Spans belong to the parse: the parser builds the located tree of
+[`src/parser/located.rs`](src/parser/located.rs), each node with its span, which the
+claim pass reads, and `Parsed.dropped` gives each dropped entry with its span. The
+document a parse gives, a `RawDocument`, holds none. The rows `Mapping`, `Pair`,
+`Sequence` and `Scalar` give the ranges the TOML and YAML readers keep for a
+frontmatter's values while they read, which the error of a dropped entry or of an
+invalid frontmatter points into.
 
 | Node | From | To |
 |---|---|---|
@@ -950,7 +957,7 @@ which the error of a dropped entry or of a broken frontmatter points into.
 | `Scalar`, `Mapping`, `Sequence` or `Pair` of a copy an alias made | The alias | |
 | `MarkdownBlock` of the document | The line after the frontmatter, or the first byte of a file with none | The last byte of the file |
 | `MarkdownBlock` of an item or a table cell | The start of its first section | The end of its last section; empty at the end of the item's marker, or at the start of the cell, when it has no section |
-| `MarkdownBlock` that a `markdown` code block holds | The first byte of the block's lines between its fences | The end of the last of them |
+| `MarkdownBlock` of the document a `markdown` code block holds | The first byte of the block's lines between its fences, or of the line after their frontmatter | The end of the last of them |
 | `Section` | Its heading, or its first block or subsection when it has no heading | The end of its last block or subsection |
 | `Heading` written with `#` | The first `#` | The end of the line's text |
 | `Heading` written underlined | Its first line's text | The end of its underline |
@@ -997,7 +1004,7 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
     where
         T: Extension;
 
-    fn write<T>(node: &Self::Node<T>, plain: Construct<'_, T>, writer: &mut Writer)
+    fn write<T>(node: &Self::Node<T>, plain: Written<'_, T>, writer: &mut Writer)
     where
         T: Extension;
 }
@@ -1008,15 +1015,18 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   because a markdown block can hold a markdown block. `T`, the full set of extensions
   the file is parsed with, types the archie nodes an extension's own node holds.
 - `Construct<'node, T>` has one variant per node type, each holding a reference to
-  that node: `BlockQuote`, `Code`, `CodeBlock`, `Document`, `Emphasis`, `Heading`,
-  `Html`, `Image`, `Item`, `Line`, `LineBreak`, `Link`, `List`, `MarkdownBlock`,
-  `Paragraph`, `Section`, `Strong`, `Table`, `TableCell`, `TableRow`, `Text` and
-  `ThematicBreak`.
-- archie builds the whole tree first, then offers every node to the extensions,
-  children before parents: a section's heading, blocks and subsections before the
-  section, an item's or a cell's markdown block before the item or the cell, a
-  document's markdown block before the document. A claimed node goes into `kind`, and
-  the plain node stays in the tree under it.
+  that node of the located tree, spans included: `BlockQuote`, `Code`, `CodeBlock`,
+  `Document`, `Emphasis`, `Heading`, `Html`, `Image`, `Item`, `Line`, `LineBreak`,
+  `Link`, `List`, `MarkdownBlock`, `Paragraph`, `Section`, `Strong`, `Table`,
+  `TableCell`, `TableRow`, `Text` and `ThematicBreak`. `Written<'node, T>` has the same
+  variants over the model's nodes, which hold no span: `write` gets the plain node a
+  claimed node is written over.
+- archie builds the whole located tree first, then offers every node to the
+  extensions, children before parents: a section's heading, blocks and subsections
+  before the section, an item's or a cell's markdown block before the item or the
+  cell, a document's markdown block before the document. A claimed node goes into
+  `kind`, and the plain node stays in the tree under it. At the end of the parse, the
+  located tree moves into the model, each `kind` with its node.
 - `claim` returns `None` to leave the node as archie built it, and `Some(Ok(..))` to
   claim it. `Some(Err(..))` leaves the plain node by default
   (`OnExtensionError::Fallback`), and archie reads the rest of the file. A strict
@@ -1035,21 +1045,30 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   read past the frame, then with at most `column` columns of its leading white space
   left out and its tab stops counted from `column`, as in a code block's value: a tab
   moves to the next multiple of 4 past it. In a grid cell it reads only the parts of
-  the range on the cell's lines, and its tab stops count from `column` there too. Its
-  spans count from the start of the source.
+  the range on the cell's lines, and its tab stops count from `column` there too. It
+  gives the model's `MarkdownBlock`; while the block is claimed, its spans count from
+  the start of the source. `context.document::<T>(range)` reads a range as a whole
+  document, its lines read as `context.markdown` reads them: a frontmatter on its
+  first lines, then its body. It gives a `RawDocument`, `Invalid` when no entry of the
+  frontmatter reads, whose body archie's markdown extension alone claims.
+  In a strict parse, an entry its frontmatter drops fails it; the entries it drops are
+  not listed in `Parsed.dropped`, which lists the file's own frontmatter.
 - No node that the block cap of list items, markdown blocks and table cells holds is
   offered, so a markdown block an extension reads with `context.markdown` nests under
   the same cap as the file's own.
 - `Plain` claims nothing; its `Node<T>` is `Infallible`. `Markdown` is archie's own
   extension, written as a consumer writes one: it claims a code block whose language
-  is `markdown` or `md`, in any case, as the markdown block its content reads as, and
-  writes it back fenced with the block's info string.
+  is `markdown` or `md`, in any case, as the whole document its content reads as, a
+  `RawDocument`, its frontmatter included, and writes it back fenced with the block's
+  info string, a valid document's frontmatter in the syntax the write picks.
 - `(A, B)` is two extensions, whose `Node<T>` is `Either<A::Node<T>, B::Node<T>>`: the
   first one that claims a construct gets it. More nest as pairs.
 - `With<E>` is `(Markdown, E)`. `parse(source)` reads with `Markdown` alone, and
   `parse_with::<E>(source, &options)` reads with `With<E>`, so archie's markdown
-  extension is always first. `parse` returns the `Document`, since a parse that is not
-  strict cannot fail, and `parse_with` a `Result`, an error only in a strict parse.
+  extension is always first. Each gives a `Parsed`: its `document`, a `RawDocument`,
+  and `dropped`, each frontmatter entry the parse could not read, with its span into
+  the source. `parse` returns it as it is, since a parse that is not strict cannot
+  fail, and `parse_with` a `Result`, an error only in a strict parse.
 - A code block's `language` and `args`, `Args::Toml` or `Args::Text`, come from its
   info string by the rule under [Blocks](#blocks).
 - `read_toml(source, range)` and `read_yaml(source, range)` read the TOML or YAML
@@ -1066,22 +1085,23 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   passed whole, as `context.markdown` reads it. A part that starts later on its line
   keeps its start. So an extension reads a header the same way inside a grid cell and
   out, with `read_yaml_lines(context.source, &context.lines_of(range))`.
-- `to_json(document)` writes a document as JSON, and `from_json::<E>(text)` reads it
-  back, at any depth archie reads. No node writes its `kind`. A frontmatter is written
-  `{"Ok": ...}`, or `{"Err": ...}` when it is broken.
-  `rebuild_with::<E>(document, &options)` builds the extension nodes again on such a
-  document: it writes the plain tree in archie's form, with the frontmatter in the
-  syntax it was read in, or in YAML when TOML cannot hold a null in it, a broken one as
-  it was read, and parses that text with `E`, so the spans count from the text
-  written. It fails with `RebuildError::Write`, naming the key, when the `Toml` args of
-  a code block hold a null, or naming the line when the text of a broken frontmatter
-  holds one that would close it, and with `RebuildError::Parse` when the parse fails.
+- `to_json(document)` writes a `RawDocument` as JSON, and `from_json::<E>(text)` reads
+  it back, at any depth archie reads. No node writes its `kind` or a span. A document
+  is written `{"Valid": ...}`, or `{"Invalid": ...}` when no entry of its frontmatter
+  reads. `rebuild_with::<E>(document, &options)` builds the extension nodes again on
+  such a document: it writes the plain tree in archie's form, with the frontmatter in
+  YAML, an invalid one as it was read, and parses that text with `E`. It fails with
+  `RebuildError::Write`, naming the key, when the `Toml` args of a code block hold a
+  null, or naming the line when the text of an invalid frontmatter holds one that
+  would close it, and with `RebuildError::Parse` when the parse fails.
 - `Writer`, which `write` hands to an extension, has `push_str`, which adds text as
   it is; `markdown_block`, which writes a markdown block with its levels counted from
-  one; `construct`, which writes a plain node in archie's form, each of its children
-  by the extension that claimed it, if one did; `fenced`, which writes a fenced block
-  with the info string it is given; and `info_string`, which gives a code block's info
-  string as the writer writes it and records the error of a null in its `Toml` args.
+  one; `raw_document`, which writes a whole document, its frontmatter then its body,
+  as `write` does; `construct`, which writes a plain node in archie's form, each of
+  its children by the extension that claimed it, if one did; `fenced`, which writes a
+  fenced block with the info string it is given; and `info_string`, which gives a
+  code block's info string as the writer writes it and records the error of a null in
+  its `Toml` args.
 - The tree types that take the extension as a parameter compare with `PartialEq`
   only, so an extension's own node types need not implement `Eq`.
 
@@ -1094,7 +1114,7 @@ then read and written again, gives the same text the second time.
 
 | Construct | Written as |
 |---|---|
-| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter; a broken frontmatter as it was read, its text between `---` lines for YAML and `+++` lines for TOML, whatever `WriteOptions::frontmatter` picks, because the text reads only in its own syntax. When that text holds a line that would close the frontmatter, as `TOML_CLOSE` or `YAML_CLOSE` does, such as `---` alone on its line for YAML, the write fails with an error that names that line, because the text would read back cut at it. Then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
+| Document | The frontmatter, if it has one, in the syntax `WriteOptions::frontmatter` picks, YAML by default, also for a file read with TOML frontmatter, and so for the document a `markdown` code block holds; an invalid document's frontmatter as it was read, its text between `---` lines for YAML and `+++` lines for TOML, whatever `WriteOptions::frontmatter` picks, because the text reads only in its own syntax. When that text holds a line that would close the frontmatter, as `TOML_CLOSE` or `YAML_CLOSE` does, such as `---` alone on its line for YAML, the write fails with an error that names that line, because the text would read back cut at it. Then its markdown block. A byte-order mark, U+FEFF, that would be the first character of the file is written `&#65279;`, because the reader skips a plain one there; one anywhere else is written as it is. The text ends with one line ending; an empty document is empty text. |
 | Blank lines | One between two blocks and after a heading. Inside a tight list, none between the blocks of an item. |
 | Heading | `#` marks, one per level of depth, then a space and its text, also for a heading read underlined. A final run of `#`s in its text that a space or a tab precedes, or that is the whole text, gets a backslash before its first `#`, because the reader would take the run for the closing sequence: `Title ##` is written `# Title \##`. A heading line with no text is its marks alone. Every heading line is written. |
 | A heading that holds a line break | At depth 1 or 2, written underlined: its lines, each but the last ended by the break's `\`, guarded as a paragraph's lines, then `===` at depth 1 or `---` at depth 2 on a line of its own, because a `#` heading is one line. At depth 3 to 6, and right after other text in a tight list item, where a blank line would make the list loose, the one-line form, with the break written `&#10;`. |
@@ -1191,8 +1211,8 @@ with the text it reads from and the text it writes.
    paragraph.
 2. A table cell holds markdown: paragraphs, lists, code blocks, tables and sections
    with headings, as long as they stay inside the cell.
-3. A fenced block whose language is `markdown` or `md` holds a markdown block, read by
-   these same rules. CommonMark reads it as code.
+3. A fenced block whose language is `markdown` or `md` holds a whole document, its
+   frontmatter included, read by these same rules. CommonMark reads it as code.
 4. A line further left than a list item's text ends the list and starts a new
    paragraph. CommonMark would continue the item's paragraph with it.
 5. An image's `alt` is the text between its brackets as written. CommonMark reads

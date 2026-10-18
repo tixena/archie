@@ -1,7 +1,7 @@
 use std::thread;
 
 use super::{check, check_spans, on_two_megabytes};
-use crate::parser::ast::{Block, Document, Inline};
+use crate::parser::ast::{Block, Inline, RawDocument};
 use crate::parser::inline::INLINE_CAP;
 use crate::parser::parse;
 use crate::writer::{WriteOptions, write};
@@ -1526,11 +1526,8 @@ fn emphasis_nested_two_thousand_deep_reads_writes_and_drops_on_a_two_megabyte_st
         .stack_size(2 * 1024 * 1024)
         .spawn(|| {
             let source = format!("{}a{}\n", "*".repeat(2_000), "*".repeat(2_000));
-            let document = parse(&source);
-            let mut nodes = match document.body.sections[0].blocks.as_slice() {
-                [Block::Paragraph(paragraph)] => paragraph.lines[0].children.as_slice(),
-                _ => &[],
-            };
+            let document = parse(&source).document;
+            let mut nodes = only_line(&document);
             let mut depth = 0_usize;
             while let [Inline::Strong(strong)] = nodes {
                 depth += 1;
@@ -1547,8 +1544,11 @@ fn emphasis_nested_two_thousand_deep_reads_writes_and_drops_on_a_two_megabyte_st
 }
 
 /// The nodes of the one line of the paragraph that `document` holds.
-fn only_line(document: &Document) -> &[Inline] {
-    match document.body.sections[0].blocks.as_slice() {
+fn only_line(document: &RawDocument) -> &[Inline] {
+    let RawDocument::Valid(valid) = document else {
+        return &[];
+    };
+    match valid.body.sections[0].blocks.as_slice() {
         [Block::Paragraph(paragraph)] => paragraph.lines[0].children.as_slice(),
         _ => &[],
     }
@@ -1568,7 +1568,7 @@ fn strong_depth(nodes: &[Inline]) -> (usize, &[Inline]) {
 
 /// Checks that the one line of `document` is the text `stars`, strong
 /// emphasis nested `INLINE_CAP` deep around `a`, then `stars` again.
-fn assert_inline_capped(document: &Document, stars: &str) {
+fn assert_inline_capped(document: &RawDocument, stars: &str) {
     let nodes = only_line(document);
     assert!(
         matches!(nodes, [Inline::Text(before), Inline::Strong(_), Inline::Text(after)]
@@ -1583,14 +1583,14 @@ fn assert_inline_capped(document: &Document, stars: &str) {
 fn emphasis_nests_the_inline_cap_deep_and_the_stars_past_it_stay_text() {
     on_two_megabytes(|| {
         let marks = "*".repeat(10_000);
-        let document = parse(&format!("{marks}a{marks}\n"));
+        let document = parse(&format!("{marks}a{marks}\n")).document;
         let stars = "*".repeat(10_000 - 2 * INLINE_CAP);
         assert_inline_capped(&document, &stars);
         let written = write(&document, &WriteOptions::default()).unwrap();
         let escaped = "\\*".repeat(stars.len());
         let paired = "*".repeat(2 * INLINE_CAP);
         assert_eq!(written, format!("{escaped}{paired}a{paired}{escaped}\n"));
-        assert_inline_capped(&parse(&written), &stars);
+        assert_inline_capped(&parse(&written).document, &stars);
         let copy = document.clone();
         assert_eq!(copy, document);
         let printed = format!("{document:?}");
@@ -1605,13 +1605,13 @@ fn emphasis_at_the_inline_cap_reads_back_from_its_written_text_to_the_same_tree(
     on_two_megabytes(|| {
         let marks = "*".repeat(2 * INLINE_CAP);
         let source = format!("{marks}a{marks}\n");
-        let document = parse(&source);
+        let document = parse(&source).document;
         let (depth, innermost) = strong_depth(only_line(&document));
         assert_eq!(depth, INLINE_CAP);
         assert!(matches!(innermost, [Inline::Text(text)] if text.value == "a"));
         let written = write(&document, &WriteOptions::default()).unwrap();
         assert_eq!(written, source);
-        assert_eq!(parse(&written), document);
+        assert_eq!(parse(&written).document, document);
     });
 }
 
@@ -1619,7 +1619,7 @@ fn emphasis_at_the_inline_cap_reads_back_from_its_written_text_to_the_same_tree(
 fn a_link_that_would_nest_past_the_inline_cap_keeps_its_brackets_as_text() {
     on_two_megabytes(|| {
         let marks = "*".repeat(2 * INLINE_CAP);
-        let document = parse(&format!("[{marks}a{marks}](u)\n"));
+        let document = parse(&format!("[{marks}a{marks}](u)\n")).document;
         let nodes = only_line(&document);
         assert!(
             matches!(nodes, [Inline::Text(open), Inline::Strong(_), Inline::Text(close)]
@@ -1627,7 +1627,7 @@ fn a_link_that_would_nest_past_the_inline_cap_keeps_its_brackets_as_text() {
         );
         assert_eq!(strong_depth(&nodes[1..2]).0, INLINE_CAP);
         let fewer = "*".repeat(2 * (INLINE_CAP - 1));
-        let linked = parse(&format!("[{fewer}a{fewer}](u)\n"));
+        let linked = parse(&format!("[{fewer}a{fewer}](u)\n")).document;
         let (depth, _) = match only_line(&linked) {
             [Inline::Link(link)] if link.target == "u" => strong_depth(&link.children),
             _ => (0, &[][..]),
