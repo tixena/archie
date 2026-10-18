@@ -1,4 +1,8 @@
+#[cfg(feature = "mongodb")]
+use std::ffi::OsStr;
 use std::fs::{self, File};
+#[cfg(feature = "mongodb")]
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 
@@ -19,6 +23,11 @@ const FIXTURES: &str = concat!(
 
 const FORMS: [&str; 3] = ["markdown", "json", "rkyv"];
 
+/// A server no process listens on, which the driver tries once and gives up
+/// on at once: no server selection to wait for, no retry.
+#[cfg(feature = "mongodb")]
+const UNREACHABLE: &str = "mongodb://127.0.0.1:1/?loadBalanced=true&retryReads=false";
+
 /// Runs the binary in `folder` with `arguments`, `stdin` on standard input.
 fn archie(folder: &Path, arguments: &[&str], stdin: &[u8]) -> Assert {
     Command::cargo_bin("archie")
@@ -27,6 +36,20 @@ fn archie(folder: &Path, arguments: &[&str], stdin: &[u8]) -> Assert {
         .args(arguments)
         .write_stdin(stdin)
         .assert()
+}
+
+/// Runs the binary in `folder` with `arguments`, `ARCHIE_MONGODB_URI` set to
+/// `uri` or removed when it is `None`.
+#[cfg(feature = "mongodb")]
+fn archie_with_uri(folder: &Path, arguments: &[&str], uri: Option<&OsStr>) -> Assert {
+    let mut command = Command::cargo_bin("archie").unwrap();
+    command.current_dir(folder).args(arguments);
+    if let Some(value) = uri {
+        command.env("ARCHIE_MONGODB_URI", value);
+    } else {
+        command.env_remove("ARCHIE_MONGODB_URI");
+    }
+    command.write_stdin(b"# B\n".as_slice()).assert()
 }
 
 /// archie's form of the markdown `source`, its frontmatter in `frontmatter`.
@@ -241,8 +264,9 @@ fn an_unknown_option_and_a_missing_path_exit_2() {
     archie(root, &["get"], b"").code(2_i32).stdout(is_empty());
 }
 
+#[cfg(not(feature = "mongodb"))]
 #[test]
-fn a_mongodb_store_exits_3_in_this_build() {
+fn a_mongodb_store_exits_3_in_a_build_without_it() {
     let folder = folder();
     let root = folder.path();
     fs::write(root.join("a.md"), "# A\n").unwrap();
@@ -256,6 +280,46 @@ fn a_mongodb_store_exits_3_in_this_build() {
     .stderr(eq(
         "archie: mongodb:notes/files: this archie is built without the MongoDB store\n",
     ));
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_mongodb_store_with_no_connection_string_exits_3_with_one_line_naming_the_variable() {
+    let folder = folder();
+    let root = folder.path();
+    fs::write(root.join("a.md"), "# A\n").unwrap();
+    let get = ["get", "a.md", "--store", "mongodb:notes/files"];
+    archie_with_uri(root, &get, None)
+        .code(3_i32)
+        .stdout(is_empty())
+        .stderr(eq(
+            "archie: ARCHIE_MONGODB_URI is not set: it holds the MongoDB connection string\n",
+        ));
+    let not_utf8 = OsStr::from_bytes(b"mongodb://\xff");
+    archie_with_uri(
+        root,
+        &["write", "b.md", "-s", "mongodb:notes/files"],
+        Some(not_utf8),
+    )
+    .code(3_i32)
+    .stdout(is_empty())
+    .stderr(eq(
+        "archie: ARCHIE_MONGODB_URI is not UTF-8: it holds the MongoDB connection string\n",
+    ));
+    assert_eq!(names(root), ["a.md"]);
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_mongodb_server_that_cannot_be_reached_exits_4_naming_the_store() {
+    let folder = folder();
+    let root = folder.path();
+    let uri = Some(OsStr::new(UNREACHABLE));
+    let get = archie_with_uri(root, &["get", "a.md", "-s", "mongodb:notes/files"], uri);
+    failed(get, 4, "archie: mongodb:notes/files: ");
+    let write = archie_with_uri(root, &["write", "b.md", "-s", "mongodb:notes/files"], uri);
+    failed(write, 4, "archie: mongodb:notes/files: ");
+    assert_eq!(names(root), Vec::<String>::new());
 }
 
 #[test]

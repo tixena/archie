@@ -91,6 +91,7 @@ dependencies = [
  "archie-store",
  "assert_cmd",
  "clap",
+ "mongodb",
  "os-shim",
  "predicates",
  "tempfile",

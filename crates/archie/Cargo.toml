@@ -14,6 +14,10 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+default = ["mongodb"]
+mongodb = ["archie-store/mongodb"]
+
 [dependencies]
 archie-core = { path = "../archie-core" }
 archie-store = { path = "../archie-store" }
@@ -23,5 +27,6 @@ tokio = { workspace = true, features = ["rt"] }
 
 [dev-dependencies]
 assert_cmd.workspace = true
+mongodb.workspace = true
 predicates.workspace = true
 tempfile.workspace = true

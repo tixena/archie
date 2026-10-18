@@ -20,7 +20,7 @@ The path is required.
 
 | Part | What it takes |
 |---|---|
-| `<PATH>` | Where the document is stored. With no `--store`, a file of the machine, relative to the current folder or absolute. `.` and `..` are resolved from the text of the path, without following links, so `../notes/a.md` names the file a shell would name. |
+| `<PATH>` | Where the document is stored. With no `--store`, a file of the machine, relative to the current folder or absolute. `.` and `..` are resolved from the text of the path, without following links, so `../notes/a.md` names the file a shell would name. With a `--store`, a path of that store, such as `notes/task.md`, used as written. |
 | `-f`, `--format <FORMAT>` | The form the document is read in: `markdown`, the default, `json`, or `rkyv`. |
 | `--frontmatter <SYNTAX>` | The syntax the stored frontmatter is written in: `yaml`, the default, or `toml`. |
 | `-i`, `--input <FILE>` | A file of the machine to read the document from, in place of standard input. It is never a path in a store. |
@@ -61,9 +61,31 @@ archie: b.md: expected ident at line 1 column 2
 
 ### Stores
 
-With no `--store`, the store is the file system. This build of archie has neither
-the MinIO store nor the MongoDB store: a `--store` value of either shape exits with
-code 3.
+With no `--store`, the store is the file system.
+
+With `--store mongodb:<database>/<collection>`, the store is the collection
+`<collection>` of the database `<database>`, on the MongoDB server that the
+environment variable `ARCHIE_MONGODB_URI` names. The command line holds names
+only, never an address or a credential.
+
+| Variable | What it holds |
+|---|---|
+| `ARCHIE_MONGODB_URI` | The connection string of the MongoDB server, `mongodb://` or `mongodb+srv://`, with the server and its credentials. |
+
+A missing `ARCHIE_MONGODB_URI` exits with code 3, and a server that cannot be
+reached exits with code 4.
+
+```console
+$ export ARCHIE_MONGODB_URI=mongodb://127.0.0.1:27017
+$ archie get notes/task.md | archie write notes/task.md --store mongodb:notes/files
+$ unset ARCHIE_MONGODB_URI; archie write notes/task.md -s mongodb:notes/files < a.md; echo "exit $?"
+archie: ARCHIE_MONGODB_URI is not set: it holds the MongoDB connection string
+exit 3
+```
+
+This build of archie does not have the MinIO store: a `--store minio:` value exits
+with code 3. An archie built without its default features does not have the
+MongoDB store either, and refuses a `--store mongodb:` value the same way.
 
 ```console
 $ archie write b.md --store minio:notes/drafts < a.md
@@ -79,8 +101,8 @@ A `--store` value of any other shape is a usage error, code 2.
 | 0 | Success. |
 | 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the rkyv form, or a value the frontmatter syntax cannot hold. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
-| 3 | The store is not configured, or its configuration is wrong. In this build, any `--store`. |
-| 4 | The store failed: a file system error, such as a folder that is not writable. A failure to read standard input is code 4 too. |
+| 3 | The store is not configured, or its configuration is wrong: `ARCHIE_MONGODB_URI` is not set for `--store mongodb:`, or the store is not built into this archie, as the MinIO store is not. |
+| 4 | The store failed: a file system error, such as a folder that is not writable, or a MongoDB server that cannot be reached. A failure to read standard input is code 4 too. |
 | 6 | No file at the path of `--input`. |
 
 Code 5 belongs to the language-model provider error of the validation run; see

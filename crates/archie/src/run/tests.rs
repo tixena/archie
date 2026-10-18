@@ -43,6 +43,11 @@ const FORMS: [&str; 3] = ["markdown", "json", "rkyv"];
 
 const JEKYLL_POST: &str = FIXTURES[10];
 
+/// A server no process listens on, which the driver tries once and gives up
+/// on at once: no server selection to wait for, no retry.
+#[cfg(feature = "mongodb")]
+const UNREACHABLE: &str = "mongodb://127.0.0.1:1/?loadBalanced=true&retryReads=false";
+
 const ZOLA_PAGE: &str = FIXTURES[20];
 
 /// What a run gave: its exit code and the two output streams.
@@ -58,7 +63,7 @@ fn archie(system: &MemorySystem, arguments: &[&str], stdin: &[u8]) -> Ran {
     let mut input = stdin;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    let runtime = Builder::new_current_thread().build().unwrap();
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
     let code = runtime.block_on(run(&cli, system, &mut input, &mut stdout, &mut stderr));
     Ran {
         code,
@@ -241,14 +246,8 @@ fn a_path_that_names_no_file_exits_2() {
 }
 
 #[test]
-fn a_network_store_exits_3_in_this_build() {
+fn a_minio_store_exits_3_in_this_build() {
     let system = vault("# A\n");
-    let mongodb = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
-    failed(
-        &mongodb,
-        3,
-        "archie: mongodb:notes/files: this archie is built without the MongoDB store",
-    );
     let minio = archie(
         &system,
         &["write", "b.md", "-s", "minio:notes/drafts"],
@@ -260,6 +259,67 @@ fn a_network_store_exits_3_in_this_build() {
         "archie: minio:notes/drafts: this archie is built without the MinIO store",
     );
     assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[cfg(not(feature = "mongodb"))]
+#[test]
+fn a_mongodb_store_exits_3_in_a_build_without_it() {
+    let system = vault("# A\n");
+    let mongodb = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
+    failed(
+        &mongodb,
+        3,
+        "archie: mongodb:notes/files: this archie is built without the MongoDB store",
+    );
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_mongodb_store_with_no_connection_string_exits_3_with_one_line_naming_the_variable() {
+    let system = vault("# A\n");
+    let line = "archie: ARCHIE_MONGODB_URI is not set: it holds the MongoDB connection string\n";
+    let got = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
+    failed(&got, 3, line);
+    let written = archie(
+        &system,
+        &["write", "b.md", "--store", "mongodb:notes/files"],
+        b"# B\n",
+    );
+    failed(&written, 3, line);
+    assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_mongodb_server_that_cannot_be_reached_exits_4_naming_the_store() {
+    let system = vault("# A\n")
+        .with_env("ARCHIE_MONGODB_URI", UNREACHABLE)
+        .unwrap();
+    let got = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
+    failed(&got, 4, "archie: mongodb:notes/files: ");
+    let written = archie(
+        &system,
+        &["write", "b.md", "-s", "mongodb:notes/files"],
+        b"# B\n",
+    );
+    failed(&written, 4, "archie: mongodb:notes/files: ");
+    assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn with_a_mongodb_store_the_path_is_used_as_written_and_checked_before_connecting() {
+    let system = vault("# A\n")
+        .with_env("ARCHIE_MONGODB_URI", UNREACHABLE)
+        .unwrap();
+    for path in ["/notes/a.md", "./a.md", "notes/../a.md"] {
+        let ran = archie(&system, &["get", path, "-s", "mongodb:notes/files"], b"");
+        failed(
+            &ran,
+            2,
+            &format!("archie: {path}: `{path}` is not a store path"),
+        );
+    }
 }
 
 #[test]

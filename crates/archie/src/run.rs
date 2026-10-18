@@ -1,6 +1,10 @@
 //! The commands, run over a system and the three standard streams.
 
 use core::fmt::Display;
+#[cfg(not(feature = "mongodb"))]
+use core::future::{self, Ready};
+#[cfg(feature = "mongodb")]
+use std::env::VarError;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
@@ -10,6 +14,8 @@ use archie_core::writer::WriteOptions;
 use archie_store::any::AnyStore;
 use archie_store::document::{self, DocumentError};
 use archie_store::file::FileStore;
+#[cfg(feature = "mongodb")]
+use archie_store::mongo::MongoStore;
 use archie_store::{Precondition, Revision, Store as _, StoreError, StorePath};
 use os_shim::System;
 
@@ -22,6 +28,11 @@ struct Failure {
 }
 
 impl Failure {
+    #[cfg(feature = "mongodb")]
+    const fn configuration(message: String) -> Self {
+        Self { code: 3, message }
+    }
+
     /// `error` on one line naming `path` as the command line gave it, in place
     /// of the store path `at` that the error's message opens with.
     fn naming(path: &Path, at: Option<&StorePath>, code: u8, error: &dyn Display) -> Self {
@@ -33,6 +44,13 @@ impl Failure {
         Self {
             code,
             message: format!("{}: {what}", path.display()),
+        }
+    }
+
+    fn not_utf8(path: &Path) -> Self {
+        Self {
+            code: 2,
+            message: format!("{}: a path that is not UTF-8", path.display()),
         }
     }
 
@@ -49,12 +67,35 @@ impl Failure {
         Self::naming(path, at, store_code(error), error)
     }
 
+    /// The store `arg` names failed to open.
+    #[cfg(feature = "mongodb")]
+    fn store(arg: &StoreArg, error: &StoreError) -> Self {
+        Self {
+            code: store_code(error),
+            message: format!("{arg}: {error}"),
+        }
+    }
+
     fn stream(name: &str, error: &io::Error) -> Self {
         Self {
             code: 4,
             message: format!("{name}: {error}"),
         }
     }
+
+    fn unbuilt(arg: &StoreArg, store: &str) -> Self {
+        Self {
+            code: 3,
+            message: format!("{arg}: this archie is built without the {store} store"),
+        }
+    }
+}
+
+/// `path` as the command line wrote it, as a path of a store `--store` names.
+#[cfg(feature = "mongodb")]
+fn as_written(path: &Path) -> Result<StorePath, Failure> {
+    let text = path.to_str().ok_or_else(|| Failure::not_utf8(path))?;
+    StorePath::new(text).map_err(|error| Failure::of_store(path, None, &error))
 }
 
 /// Writes the document at `path` in `form` to `stdout`, or to the file
@@ -68,7 +109,7 @@ async fn get(
     output: Option<&Path>,
     stdout: &mut (dyn Write + Send),
 ) -> Result<(), Failure> {
-    let (store, at) = open(system, named, path)?;
+    let (store, at) = open(system, named, path).await?;
     let target = output
         .map(|file| store_path(system, file).map(|place| (file, place)))
         .transpose()?;
@@ -93,15 +134,61 @@ fn machine(system: &dyn System) -> FileStore<'_> {
     FileStore::new(PathBuf::from("/"), system)
 }
 
+/// The connection string the environment holds in `ARCHIE_MONGODB_URI`.
+#[cfg(feature = "mongodb")]
+fn mongodb_uri(system: &dyn System) -> Result<String, Failure> {
+    system.env_var("ARCHIE_MONGODB_URI").map_err(|error| {
+        let what = match error {
+            VarError::NotPresent => "is not set",
+            VarError::NotUnicode(_) => "is not UTF-8",
+        };
+        Failure::configuration(format!(
+            "ARCHIE_MONGODB_URI {what}: it holds the MongoDB connection string"
+        ))
+    })
+}
+
 /// The store `named` names, the file system's when it is `None`, and `path`
 /// as a path of it.
-fn open<'system>(
+#[cfg(feature = "mongodb")]
+async fn open<'system>(
     system: &'system dyn System,
     named: Option<&StoreArg>,
     path: &Path,
 ) -> Result<(AnyStore<'system>, StorePath), Failure> {
     let Some(arg) = named else {
         return Ok((AnyStore::File(machine(system)), store_path(system, path)?));
+    };
+    match arg {
+        StoreArg::Minio {
+            bucket: _,
+            prefix: _,
+        } => Err(Failure::unbuilt(arg, "MinIO")),
+        StoreArg::Mongodb {
+            collection,
+            database,
+        } => {
+            let uri = mongodb_uri(system)?;
+            let at = as_written(path)?;
+            let store = MongoStore::open(&uri, database, collection)
+                .await
+                .map_err(|error| Failure::store(arg, &error))?;
+            Ok((AnyStore::Mongo(store), at))
+        }
+    }
+}
+
+/// The store `named` names, the file system's when it is `None`, and `path`
+/// as a path of it: ready at once, as no store of this build connects.
+#[cfg(not(feature = "mongodb"))]
+fn open<'system>(
+    system: &'system dyn System,
+    named: Option<&StoreArg>,
+    path: &Path,
+) -> Ready<Result<(AnyStore<'system>, StorePath), Failure>> {
+    let Some(arg) = named else {
+        let at = store_path(system, path);
+        return future::ready(at.map(|place| (AnyStore::File(machine(system)), place)));
     };
     let unbuilt = match arg {
         StoreArg::Minio {
@@ -113,10 +200,7 @@ fn open<'system>(
             database: _,
         } => "MongoDB",
     };
-    Err(Failure {
-        code: 3,
-        message: format!("{arg}: this archie is built without the {unbuilt} store"),
-    })
+    future::ready(Err(Failure::unbuilt(arg, unbuilt)))
 }
 
 fn options(syntax: SyntaxArg) -> WriteOptions {
@@ -203,10 +287,9 @@ fn store_path(system: &dyn System, path: &Path) -> Result<StorePath, Failure> {
     let mut parts = Vec::new();
     for component in full.components() {
         match component {
-            Component::Normal(part) => parts.push(part.to_str().ok_or_else(|| Failure {
-                code: 2,
-                message: format!("{}: a path that is not UTF-8", path.display()),
-            })?),
+            Component::Normal(part) => {
+                parts.push(part.to_str().ok_or_else(|| Failure::not_utf8(path))?);
+            }
             Component::ParentDir => {
                 parts.pop();
             }
@@ -227,7 +310,7 @@ async fn write(
     input: Option<&Path>,
     stdin: &mut (dyn Read + Send),
 ) -> Result<(), Failure> {
-    let (store, at) = open(system, named, path)?;
+    let (store, at) = open(system, named, path).await?;
     let bytes = if let Some(file) = input {
         let source = store_path(system, file)?;
         machine(system)
