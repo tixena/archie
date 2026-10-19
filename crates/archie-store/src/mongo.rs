@@ -306,7 +306,7 @@ fn failed(path: &StorePath, error: &dyn fmt::Display) -> StoreError {
 }
 
 /// `raw` as a `Document`, converted without serde: the driver's serde read of
-/// a record 100 levels deep overflows a 2 MB stack in a debug build.
+/// a deep record overflows a 2 MB debug stack.
 fn record_of(raw: &bson::RawDocument) -> Result<Document, StoreError> {
     Document::try_from(raw).map_err(|error| backend(&error))
 }

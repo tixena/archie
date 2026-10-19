@@ -14,7 +14,7 @@ use crate::parser::located::{
 };
 use crate::parser::{entity, html};
 
-/// How deep inline nodes nest: at 1270, the tree's derived Clone overflows a 2 MB debug stack.
+/// How deep inline nodes nest: deeper ones overflow a 2 MB debug stack.
 pub const INLINE_CAP: usize = 1_000;
 
 /// The children of a node being cut at line ends: their pieces cut so far

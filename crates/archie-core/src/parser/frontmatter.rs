@@ -13,9 +13,7 @@ use crate::parser::line::{Line, line_at};
 use crate::parser::located::{BrokenFrontmatter, Frontmatter, Mapping, Pair, Sequence, Value};
 use crate::parser::{toml, yaml};
 
-/// How deep the values the TOML and YAML readers build nest, counted
-/// together: YAML block mappings 467 deep, each key indented under the one
-/// before, overflow a 2 MB debug stack when they are read.
+/// How deep frontmatter values nest: deeper ones overflow a 2 MB debug stack.
 pub const VALUE_CAP: usize = 400;
 
 /// Why the TOML and YAML readers stop reading a value: what they met drops
