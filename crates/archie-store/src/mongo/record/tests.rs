@@ -447,6 +447,61 @@ fn a_record_that_does_not_read_names_its_id_and_serdes_first_error() {
 }
 
 #[test]
+fn a_record_holding_a_bson_value_archie_does_not_write_does_not_read() {
+    let refused = "the record ObjectId(\"6ad42f681472f05ab2ed9be7\") does not read: BSON error. Kind: A deserialization-related error occurred. Message: data did not match any variant of untagged enum Value.";
+    let written = with_frontmatter(mapping(vec![("status", string("open"))]));
+    for foreign in [
+        Bson::ObjectId(ObjectId::parse_str(ID).unwrap()),
+        Bson::Timestamp(bson::Timestamp {
+            time: 1,
+            increment: 2,
+        }),
+        Bson::MinKey,
+        Bson::Symbol("open".to_owned()),
+    ] {
+        let mut record = to_record(&written).unwrap();
+        data_mut(&mut record).insert("x", foreign.clone());
+        assert_eq!(
+            from_record(record),
+            Err(StoreError::Backend(refused.to_owned())),
+            "{foreign:?}"
+        );
+    }
+}
+
+#[test]
+fn a_mapping_with_a_key_that_does_not_start_with_a_dollar_reads_back() {
+    let mixed = mapping(vec![("$oid", string("a")), ("name", string("Ada"))]);
+    let lists = mapping(vec![
+        ("x", Value::Mapping(mixed)),
+        ("empty", Value::Mapping(Mapping::new())),
+    ]);
+    let back = from_record(to_record(&with_frontmatter(lists.clone())).unwrap()).unwrap();
+    assert_eq!(frontmatter(&back), Some(&lists));
+}
+
+#[test]
+fn a_hand_built_non_finite_float_is_stored_as_text_and_reads_back_as_text() {
+    for (float, written) in [
+        (f64::NAN, "nan"),
+        (f64::INFINITY, "inf"),
+        (f64::NEG_INFINITY, "-inf"),
+    ] {
+        let record =
+            to_record(&with_frontmatter(mapping(vec![("x", Value::Float(float))]))).unwrap();
+        assert_eq!(
+            data(&record).get("x"),
+            Some(&Bson::String(written.to_owned()))
+        );
+        let back = from_record(record).unwrap();
+        assert_eq!(
+            frontmatter(&back),
+            Some(&mapping(vec![("x", string(written))]))
+        );
+    }
+}
+
+#[test]
 fn a_record_deeper_than_mongodb_holds_is_not_stored() {
     assert_eq!(
         depth(&to_record(&stored("notes/one.md", "text\n")).unwrap()),

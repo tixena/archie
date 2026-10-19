@@ -1,10 +1,12 @@
-//! The serde hooks of the `Value` variants serde cannot write plain: a float
-//! that must be finite, the three dates as BSON `Date`s, and a time of day.
+//! The serde hooks of the `Value` variants serde cannot handle plain: a float
+//! written as text when it is not finite, the three dates as BSON `Date`s, a
+//! time of day, and a mapping that refuses a document of `$` keys alone.
 
 pub mod as_if_utc;
 pub mod finite;
 pub mod instant;
 pub mod midnight;
+pub mod plain_mapping;
 pub mod time_of_day;
 
 use chrono::{DateTime, Utc};

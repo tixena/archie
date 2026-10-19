@@ -931,7 +931,7 @@ fn push_offset_date_time(out: &mut String, date_time: &DateTime<FixedOffset>) {
 
 /// The literal of a float that is not a finite number, of `literals`, its
 /// syntax's `nan`, `inf` and `-inf`; `None` for a finite float.
-const fn non_finite(float: f64, literals: [&str; 3]) -> Option<&str> {
+pub(crate) const fn non_finite(float: f64, literals: [&str; 3]) -> Option<&str> {
     let [nan, infinity, negative_infinity] = literals;
     if float.is_nan() {
         Some(nan)

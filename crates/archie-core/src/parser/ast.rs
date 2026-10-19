@@ -185,7 +185,7 @@ pub enum Value {
     DateTime(NaiveDateTime),
     #[serde(with = "value_serde::time_of_day")]
     Time(NaiveTime),
-    #[serde(deserialize_with = "grown")]
+    #[serde(deserialize_with = "value_serde::plain_mapping::deserialize")]
     Mapping(Mapping),
     #[serde(deserialize_with = "grown")]
     Sequence(Vec<Self>),

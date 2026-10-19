@@ -325,6 +325,27 @@ fn a_non_finite_literal_is_written_to_json_as_its_text_and_read_back() {
 }
 
 #[test]
+fn a_hand_built_non_finite_float_is_written_to_json_as_text_and_reads_back_as_text() {
+    for (float, written) in [
+        (f64::NAN, "nan"),
+        (f64::INFINITY, "inf"),
+        (f64::NEG_INFINITY, "-inf"),
+    ] {
+        let mut document = parse("---\nx: 1\n---\n").document;
+        if let RawDocument::Valid(valid) = &mut document {
+            valid.frontmatter = Some(mapping(vec![("x", Value::Float(float))]));
+        }
+        let json = to_json(&document).unwrap();
+        assert!(
+            json.ends_with(&format!(r#""data":{{"x":"{written}"}}}}"#)),
+            "{json}"
+        );
+        let back: RawDocument = from_json(&json).unwrap();
+        assert_eq!(scalar(&back, "x"), text(written));
+    }
+}
+
+#[test]
 fn a_lookalike_of_a_time_or_a_date_reads_back_from_json_as_itself() {
     let seven = Value::Time(NaiveTime::from_hms_opt(7, 32, 0).unwrap());
     let nine = mapping(vec![("t", text("time")), ("v", text("nine"))]);
@@ -347,6 +368,13 @@ fn a_lookalike_of_a_time_or_a_date_reads_back_from_json_as_itself() {
     }
     let back: RawDocument = from_json(&to_json(&document).unwrap()).unwrap();
     assert_eq!(back, document);
+}
+
+#[test]
+fn a_document_of_dollar_keys_alone_does_not_read_from_json() {
+    let json = r#"{"t":"valid","bd":{"se":[]},"data":{"x":{"$oid":"6ad42f681472f05ab2ed9be7"}}}"#;
+    let read: Result<RawDocument, _> = from_json(json);
+    read.unwrap_err();
 }
 
 #[test]
