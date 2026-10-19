@@ -5,4 +5,5 @@ tixschema::mongodb_foundation!();
 
 pub mod forms;
 pub mod parser;
+pub mod value;
 pub mod writer;
