@@ -51,6 +51,18 @@ where
     }
 }
 
+impl<E> Kind<E>
+where
+    E: Extension,
+{
+    /// `node`, an extension's node. The plain node that carries it is not
+    /// changed, and JSON, rkyv and the stores keep only that plain node.
+    #[must_use]
+    pub fn new(node: E::Node<E>) -> Self {
+        Self(Some(Box::new(node)))
+    }
+}
+
 /// What `parse` builds: a document whose frontmatter reads, or one whose
 /// frontmatter no entry of reads.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
@@ -84,6 +96,14 @@ pub struct InvalidDocument {
     pub frontmatter: InvalidFrontmatter,
 }
 
+impl InvalidDocument {
+    /// A document of `body` whose `frontmatter` no entry of reads.
+    #[must_use]
+    pub const fn new(body: MarkdownBlock<Markdown>, frontmatter: InvalidFrontmatter) -> Self {
+        Self { body, frontmatter }
+    }
+}
+
 /// A frontmatter no entry of reads: the reader's message, its syntax, and its
 /// text as written, so that a write gives it back.
 #[model_schema(enable = ["decode_with", "mongodb"])]
@@ -110,6 +130,19 @@ pub struct InvalidFrontmatter {
     pub text: String,
 }
 
+impl InvalidFrontmatter {
+    /// A frontmatter in `format`, written as `text`, that no entry of reads, and
+    /// `error`, the reader's message.
+    #[must_use]
+    pub const fn new(format: FrontmatterFormat, text: String, error: String) -> Self {
+        Self {
+            error,
+            format,
+            text,
+        }
+    }
+}
+
 /// A markdown file whose frontmatter, if it has one, reads.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -131,6 +164,21 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Document<E>
+where
+    E: Extension,
+{
+    /// A document of `body` and `frontmatter`, with no extension node.
+    #[must_use]
+    pub const fn new(body: MarkdownBlock<E>, frontmatter: Option<Mapping>) -> Self {
+        Self {
+            body,
+            frontmatter,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// The syntax a frontmatter block is written in.
@@ -217,6 +265,20 @@ where
     pub sections: Vec<Section<E>>,
 }
 
+impl<E> MarkdownBlock<E>
+where
+    E: Extension,
+{
+    /// A markdown block of `sections`, with no extension node.
+    #[must_use]
+    pub const fn new(sections: Vec<Section<E>>) -> Self {
+        Self {
+            kind: Kind(None),
+            sections,
+        }
+    }
+}
+
 /// A node that stands on its own lines.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -258,6 +320,20 @@ where
     pub value: String,
 }
 
+impl<E> BlockQuote<E>
+where
+    E: Extension,
+{
+    /// A block quote of `value`, with no extension node.
+    #[must_use]
+    pub const fn new(value: String) -> Self {
+        Self {
+            kind: Kind(None),
+            value,
+        }
+    }
+}
+
 /// Raw HTML, as written: a block, or an inline node such as `<span>`. A
 /// block's `continues` is always `Continues::Neither`.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
@@ -281,6 +357,21 @@ where
     pub value: String,
 }
 
+impl<E> Html<E>
+where
+    E: Extension,
+{
+    /// Raw HTML `value`, whole on its line, with no extension node.
+    #[must_use]
+    pub const fn new(value: String) -> Self {
+        Self {
+            continues: Continues::Neither,
+            kind: Kind(None),
+            value,
+        }
+    }
+}
+
 /// A line of three or more `-`, `*` or `_`, such as `---`.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -296,6 +387,15 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Default for ThematicBreak<E>
+where
+    E: Extension,
+{
+    fn default() -> Self {
+        Self { kind: Kind(None) }
+    }
 }
 
 /// A heading, the blocks under it, then its subsections. Its level is its
@@ -332,6 +432,27 @@ where
     pub subsections: Vec<Self>,
 }
 
+impl<E> Section<E>
+where
+    E: Extension,
+{
+    /// A section of `heading`, the `blocks` under it and its `subsections`, with
+    /// no extension node.
+    #[must_use]
+    pub const fn new(
+        heading: Option<Heading<E>>,
+        blocks: Vec<Block<E>>,
+        subsections: Vec<Self>,
+    ) -> Self {
+        Self {
+            blocks,
+            heading,
+            kind: Kind(None),
+            subsections,
+        }
+    }
+}
+
 /// A heading line, such as `# Ship parser`. An empty heading has no children.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -350,6 +471,20 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Heading<E>
+where
+    E: Extension,
+{
+    /// A heading line of `children`, with no extension node.
+    #[must_use]
+    pub const fn new(children: Vec<Inline<E>>) -> Self {
+        Self {
+            children,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// A set of lines, ended by a blank line.
@@ -371,6 +506,20 @@ where
     pub lines: Vec<Line<E>>,
 }
 
+impl<E> Paragraph<E>
+where
+    E: Extension,
+{
+    /// A paragraph of `lines`, with no extension node.
+    #[must_use]
+    pub const fn new(lines: Vec<Line<E>>) -> Self {
+        Self {
+            kind: Kind(None),
+            lines,
+        }
+    }
+}
+
 /// One line of a paragraph and the inline nodes written on it.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -389,6 +538,20 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Line<E>
+where
+    E: Extension,
+{
+    /// A line of `children`, with no extension node.
+    #[must_use]
+    pub const fn new(children: Vec<Inline<E>>) -> Self {
+        Self {
+            children,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// A bullet or ordered list.
@@ -420,6 +583,23 @@ where
     pub start: Option<u64>,
 }
 
+impl<E> List<E>
+where
+    E: Extension,
+{
+    /// A list of `items`, loose when `loose` is set, ordered from `start` or a
+    /// bullet list when `start` is `None`, with no extension node.
+    #[must_use]
+    pub const fn new(items: Vec<Item<E>>, loose: bool, start: Option<u64>) -> Self {
+        Self {
+            items,
+            kind: Kind(None),
+            loose,
+            start,
+        }
+    }
+}
+
 /// One entry of a list.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -437,6 +617,20 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Item<E>
+where
+    E: Extension,
+{
+    /// A list item of `body`, with no extension node.
+    #[must_use]
+    pub const fn new(body: MarkdownBlock<E>) -> Self {
+        Self {
+            body,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// Lines between two fences of backticks or of tildes, or indented four
@@ -467,6 +661,23 @@ where
     pub language: Option<String>,
     #[serde(rename = "v")]
     pub value: String,
+}
+
+impl<E> CodeBlock<E>
+where
+    E: Extension,
+{
+    /// A code block of `value` whose info string is `language` and `args`, with
+    /// no extension node.
+    #[must_use]
+    pub const fn new(language: Option<String>, args: Args, value: String) -> Self {
+        Self {
+            args,
+            kind: Kind(None),
+            language,
+            value,
+        }
+    }
 }
 
 /// The rest of a fenced code block's info string, after its language.
@@ -513,6 +724,29 @@ where
     pub rows: Vec<TableRow<E>>,
 }
 
+impl<E> Table<E>
+where
+    E: Extension,
+{
+    /// A table written in `format`, its columns aligned by `alignments`, of the
+    /// header rows `head` and the other rows `rows`, with no extension node.
+    #[must_use]
+    pub const fn new(
+        format: TableFormat,
+        alignments: Vec<Alignment>,
+        head: Vec<TableRow<E>>,
+        rows: Vec<TableRow<E>>,
+    ) -> Self {
+        Self {
+            alignments,
+            format,
+            head,
+            kind: Kind(None),
+            rows,
+        }
+    }
+}
+
 /// One row of a table.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -532,6 +766,20 @@ where
     pub kind: Kind<E>,
 }
 
+impl<E> TableRow<E>
+where
+    E: Extension,
+{
+    /// A table row of `cells`, with no extension node.
+    #[must_use]
+    pub const fn new(cells: Vec<TableCell<E>>) -> Self {
+        Self {
+            cells,
+            kind: Kind(None),
+        }
+    }
+}
+
 /// One cell of a table row.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -549,6 +797,20 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> TableCell<E>
+where
+    E: Extension,
+{
+    /// A table cell of `body`, with no extension node.
+    #[must_use]
+    pub const fn new(body: MarkdownBlock<E>) -> Self {
+        Self {
+            body,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// How a column's cells are aligned.
@@ -647,6 +909,20 @@ where
     pub value: String,
 }
 
+impl<E> Text<E>
+where
+    E: Extension,
+{
+    /// Plain text `value`, with no extension node.
+    #[must_use]
+    pub const fn new(value: String) -> Self {
+        Self {
+            kind: Kind(None),
+            value,
+        }
+    }
+}
+
 /// Text between `*` or `_`, such as `*a*`.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -672,6 +948,21 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Emphasis<E>
+where
+    E: Extension,
+{
+    /// An emphasis of `children`, whole on its line, with no extension node.
+    #[must_use]
+    pub const fn new(children: Vec<Inline<E>>) -> Self {
+        Self {
+            children,
+            continues: Continues::Neither,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// Text between `**` or `__`, such as `**b**`.
@@ -701,6 +992,21 @@ where
     pub kind: Kind<E>,
 }
 
+impl<E> Strong<E>
+where
+    E: Extension,
+{
+    /// A strong emphasis of `children`, whole on its line, with no extension node.
+    #[must_use]
+    pub const fn new(children: Vec<Inline<E>>) -> Self {
+        Self {
+            children,
+            continues: Continues::Neither,
+            kind: Kind(None),
+        }
+    }
+}
+
 /// A hard line break: the two or more spaces, or the backslash, that end a
 /// line followed by another line of its paragraph.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
@@ -717,6 +1023,15 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> Default for LineBreak<E>
+where
+    E: Extension,
+{
+    fn default() -> Self {
+        Self { kind: Kind(None) }
+    }
 }
 
 /// A link: `[text](target "title")`, a reference link, an autolink,
@@ -757,6 +1072,30 @@ where
     #[serde(rename = "ti")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+impl<E> Link<E>
+where
+    E: Extension,
+{
+    /// A link written in `form` to `target`, titled `title`, whose text is
+    /// `children`, whole on its line, with no extension node.
+    #[must_use]
+    pub const fn new(
+        form: LinkForm,
+        target: String,
+        title: Option<String>,
+        children: Vec<LinkInline<E>>,
+    ) -> Self {
+        Self {
+            children,
+            continues: Continues::Neither,
+            form,
+            kind: Kind(None),
+            target,
+            title,
+        }
+    }
 }
 
 /// A node inside a link's text: any inline node but a link, at any depth.
@@ -808,6 +1147,22 @@ where
     pub kind: Kind<E>,
 }
 
+impl<E> LinkEmphasis<E>
+where
+    E: Extension,
+{
+    /// An emphasis inside a link's text, of `children`, whole on its line, with
+    /// no extension node.
+    #[must_use]
+    pub const fn new(children: Vec<LinkInline<E>>) -> Self {
+        Self {
+            children,
+            continues: Continues::Neither,
+            kind: Kind(None),
+        }
+    }
+}
+
 /// Text between `**` or `__` inside a link's text.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -833,6 +1188,22 @@ where
     #[serde(skip)]
     #[rkyv(with = Skip)]
     pub kind: Kind<E>,
+}
+
+impl<E> LinkStrong<E>
+where
+    E: Extension,
+{
+    /// A strong emphasis inside a link's text, of `children`, whole on its line,
+    /// with no extension node.
+    #[must_use]
+    pub const fn new(children: Vec<LinkInline<E>>) -> Self {
+        Self {
+            children,
+            continues: Continues::Neither,
+            kind: Kind(None),
+        }
+    }
 }
 
 /// How a link or an image is written.
@@ -883,6 +1254,25 @@ where
     pub title: Option<String>,
 }
 
+impl<E> Image<E>
+where
+    E: Extension,
+{
+    /// An image written in `form` of `target`, titled `title`, whose alternative
+    /// text is `alt`, whole on its line, with no extension node.
+    #[must_use]
+    pub const fn new(form: LinkForm, target: String, title: Option<String>, alt: String) -> Self {
+        Self {
+            alt,
+            continues: Continues::Neither,
+            form,
+            kind: Kind(None),
+            target,
+            title,
+        }
+    }
+}
+
 /// Text between backticks, such as `` `archie check` ``.
 #[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
 #[derive(
@@ -903,6 +1293,21 @@ where
     pub kind: Kind<E>,
     #[serde(rename = "v")]
     pub value: String,
+}
+
+impl<E> Code<E>
+where
+    E: Extension,
+{
+    /// Code `value`, whole on its line, with no extension node.
+    #[must_use]
+    pub const fn new(value: String) -> Self {
+        Self {
+            continues: Continues::Neither,
+            kind: Kind(None),
+            value,
+        }
+    }
 }
 
 /// Reads a field with the stack grown when little is left: serde reads an
