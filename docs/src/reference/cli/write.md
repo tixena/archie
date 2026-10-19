@@ -87,7 +87,7 @@ $ export ARCHIE_MINIO_ENDPOINT=http://127.0.0.1:9000 ARCHIE_MINIO_REGION=us-east
 $ export AWS_ACCESS_KEY_ID=archie AWS_SECRET_ACCESS_KEY=archie-secret
 $ archie get notes/task.md | archie write notes/task.md --store minio:notes/vault
 $ unset AWS_SECRET_ACCESS_KEY; archie write notes/task.md -s minio:notes/vault < a.md; echo "exit $?"
-archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not set
+archie: AWS_SECRET_ACCESS_KEY is not set: it holds the MinIO secret key
 exit 3
 ```
 

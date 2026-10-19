@@ -402,8 +402,8 @@ fn each_minio_variable_left_out_or_not_utf8_exits_3_with_one_line_naming_it() {
     let lines = [
         "archie: ARCHIE_MINIO_ENDPOINT is not set: it holds the MinIO server's address\n",
         "archie: ARCHIE_MINIO_REGION is not set: it holds the region the MinIO server expects\n",
-        "archie: minio:notes/vault: `AWS_ACCESS_KEY_ID` is not set\n",
-        "archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not set\n",
+        "archie: AWS_ACCESS_KEY_ID is not set: it holds the MinIO access key\n",
+        "archie: AWS_SECRET_ACCESS_KEY is not set: it holds the MinIO secret key\n",
     ];
     for (index, line) in lines.iter().enumerate() {
         let mut variables = all.clone();
@@ -426,7 +426,7 @@ fn each_minio_variable_left_out_or_not_utf8_exits_3_with_one_line_naming_it() {
     failed_hiding_the_keys(
         archie_with_minio(root, &["write", "b.md", "-s", "minio:notes/vault"], &secret),
         3,
-        "archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not Unicode\n",
+        "archie: AWS_SECRET_ACCESS_KEY is not UTF-8: it holds the MinIO secret key\n",
     );
     assert_eq!(names(root), ["a.md"]);
 }

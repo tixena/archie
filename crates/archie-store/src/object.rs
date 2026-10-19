@@ -41,11 +41,11 @@ impl ObjectStore<MinioBucket> {
     ///
     /// # Errors
     ///
-    /// `Backend` naming the variable when `AWS_ACCESS_KEY_ID` or
-    /// `AWS_SECRET_ACCESS_KEY` is not set.
+    /// `Backend` naming the variable and what it holds when `AWS_ACCESS_KEY_ID`
+    /// or `AWS_SECRET_ACCESS_KEY` is not set or is not UTF-8.
     pub fn open(system: &dyn System, config: ObjectConfig) -> Result<Self, StoreError> {
-        let access_key = variable(system, "AWS_ACCESS_KEY_ID")?;
-        let secret_key = variable(system, "AWS_SECRET_ACCESS_KEY")?;
+        let access_key = variable(system, "AWS_ACCESS_KEY_ID", "the MinIO access key")?;
+        let secret_key = variable(system, "AWS_SECRET_ACCESS_KEY", "the MinIO secret key")?;
         let minio = MinioConfig::new(
             config.endpoint,
             config.region,
@@ -189,12 +189,15 @@ fn failure(path: &StorePath, error: &ObjectError) -> StoreError {
     }
 }
 
-/// The value of the variable `name`; the error names the variable, never
-/// its value.
-fn variable(system: &dyn System, name: &str) -> Result<String, StoreError> {
-    system.env_var(name).map_err(|error| match error {
-        VarError::NotPresent => StoreError::Backend(format!("`{name}` is not set")),
-        VarError::NotUnicode(_) => StoreError::Backend(format!("`{name}` is not Unicode")),
+/// The value of the variable `name`, which holds `holds`; the error names the
+/// variable, never its value.
+fn variable(system: &dyn System, name: &str, holds: &str) -> Result<String, StoreError> {
+    system.env_var(name).map_err(|error| {
+        let what = match error {
+            VarError::NotPresent => "is not set",
+            VarError::NotUnicode(_) => "is not UTF-8",
+        };
+        StoreError::Backend(format!("{name} {what}: it holds {holds}"))
     })
 }
 

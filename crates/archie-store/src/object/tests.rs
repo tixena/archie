@@ -327,12 +327,16 @@ fn a_precondition_is_checked_in_one_step_with_the_write() {
 #[test]
 fn open_names_the_variable_that_is_not_set_and_never_shows_the_secret_key() {
     let none = MemorySystem::new();
-    let access = StoreError::Backend("`AWS_ACCESS_KEY_ID` is not set".to_owned());
+    let access = StoreError::Backend(
+        "AWS_ACCESS_KEY_ID is not set: it holds the MinIO access key".to_owned(),
+    );
     assert_eq!(ObjectStore::open(&none, nowhere()).err(), Some(access));
     let only_access = MemorySystem::new()
         .with_env("AWS_ACCESS_KEY_ID", "archie")
         .unwrap();
-    let secret = StoreError::Backend("`AWS_SECRET_ACCESS_KEY` is not set".to_owned());
+    let secret = StoreError::Backend(
+        "AWS_SECRET_ACCESS_KEY is not set: it holds the MinIO secret key".to_owned(),
+    );
     assert_eq!(
         ObjectStore::open(&only_access, nowhere()).err(),
         Some(secret)

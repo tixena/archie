@@ -311,8 +311,8 @@ fn each_minio_variable_left_out_exits_3_with_one_line_naming_it() {
     let lines = [
         "archie: ARCHIE_MINIO_ENDPOINT is not set: it holds the MinIO server's address\n",
         "archie: ARCHIE_MINIO_REGION is not set: it holds the region the MinIO server expects\n",
-        "archie: minio:notes/vault: `AWS_ACCESS_KEY_ID` is not set\n",
-        "archie: minio:notes/vault: `AWS_SECRET_ACCESS_KEY` is not set\n",
+        "archie: AWS_ACCESS_KEY_ID is not set: it holds the MinIO access key\n",
+        "archie: AWS_SECRET_ACCESS_KEY is not set: it holds the MinIO secret key\n",
     ];
     for ((name, _), line) in MINIO_VARIABLES.iter().zip(lines) {
         let system = minio_variables(vault("# A\n"), Some(name));

@@ -164,7 +164,7 @@ fn minio<'system>(
     let config = ObjectConfig::new(endpoint, region, bucket.to_owned(), under);
     // `open` fails only on a key missing from the environment.
     let store = ObjectStore::open(system, config)
-        .map_err(|error| Failure::configuration(format!("{arg}: {error}")))?;
+        .map_err(|error| Failure::configuration(error.to_string()))?;
     let at = as_written(path)?;
     Ok((AnyStore::Minio(store), at))
 }
