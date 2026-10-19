@@ -16,7 +16,6 @@ mongodb = [
     "archie-core/mongodb",
     "dep:mongodb",
     "dep:bson",
-    "dep:chrono",
     "dep:serde",
     "dep:serde_json",
     "dep:tixschema",
@@ -32,11 +31,11 @@ thiserror.workspace = true
 
 # The MongoDB layer and the driver, under the mongodb feature
 bson = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tixschema = { workspace = true, optional = true }
 
 [dev-dependencies]
+chrono.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
