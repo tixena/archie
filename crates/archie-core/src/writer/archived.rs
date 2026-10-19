@@ -177,10 +177,14 @@ fn paragraph(writer: &mut Writer, node: &ArchivedParagraph) {
         }
         let mut lines = Vec::with_capacity(node.lines.len());
         let mut text_led = false;
-        for (index, line) in node.lines.iter().enumerate() {
+        for line in node.lines.iter() {
+            let first = lines.is_empty();
             nodes(&mut segments, &line.children, false);
-            let (text, led) = segments.line(index == 0);
-            if index == 0 {
+            let (text, led) = segments.line(first);
+            if text.is_empty() {
+                continue;
+            }
+            if first {
                 text_led = led;
             }
             lines.push(text);

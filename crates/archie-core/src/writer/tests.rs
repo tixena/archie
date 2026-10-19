@@ -1251,7 +1251,7 @@ fn empty_spans() -> [(Document, &'static str); 5] {
             ]),
             "ab\n",
         ),
-        (alone, "\n\nnext\n"),
+        (alone, "next\n"),
     ]
 }
 
@@ -1274,6 +1274,89 @@ fn an_emphasis_or_strong_that_writes_nothing_is_written_as_nothing_from_its_arch
             expected
         );
     }
+}
+
+/// A document of one section holding `blocks`.
+fn blocks_of(blocks: Vec<Block>) -> Document {
+    document(vec![Section::new(None, blocks, Vec::new())])
+}
+
+fn paragraph_of(lines: Vec<Line>) -> Block {
+    Block::Paragraph(Paragraph::new(lines))
+}
+
+/// Trees holding a paragraph line that writes nothing, each with the text
+/// it is written as.
+fn empty_lines() -> [(Document, &'static str); 5] {
+    let next = || paragraph_of(vec![Line::new(vec![text_node("next")])]);
+    [
+        (
+            blocks_of(vec![paragraph_of(vec![Line::new(Vec::new())]), next()]),
+            "next\n",
+        ),
+        (
+            blocks_of(vec![
+                paragraph_of(vec![Line::new(vec![text_node("")])]),
+                next(),
+            ]),
+            "next\n",
+        ),
+        (
+            blocks_of(vec![paragraph_of(vec![
+                Line::new(vec![text_node("a")]),
+                Line::new(Vec::new()),
+                Line::new(vec![text_node("b")]),
+            ])]),
+            "a\nb\n",
+        ),
+        (
+            blocks_of(vec![
+                paragraph_of(vec![Line::new(vec![text_node("a")])]),
+                paragraph_of(vec![Line::new(Vec::new())]),
+                next(),
+            ]),
+            "a\n\nnext\n",
+        ),
+        (
+            blocks_of(vec![paragraph_of(vec![
+                Line::new(Vec::new()),
+                Line::new(vec![text_node("[a]: b")]),
+            ])]),
+            "\\[a]: b\n",
+        ),
+    ]
+}
+
+#[test]
+fn a_paragraph_line_that_writes_nothing_is_not_written() {
+    for (built, expected) in empty_lines() {
+        let text = write_valid(&built, &WriteOptions::default()).unwrap();
+        assert_eq!(text, expected);
+        assert_eq!(written(&text), text);
+    }
+}
+
+#[test]
+fn a_paragraph_line_that_writes_nothing_is_not_written_from_its_archived_tree_too() {
+    for (built, expected) in empty_lines() {
+        let bytes = archive(&RawDocument::Valid(built));
+        assert_eq!(
+            write_archived(archived(&bytes), &WriteOptions::default()).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn the_lines_around_a_line_that_writes_nothing_read_back_as_one_paragraph() {
+    let a = || Line::new(vec![text_node("a")]);
+    let b = || Line::new(vec![text_node("b")]);
+    let built = blocks_of(vec![paragraph_of(vec![a(), Line::new(Vec::new()), b()])]);
+    let text = write_valid(&built, &WriteOptions::default()).unwrap();
+    assert_eq!(
+        body(&text),
+        blocks_of(vec![paragraph_of(vec![a(), b()])]).body
+    );
 }
 
 #[test]

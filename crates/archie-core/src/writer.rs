@@ -555,8 +555,9 @@ impl Writer {
         self.put_lines(|writer, pipes| writer.paragraph_lines(paragraph, &pieces, pipes));
     }
 
-    /// The lines of `paragraph`, with a backslash before every `|` of the
-    /// text when `pipes` is set, and whether the first starts with text.
+    /// The lines of `paragraph` that write something, with a backslash before
+    /// every `|` of the text when `pipes` is set, and whether the first
+    /// starts with text.
     fn paragraph_lines<T>(
         &mut self,
         paragraph: &Paragraph<T>,
@@ -572,9 +573,13 @@ impl Writer {
         }
         let mut lines = Vec::with_capacity(paragraph.lines.len());
         let mut text_led = false;
-        for (index, line) in paragraph.lines.iter().enumerate() {
-            let (text, led) = self.line(line, &mut segments, index == 0);
-            if index == 0 {
+        for line in &paragraph.lines {
+            let first = lines.is_empty();
+            let (text, led) = self.line(line, &mut segments, first);
+            if text.is_empty() {
+                continue;
+            }
+            if first {
                 text_led = led;
             }
             lines.push(text);
