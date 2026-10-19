@@ -783,7 +783,7 @@ impl Segments {
 
     /// What `children` writes between two `mark`s: the opening one before
     /// the first piece of a node written over several lines, the closing one
-    /// after the last.
+    /// after the last. A whole node that writes nothing is written as nothing.
     pub fn wrapped<F>(&mut self, continues: Continues, mark: &'static str, children: F)
     where
         F: FnOnce(&mut Self),
@@ -791,7 +791,13 @@ impl Segments {
         if opens(continues) {
             self.mark(mark, true);
         }
+        let written = (self.list.len(), self.cut.len());
         children(self);
+        let nothing = (self.list.len(), self.cut.len()) == written;
+        if opens(continues) && closes(continues) && !mark.is_empty() && nothing {
+            let _: Option<Segment> = self.list.pop();
+            return;
+        }
         if closes(continues) {
             self.mark(mark, false);
         }

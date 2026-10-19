@@ -1214,6 +1214,79 @@ fn the_neighbours_of_a_mark_are_written_as_references_from_its_archived_tree_too
     }
 }
 
+/// Trees holding an emphasis or a strong that writes nothing, each with the
+/// text it is written as.
+fn empty_spans() -> [(Document, &'static str); 5] {
+    let empty_strong = || Inline::Strong(Strong::new(Vec::new()));
+    let alone = document(vec![Section::new(
+        None,
+        vec![
+            Block::Paragraph(Paragraph::new(vec![Line::new(vec![empty_strong()])])),
+            Block::Paragraph(Paragraph::new(vec![Line::new(vec![text_node("next")])])),
+        ],
+        Vec::new(),
+    )]);
+    [
+        (
+            line_of(vec![text_node("a"), empty_strong(), text_node("b")]),
+            "ab\n",
+        ),
+        (
+            line_of(vec![text_node("a "), empty_strong(), text_node(" b")]),
+            "a  b\n",
+        ),
+        (
+            line_of(vec![
+                text_node("a"),
+                Inline::Emphasis(Emphasis::new(vec![empty_strong()])),
+                text_node("b"),
+            ]),
+            "ab\n",
+        ),
+        (
+            line_of(vec![
+                text_node("a"),
+                Inline::Strong(Strong::new(vec![text_node("")])),
+                text_node("b"),
+            ]),
+            "ab\n",
+        ),
+        (alone, "\n\nnext\n"),
+    ]
+}
+
+#[test]
+fn an_emphasis_or_strong_that_writes_nothing_is_written_as_nothing() {
+    for (built, expected) in empty_spans() {
+        assert_eq!(
+            write_valid(&built, &WriteOptions::default()).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn an_emphasis_or_strong_that_writes_nothing_is_written_as_nothing_from_its_archived_tree_too() {
+    for (built, expected) in empty_spans() {
+        let bytes = archive(&RawDocument::Valid(built));
+        assert_eq!(
+            write_archived(archived(&bytes), &WriteOptions::default()).unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn a_strong_over_a_line_break_in_an_underlined_heading_keeps_its_marks() {
+    let source = "**a\\\nb**\n===\n";
+    assert_eq!(round_trip(source), source);
+    let bytes = archive(&parse(source).document);
+    assert_eq!(
+        write_archived(archived(&bytes), &WriteOptions::default()).unwrap(),
+        source
+    );
+}
+
 #[test]
 fn a_line_break_in_a_heading_deeper_than_two_is_written_as_a_reference() {
     let line_break = Inline::LineBreak(LineBreak { kind: Kind(None) });
