@@ -8,9 +8,10 @@ use rkyv::util::AlignedVec;
 use rkyv::with::With;
 
 use crate::parser::ast::{
-    Alignment, ArchivedRawDocument, Args, Block, CodeBlock, Document, FrontmatterFormat, Heading,
-    Inline, Item, Kind, Line, LineBreak, LinkInline, List, Mapping, MarkdownBlock, Paragraph,
-    RawDocument, Section, Table, TableCell, TableFormat, TableRow, Text, Value,
+    Alignment, ArchivedRawDocument, Args, Block, Code, CodeBlock, Document, Emphasis,
+    FrontmatterFormat, Heading, Inline, Item, Kind, Line, LineBreak, Link, LinkForm, LinkInline,
+    LinkStrong, List, Mapping, MarkdownBlock, Paragraph, RawDocument, Section, Strong, Table,
+    TableCell, TableFormat, TableRow, Text, Value,
 };
 use crate::parser::error::{ParseError, RebuildError};
 use crate::parser::extension::{Construct, Context, Extension, Markdown, Plain, Written};
@@ -995,6 +996,222 @@ fn touching_spans_of_one_kind_are_written_as_one_span() {
 fn strong_around_emphasis_and_emphasis_inside_emphasis_keep_their_form() {
     assert_eq!(written("__*a*__\n"), "***a***\n");
     assert_eq!(written("_*a*_\n"), "**a**\n");
+}
+
+/// A document of one paragraph of one line holding `children`.
+fn line_of(children: Vec<Inline>) -> Document {
+    document(vec![Section::new(
+        None,
+        vec![Block::Paragraph(Paragraph::new(vec![Line::new(children)]))],
+        Vec::new(),
+    )])
+}
+
+/// Writes `built`, checks the text is `expected`, reads back as `built` and
+/// writes as itself again.
+fn writes_and_reads_back(built: &Document, expected: &str) {
+    let text = write_valid(built, &WriteOptions::default()).unwrap();
+    assert_eq!(text, expected);
+    assert_eq!(body(&text), built.body);
+    assert_eq!(written(&text), text);
+}
+
+#[test]
+fn a_mark_between_a_letter_and_punctuation_writes_the_letter_as_a_reference() {
+    let strong = |children| Inline::Strong(Strong::new(children));
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a"),
+            strong(vec![text_node("(bold)")]),
+            text_node("b"),
+        ]),
+        "&#97;**(bold)**&#98;\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![strong(vec![text_node("bold.")]), text_node("b")]),
+        "**bold.**&#98;\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a"),
+            Inline::Emphasis(Emphasis::new(vec![text_node("(it)")])),
+            text_node("b"),
+        ]),
+        "&#97;*(it)*&#98;\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a"),
+            strong(vec![Inline::Code(Code::new("x".to_owned()))]),
+            text_node("b"),
+        ]),
+        "&#97;**`x`**&#98;\n",
+    );
+}
+
+#[test]
+fn a_mark_with_a_space_inside_writes_the_space_and_the_letter_outside_as_references() {
+    let strong = |children| Inline::Strong(Strong::new(children));
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a"),
+            strong(vec![text_node(" bold")]),
+            text_node("b"),
+        ]),
+        "&#97;**&#32;bold**b\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a"),
+            strong(vec![text_node(" bold ")]),
+            text_node("b"),
+        ]),
+        "&#97;**&#32;bold&#32;**&#98;\n",
+    );
+}
+
+#[test]
+fn a_mark_inside_a_link_s_text_writes_its_neighbours_as_references() {
+    let link = Link::new(
+        LinkForm::Markdown,
+        "https://example.com".to_owned(),
+        None,
+        vec![
+            LinkInline::Text(Text::new("a".to_owned())),
+            LinkInline::Strong(LinkStrong::new(vec![LinkInline::Text(Text::new(
+                "(bold)".to_owned(),
+            ))])),
+            LinkInline::Text(Text::new("b".to_owned())),
+        ],
+    );
+    writes_and_reads_back(
+        &line_of(vec![Inline::Link(link)]),
+        "[&#97;**(bold)**&#98;](https://example.com)\n",
+    );
+}
+
+#[test]
+fn marks_that_open_and_close_where_they_stand_are_written_as_before() {
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a "),
+            Inline::Strong(Strong::new(vec![text_node("bold")])),
+            text_node(" b"),
+        ]),
+        "a **bold** b\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![
+            Inline::Strong(Strong::new(vec![text_node("x")])),
+            Inline::Emphasis(Emphasis::new(vec![text_node("y")])),
+        ]),
+        "**x***y*\n",
+    );
+    assert_eq!(
+        round_trip("&#97;**(bold)**&#98;\n"),
+        "&#97;**(bold)**&#98;\n"
+    );
+}
+
+#[test]
+fn a_run_that_closes_a_mark_and_opens_the_next_opens_and_closes_where_it_stands() {
+    let strong = |value: &str| Inline::Strong(Strong::new(vec![text_node(value)]));
+    let emphasis = |value: &str| Inline::Emphasis(Emphasis::new(vec![text_node(value)]));
+    writes_and_reads_back(
+        &line_of(vec![strong("x "), emphasis(" y")]),
+        "**x&#32;***&#32;y*\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![strong("x"), emphasis("(y)")]),
+        "**&#120;***(y)*\n",
+    );
+    writes_and_reads_back(
+        &line_of(vec![
+            text_node("a"),
+            strong("(x)"),
+            emphasis("(y)"),
+            text_node("b"),
+        ]),
+        "&#97;**(x)***(y)*&#98;\n",
+    );
+}
+
+#[test]
+fn the_neighbours_of_a_mark_are_written_as_references_from_its_archived_tree_too() {
+    let strong = |children| Inline::Strong(Strong::new(children));
+    let emphasis = |children| Inline::Emphasis(Emphasis::new(children));
+    let link = Link::new(
+        LinkForm::Markdown,
+        "https://example.com".to_owned(),
+        None,
+        vec![
+            LinkInline::Text(Text::new("a".to_owned())),
+            LinkInline::Strong(LinkStrong::new(vec![LinkInline::Text(Text::new(
+                "(bold)".to_owned(),
+            ))])),
+            LinkInline::Text(Text::new("b".to_owned())),
+        ],
+    );
+    let between = |inner| vec![text_node("a"), inner, text_node("b")];
+    for (children, expected) in [
+        (
+            between(strong(vec![text_node("(bold)")])),
+            "&#97;**(bold)**&#98;\n",
+        ),
+        (
+            vec![strong(vec![text_node("bold.")]), text_node("b")],
+            "**bold.**&#98;\n",
+        ),
+        (
+            between(emphasis(vec![text_node("(it)")])),
+            "&#97;*(it)*&#98;\n",
+        ),
+        (
+            between(strong(vec![Inline::Code(Code::new("x".to_owned()))])),
+            "&#97;**`x`**&#98;\n",
+        ),
+        (
+            between(strong(vec![text_node(" bold")])),
+            "&#97;**&#32;bold**b\n",
+        ),
+        (
+            between(strong(vec![text_node(" bold ")])),
+            "&#97;**&#32;bold&#32;**&#98;\n",
+        ),
+        (
+            vec![Inline::Link(link)],
+            "[&#97;**(bold)**&#98;](https://example.com)\n",
+        ),
+        (
+            vec![
+                strong(vec![text_node("x ")]),
+                emphasis(vec![text_node(" y")]),
+            ],
+            "**x&#32;***&#32;y*\n",
+        ),
+        (
+            vec![
+                strong(vec![text_node("x")]),
+                emphasis(vec![text_node("(y)")]),
+            ],
+            "**&#120;***(y)*\n",
+        ),
+        (
+            vec![
+                text_node("a"),
+                strong(vec![text_node("(x)")]),
+                emphasis(vec![text_node("(y)")]),
+                text_node("b"),
+            ],
+            "&#97;**(x)***(y)*&#98;\n",
+        ),
+    ] {
+        let bytes = archive(&RawDocument::Valid(line_of(children)));
+        assert_eq!(
+            write_archived(archived(&bytes), &WriteOptions::default()).unwrap(),
+            expected
+        );
+    }
 }
 
 #[test]

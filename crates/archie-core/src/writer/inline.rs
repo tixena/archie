@@ -34,6 +34,15 @@ enum Breaks {
     Reference,
 }
 
+/// What is around a text segment: the characters before and after it, and
+/// whether its first and its last character are written as references.
+#[derive(Clone, Copy)]
+struct Ends {
+    after: Near,
+    before: Near,
+    referred: Referred,
+}
+
 /// What is written next to a text: a character, the start or the end of its
 /// line, or nothing known, for a node written on its own.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -62,9 +71,19 @@ pub struct Pieces {
     spans: Vec<String>,
 }
 
-/// A part of a line: markup, written as it is, or text, escaped by what is
-/// around it. `link` marks text between a link's brackets.
+/// Whether the first and the last character of a text segment are written
+/// as character references.
+#[derive(Clone, Copy, Default)]
+struct Referred {
+    first: bool,
+    last: bool,
+}
+
+/// A part of a line: an emphasis or strong mark, which opens when `opens` is
+/// set and closes otherwise; markup, written as it is; or text, escaped by
+/// what is around it. `link` marks text between a link's brackets.
 enum Segment {
+    Mark { mark: &'static str, opens: bool },
     Markup(String),
     Text { link: bool, value: String },
 }
@@ -278,7 +297,8 @@ impl Segment {
     /// The character the segment starts with, or ends with when `last` is
     /// set.
     fn edge(&self, last: bool) -> Near {
-        let text = match self {
+        let text: &str = match self {
+            Self::Mark { mark, opens: _ } => mark,
             Self::Markup(markup) => markup,
             Self::Text { link: _, value } => value,
         };
@@ -378,6 +398,14 @@ impl Segments {
         self.markup(&written);
     }
 
+    /// Whether the segment at `at` is text.
+    fn is_text(&self, at: Option<usize>) -> bool {
+        matches!(
+            at.and_then(|index| self.list.get(index)),
+            Some(Segment::Text { link: _, value: _ })
+        )
+    }
+
     /// The line written, with a backslash before a first character that
     /// would start a block, or four spaces when inline HTML or code leads it
     /// and it is not `first`, a paragraph's first; and whether text leads it.
@@ -446,6 +474,13 @@ impl Segments {
         }
     }
 
+    /// Adds `mark`, an emphasis or strong mark that opens when `opens` is set.
+    fn mark(&mut self, mark: &'static str, opens: bool) {
+        if !mark.is_empty() {
+            self.list.push(Segment::Mark { mark, opens });
+        }
+    }
+
     /// `[text](destination "title")`, also for a reference link or an autolink. The `[` goes
     /// before the first piece of a link written over several lines, the rest after the last.
     pub fn markdown_link<F>(
@@ -473,7 +508,8 @@ impl Segments {
         }
         match self.list.last_mut() {
             Some(Segment::Markup(last)) => last.push_str(text),
-            Some(Segment::Text { link: _, value: _ }) | None => {
+            Some(Segment::Mark { mark: _, opens: _ } | Segment::Text { link: _, value: _ })
+            | None => {
                 self.list.push(Segment::Markup(text.to_owned()));
             }
         }
@@ -576,6 +612,77 @@ impl Segments {
         }
     }
 
+    /// For each segment, which of its edge characters are written as character
+    /// references, so that each run of marks opens or closes where it stands.
+    fn referred(&self, start: Near, end: Near) -> Vec<Referred> {
+        let mut referred = vec![Referred::default(); self.list.len()];
+        let mut index = 0;
+        while index < self.list.len() {
+            if !matches!(self.list[index], Segment::Mark { mark: _, opens: _ }) {
+                index += 1;
+                continue;
+            }
+            let first = index;
+            while matches!(
+                self.list.get(index),
+                Some(Segment::Mark { mark: _, opens: _ })
+            ) {
+                index += 1;
+            }
+            let run = &self.list[first..index];
+            let previous = first.checked_sub(1);
+            let next = (index < self.list.len()).then_some(index);
+            let before = previous.map_or(start, |at| self.list[at].edge(true));
+            let after = next.map_or(end, |at| self.list[at].edge(false));
+            let opens = run.iter().any(|mark| {
+                matches!(
+                    mark,
+                    Segment::Mark {
+                        mark: _,
+                        opens: true
+                    }
+                )
+            });
+            let closes = run.iter().any(|mark| {
+                matches!(
+                    mark,
+                    Segment::Mark {
+                        mark: _,
+                        opens: false
+                    }
+                )
+            });
+            let mut left = side(before, '*');
+            let mut right = side(after, '*');
+            // A space on the inside: before a closing mark, after an opening one.
+            if closes && left == Some(Side::Space) && self.is_text(previous) {
+                referred[first - 1].last = true;
+                left = Some(Side::Mark);
+            }
+            if opens && right == Some(Side::Space) && self.is_text(next) {
+                referred[index].first = true;
+                right = Some(Side::Mark);
+            }
+            // Punctuation on the inside needs a space or punctuation on the outside.
+            if opens
+                && right == Some(Side::Mark)
+                && left == Some(Side::Other)
+                && self.is_text(previous)
+            {
+                referred[first - 1].last = true;
+                left = Some(Side::Mark);
+            }
+            if closes
+                && left == Some(Side::Mark)
+                && right == Some(Side::Other)
+                && self.is_text(next)
+            {
+                referred[index].first = true;
+            }
+        }
+        referred
+    }
+
     /// `**strong**`, holding `children`.
     pub fn strong<T, N>(
         &mut self,
@@ -594,9 +701,11 @@ impl Segments {
 
     /// The segments written between `start` and `end`, which are taken out.
     pub fn take(&mut self, start: Near, end: Near) -> String {
+        let referred = self.referred(start, end);
         let mut out = String::new();
         for (index, segment) in self.list.iter().enumerate() {
             match segment {
+                Segment::Mark { mark, opens: _ } => out.push_str(mark),
                 Segment::Markup(markup) => out.push_str(markup),
                 Segment::Text { link, value } => {
                     let before = index
@@ -607,7 +716,12 @@ impl Segments {
                         .list
                         .get(index + 1)
                         .map_or(end, |next| next.edge(false));
-                    escape(&mut out, value, before, after, *link, self.pipes);
+                    let ends = Ends {
+                        after,
+                        before,
+                        referred: referred[index],
+                    };
+                    escape(&mut out, value, ends, *link, self.pipes);
                 }
             }
         }
@@ -626,7 +740,12 @@ impl Segments {
                 link: last_link,
                 value: last,
             }) if *last_link == link => last.push_str(value),
-            Some(Segment::Markup(_) | Segment::Text { link: _, value: _ }) | None => {
+            Some(
+                Segment::Mark { mark: _, opens: _ }
+                | Segment::Markup(_)
+                | Segment::Text { link: _, value: _ },
+            )
+            | None => {
                 self.list.push(Segment::Text {
                     link,
                     value: value.to_owned(),
@@ -665,16 +784,16 @@ impl Segments {
     /// What `children` writes between two `mark`s: the opening one before
     /// the first piece of a node written over several lines, the closing one
     /// after the last.
-    pub fn wrapped<F>(&mut self, continues: Continues, mark: &str, children: F)
+    pub fn wrapped<F>(&mut self, continues: Continues, mark: &'static str, children: F)
     where
         F: FnOnce(&mut Self),
     {
         if opens(continues) {
-            self.markup(mark);
+            self.mark(mark, true);
         }
         children(self);
         if closes(continues) {
-            self.markup(mark);
+            self.mark(mark, false);
         }
     }
 }
@@ -824,27 +943,32 @@ const fn closes(continues: Continues) -> bool {
 /// `!`, `[` and `]` that would start or end a link. Between a link's
 /// brackets, `link`, every bracket is escaped, and with `pipes`, every `|`.
 /// The spaces and tabs that start or end a line, which the reader drops,
-/// and every line ending are written as character references.
-fn escape(out: &mut String, value: &str, before: Near, after: Near, link: bool, pipes: bool) {
+/// every line ending, and the first or last character that `ends` marks
+/// are written as character references.
+fn escape(out: &mut String, value: &str, ends: Ends, link: bool, pipes: bool) {
     let chars: Vec<(usize, char)> = value.char_indices().collect();
     let blank = |&&(_, character): &&(usize, char)| matches!(character, ' ' | '\t');
-    let lead = if before == Near::Edge {
+    let lead = if ends.before == Near::Edge {
         chars.iter().take_while(blank).count()
     } else {
         0
     };
-    let trail = if after == Near::Edge {
+    let trail = if ends.after == Near::Edge {
         chars.len() - chars[lead..].iter().rev().take_while(blank).count()
     } else {
         chars.len()
     };
     let referred = |index: usize| {
-        index < lead || index >= trail || matches!(chars.get(index), Some(&(_, '\n')))
+        index < lead
+            || index >= trail
+            || matches!(chars.get(index), Some(&(_, '\n')))
+            || (ends.referred.first && index == 0)
+            || (ends.referred.last && index + 1 == chars.len())
     };
     let near = |index: usize| match chars.get(index) {
         Some(_) if referred(index) => Near::Char('&'),
         Some(&(_, character)) => Near::Char(character),
-        None => after,
+        None => ends.after,
     };
     let mut index = 0;
     while let Some(&(at, character)) = chars.get(index) {
@@ -853,7 +977,7 @@ fn escape(out: &mut String, value: &str, before: Near, after: Near, link: bool, 
             index += 1;
             continue;
         }
-        let previous = index.checked_sub(1).map_or(before, |back| {
+        let previous = index.checked_sub(1).map_or(ends.before, |back| {
             if referred(back) {
                 Near::Char(';')
             } else {
