@@ -19,7 +19,7 @@ const TOML: WriteOptions = WriteOptions {
 /// The rkyv form of `toml_multi_line_string.md`. A change to a model type
 /// changes it, and raises `RKYV_VERSION` with it.
 const PINNED: &[u8] =
-    b"archie\0\x02\x07\0\0\0Body.\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\
+    b"archie\0\x03\x07\0\0\0Body.\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\
     \xdc\xff\xff\xff\x01\0\0\0\0\0\0\0\x04\0\0\0\xf0\xff\xff\xff\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\
     \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xd0\xff\xff\xff\x01\0\0\0\0\0\0\0\0\0\
     \0\0\0\0\0\0\xec\xff\xff\xff\0\0\0\0\0\0\0\0\0\0\0\0\x01\0\0\0h\xff4h\xff4\xff\xff\xff\xff\
@@ -100,7 +100,7 @@ fn the_sample_puts_a_list_into_each_form() {
     let json = encode(&document, Form::Json, &options).unwrap();
     assert!(json.ends_with(b"\n"));
     let rkyv = encode(&document, Form::Rkyv, &options).unwrap();
-    assert_eq!(&rkyv[..8], b"archie\0\x02");
+    assert_eq!(&rkyv[..8], b"archie\0\x03");
     assert_eq!(
         stored_text(&rkyv, Form::Rkyv, &options).unwrap(),
         "- item\n"
@@ -186,7 +186,7 @@ fn rkyv_bytes_that_do_not_open_with_archie_a_zero_byte_and_a_version_are_not_arc
 fn rkyv_bytes_of_another_version_fail_naming_it() {
     let document = parse(FIXTURES[0]).document;
     let bytes = encode(&document, Form::Rkyv, &WriteOptions::default()).unwrap();
-    for version in [0, 1, 3, u8::MAX] {
+    for version in [0, 1, 2, 4, u8::MAX] {
         let mut other = bytes.clone();
         other[7] = version;
         assert!(matches!(

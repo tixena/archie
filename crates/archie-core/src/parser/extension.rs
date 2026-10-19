@@ -74,6 +74,8 @@ where
 }
 
 /// A model node a claimed node is written over: the plain node under it.
+/// An emphasis or a strong claimed inside a link's text comes back as
+/// `LinkEmphasis` or `LinkStrong`.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum Written<'node, T>
@@ -92,6 +94,8 @@ where
     Line(&'node ast::Line<T>),
     LineBreak(&'node ast::LineBreak<T>),
     Link(&'node ast::Link<T>),
+    LinkEmphasis(&'node ast::LinkEmphasis<T>),
+    LinkStrong(&'node ast::LinkStrong<T>),
     List(&'node ast::List<T>),
     MarkdownBlock(&'node MarkdownBlock<T>),
     Paragraph(&'node ast::Paragraph<T>),

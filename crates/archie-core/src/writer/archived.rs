@@ -11,11 +11,12 @@ use rkyv::with::DeserializeWith;
 
 use crate::parser::archive::{AsDays, AsDaysAndSeconds, AsLocalAndOffset, AsSecondsOfDay};
 use crate::parser::ast::{
-    Alignment, ArchivedAlignment, ArchivedArgs, ArchivedBlock, ArchivedCodeBlock,
-    ArchivedContinues, ArchivedFrontmatterFormat, ArchivedHeading, ArchivedInline, ArchivedLink,
-    ArchivedLinkForm, ArchivedList, ArchivedMarkdownBlock, ArchivedParagraph, ArchivedRawDocument,
-    ArchivedSection, ArchivedTable, ArchivedTableCell, ArchivedTableRow, ArchivedValue, Continues,
-    FrontmatterFormat, LinkForm,
+    Alignment, ArchivedAlignment, ArchivedArgs, ArchivedBlock, ArchivedCode, ArchivedCodeBlock,
+    ArchivedContinues, ArchivedFrontmatterFormat, ArchivedHeading, ArchivedHtml, ArchivedImage,
+    ArchivedInline, ArchivedLink, ArchivedLinkForm, ArchivedLinkInline, ArchivedList,
+    ArchivedMarkdownBlock, ArchivedParagraph, ArchivedRawDocument, ArchivedSection, ArchivedTable,
+    ArchivedTableCell, ArchivedTableRow, ArchivedText, ArchivedValue, Continues, FrontmatterFormat,
+    LinkForm,
 };
 use crate::writer::inline::{EMPHASIS, Pieces, STRONG, Segments};
 use crate::writer::table::{Row, lay_out};
@@ -23,6 +24,70 @@ use crate::writer::{Scalar, Shape, WriteError, Writer, as_read, info, toml, yaml
 
 /// A frontmatter mapping as rkyv archives it.
 type ArchivedMapping = ArchivedIndexMap<ArchivedString, ArchivedValue>;
+
+/// An archived node of a line, or of a link's text, as the writer reads it.
+trait ArchivedNode: Sized {
+    fn view(&self) -> ArchivedView<'_, Self>;
+}
+
+/// An archived inline node, its children typed as the node that holds them.
+enum ArchivedView<'node, N> {
+    Code(&'node ArchivedCode),
+    Emphasis {
+        children: &'node [N],
+        continues: Continues,
+    },
+    Html(&'node ArchivedHtml),
+    Image(&'node ArchivedImage),
+    LineBreak,
+    Link(&'node ArchivedLink),
+    Strong {
+        children: &'node [N],
+        continues: Continues,
+    },
+    Text(&'node ArchivedText),
+}
+
+impl ArchivedNode for ArchivedInline {
+    fn view(&self) -> ArchivedView<'_, Self> {
+        match self {
+            Self::Code(code) => ArchivedView::Code(code),
+            Self::Emphasis(emphasis) => ArchivedView::Emphasis {
+                children: &emphasis.children,
+                continues: continues(&emphasis.continues),
+            },
+            Self::Html(html) => ArchivedView::Html(html),
+            Self::Image(image) => ArchivedView::Image(image),
+            Self::LineBreak(_) => ArchivedView::LineBreak,
+            Self::Link(link) => ArchivedView::Link(link),
+            Self::Strong(strong) => ArchivedView::Strong {
+                children: &strong.children,
+                continues: continues(&strong.continues),
+            },
+            Self::Text(text) => ArchivedView::Text(text),
+        }
+    }
+}
+
+impl ArchivedNode for ArchivedLinkInline {
+    fn view(&self) -> ArchivedView<'_, Self> {
+        match self {
+            Self::Code(code) => ArchivedView::Code(code),
+            Self::Emphasis(emphasis) => ArchivedView::Emphasis {
+                children: &emphasis.children,
+                continues: continues(&emphasis.continues),
+            },
+            Self::Html(html) => ArchivedView::Html(html),
+            Self::Image(image) => ArchivedView::Image(image),
+            Self::LineBreak(_) => ArchivedView::LineBreak,
+            Self::Strong(strong) => ArchivedView::Strong {
+                children: &strong.children,
+                continues: continues(&strong.continues),
+            },
+            Self::Text(text) => ArchivedView::Text(text),
+        }
+    }
+}
 
 /// Writes `document` as a file holds it, as `Writer::raw_document` does.
 pub fn raw_document(writer: &mut Writer, document: &ArchivedRawDocument) {
@@ -166,38 +231,56 @@ const fn as_list(block: &ArchivedBlock) -> Option<&ArchivedList> {
 }
 
 /// Adds the code span pieces among `children` and their children.
-fn add_pieces(found: &mut Pieces, children: &[ArchivedInline]) {
+fn add_pieces<N>(found: &mut Pieces, children: &[N])
+where
+    N: ArchivedNode,
+{
     for node in children {
-        match node {
-            ArchivedInline::Code(code) => found.code(&code.value, continues(&code.continues)),
-            ArchivedInline::Emphasis(emphasis) => add_pieces(found, &emphasis.children),
-            ArchivedInline::Link(anchor) if matches!(anchor.form, ArchivedLinkForm::Markdown) => {
+        match node.view() {
+            ArchivedView::Code(code) => found.code(&code.value, continues(&code.continues)),
+            ArchivedView::Emphasis {
+                children: inner,
+                continues: _,
+            }
+            | ArchivedView::Strong {
+                children: inner,
+                continues: _,
+            } => add_pieces(found, inner),
+            ArchivedView::Link(anchor) if matches!(anchor.form, ArchivedLinkForm::Markdown) => {
                 add_pieces(found, &anchor.children);
             }
-            ArchivedInline::Strong(strong) => add_pieces(found, &strong.children),
-            ArchivedInline::Html(_)
-            | ArchivedInline::Image(_)
-            | ArchivedInline::LineBreak(_)
-            | ArchivedInline::Link(_)
-            | ArchivedInline::Text(_) => {}
+            ArchivedView::Html(_)
+            | ArchivedView::Image(_)
+            | ArchivedView::LineBreak
+            | ArchivedView::Link(_)
+            | ArchivedView::Text(_) => {}
         }
     }
 }
 
 /// Whether `children` hold a line break, among them or among the children
 /// of an emphasis, strong or markdown link they hold.
-fn holds_line_break(children: &[ArchivedInline]) -> bool {
-    children.iter().any(|node| match node {
-        ArchivedInline::Emphasis(emphasis) => holds_line_break(&emphasis.children),
-        ArchivedInline::LineBreak(_) => true,
-        ArchivedInline::Link(anchor) => {
+fn holds_line_break<N>(children: &[N]) -> bool
+where
+    N: ArchivedNode,
+{
+    children.iter().any(|node| match node.view() {
+        ArchivedView::Emphasis {
+            children: inner,
+            continues: _,
+        }
+        | ArchivedView::Strong {
+            children: inner,
+            continues: _,
+        } => holds_line_break(inner),
+        ArchivedView::LineBreak => true,
+        ArchivedView::Link(anchor) => {
             matches!(anchor.form, ArchivedLinkForm::Markdown) && holds_line_break(&anchor.children)
         }
-        ArchivedInline::Strong(strong) => holds_line_break(&strong.children),
-        ArchivedInline::Code(_)
-        | ArchivedInline::Html(_)
-        | ArchivedInline::Image(_)
-        | ArchivedInline::Text(_) => false,
+        ArchivedView::Code(_)
+        | ArchivedView::Html(_)
+        | ArchivedView::Image(_)
+        | ArchivedView::Text(_) => false,
     })
 }
 
@@ -218,37 +301,49 @@ fn link(segments: &mut Segments, node: &ArchivedLink) {
 }
 
 /// Adds `node`. `in_link` is set between a link's brackets.
-fn node(segments: &mut Segments, node: &ArchivedInline, in_link: bool) {
-    match node {
-        ArchivedInline::Code(code) => segments.code(&code.value, continues(&code.continues)),
-        ArchivedInline::Emphasis(emphasis) => {
-            segments.wrapped(continues(&emphasis.continues), EMPHASIS, |inner| {
-                nodes(inner, &emphasis.children, in_link);
+fn node<N>(segments: &mut Segments, node: &N, in_link: bool)
+where
+    N: ArchivedNode,
+{
+    match node.view() {
+        ArchivedView::Code(code) => segments.code(&code.value, continues(&code.continues)),
+        ArchivedView::Emphasis {
+            children,
+            continues,
+        } => {
+            segments.wrapped(continues, EMPHASIS, |inner| {
+                nodes(inner, children, in_link);
             });
         }
-        ArchivedInline::Html(html) => segments.html(&html.value),
-        ArchivedInline::Image(image) => segments.image(
+        ArchivedView::Html(html) => segments.html(&html.value),
+        ArchivedView::Image(image) => segments.image(
             link_form(&image.form),
             continues(&image.continues),
             &image.alt,
             &image.target,
             image.title.as_deref(),
         ),
-        ArchivedInline::LineBreak(_) => segments.line_break(),
-        ArchivedInline::Link(anchor) => link(segments, anchor),
-        ArchivedInline::Strong(strong) => {
-            segments.wrapped(continues(&strong.continues), STRONG, |inner| {
-                nodes(inner, &strong.children, in_link);
+        ArchivedView::LineBreak => segments.line_break(),
+        ArchivedView::Link(anchor) => link(segments, anchor),
+        ArchivedView::Strong {
+            children,
+            continues,
+        } => {
+            segments.wrapped(continues, STRONG, |inner| {
+                nodes(inner, children, in_link);
             });
         }
-        ArchivedInline::Text(text) => segments.text(&text.value, in_link),
+        ArchivedView::Text(text) => segments.text(&text.value, in_link),
     }
 }
 
 /// Adds `children`, each run of emphases or of strongs next to each other
 /// and whole on their line inside one pair of marks.
-fn nodes(segments: &mut Segments, children: &[ArchivedInline], in_link: bool) {
-    let touching_spans = |left: &ArchivedInline, right: &ArchivedInline| {
+fn nodes<N>(segments: &mut Segments, children: &[N], in_link: bool)
+where
+    N: ArchivedNode,
+{
+    let touching_spans = |left: &N, right: &N| {
         whole_span(left)
             .zip(whole_span(right))
             .is_some_and(|((left_mark, _), (right_mark, _))| left_mark == right_mark)
@@ -262,29 +357,44 @@ fn nodes(segments: &mut Segments, children: &[ArchivedInline], in_link: bool) {
 }
 
 /// The code span pieces among `children`.
-fn pieces(children: &[ArchivedInline]) -> Pieces {
+fn pieces<N>(children: &[N]) -> Pieces
+where
+    N: ArchivedNode,
+{
     let mut found = Pieces::default();
     add_pieces(&mut found, children);
     found
 }
 
 /// The text of `node`, when it is text.
-fn text_of(node: &ArchivedInline) -> Option<&str> {
-    match node {
-        ArchivedInline::Text(text) => Some(&text.value),
-        ArchivedInline::Code(_)
-        | ArchivedInline::Emphasis(_)
-        | ArchivedInline::Html(_)
-        | ArchivedInline::Image(_)
-        | ArchivedInline::LineBreak(_)
-        | ArchivedInline::Link(_)
-        | ArchivedInline::Strong(_) => None,
+fn text_of<N>(node: &N) -> Option<&str>
+where
+    N: ArchivedNode,
+{
+    match node.view() {
+        ArchivedView::Text(text) => Some(&text.value),
+        ArchivedView::Code(_)
+        | ArchivedView::Emphasis {
+            children: _,
+            continues: _,
+        }
+        | ArchivedView::Html(_)
+        | ArchivedView::Image(_)
+        | ArchivedView::LineBreak
+        | ArchivedView::Link(_)
+        | ArchivedView::Strong {
+            children: _,
+            continues: _,
+        } => None,
     }
 }
 
 /// `run`, emphases or strongs next to each other, inside one pair of their
 /// mark, the children of each one after the other.
-fn touching(segments: &mut Segments, run: &[ArchivedInline], in_link: bool) {
+fn touching<N>(segments: &mut Segments, run: &[N], in_link: bool)
+where
+    N: ArchivedNode,
+{
     let spans = run.iter().filter_map(whole_span);
     let mark = spans.clone().next().map_or("", |(mark, _)| mark);
     segments.wrapped(Continues::Neither, mark, |inner| {
@@ -296,27 +406,27 @@ fn touching(segments: &mut Segments, run: &[ArchivedInline], in_link: bool) {
 
 /// The mark and the children of `node`, when it is an emphasis or a strong
 /// that is whole on its line.
-fn whole_span(node: &ArchivedInline) -> Option<(&'static str, &[ArchivedInline])> {
-    match node {
-        ArchivedInline::Emphasis(emphasis)
-            if matches!(emphasis.continues, ArchivedContinues::Neither) =>
-        {
-            Some((EMPHASIS, emphasis.children.as_slice()))
-        }
-        ArchivedInline::Strong(strong)
-            if matches!(strong.continues, ArchivedContinues::Neither) =>
-        {
-            Some((STRONG, strong.children.as_slice()))
-        }
-        ArchivedInline::Code(_)
-        | ArchivedInline::Emphasis(_)
-        | ArchivedInline::Html(_)
-        | ArchivedInline::Image(_)
-        | ArchivedInline::LineBreak(_)
-        | ArchivedInline::Link(_)
-        | ArchivedInline::Strong(_)
-        | ArchivedInline::Text(_) => None,
-    }
+fn whole_span<N>(node: &N) -> Option<(&'static str, &[N])>
+where
+    N: ArchivedNode,
+{
+    let (mark, children, continues) = match node.view() {
+        ArchivedView::Emphasis {
+            children,
+            continues,
+        } => (EMPHASIS, children, continues),
+        ArchivedView::Strong {
+            children,
+            continues,
+        } => (STRONG, children, continues),
+        ArchivedView::Code(_)
+        | ArchivedView::Html(_)
+        | ArchivedView::Image(_)
+        | ArchivedView::LineBreak
+        | ArchivedView::Link(_)
+        | ArchivedView::Text(_) => return None,
+    };
+    (continues == Continues::Neither).then_some((mark, children))
 }
 
 /// The text of `node`'s content, with its levels counted from one. `writer`

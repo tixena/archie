@@ -563,7 +563,7 @@ where
                 kind: line_break.kind,
             }),
             Self::Link(link) => ast::Inline::Link(ast::Link {
-                children,
+                children: link_text(children),
                 continues: link.continues,
                 form: link.form,
                 kind: link.kind,
@@ -800,6 +800,15 @@ impl ScalarValue {
     }
 }
 
+/// An emphasis or a strong of a link's text, waiting on its children.
+enum Waiting<E>
+where
+    E: Extension,
+{
+    Emphasis(Continues, Kind<E>),
+    Strong(Continues, Kind<E>),
+}
+
 /// The model's nodes for `nodes`, children before their parent. A node
 /// waits on a stack, its children taken out of it, while they are
 /// converted, so nesting takes no call depth.
@@ -824,6 +833,83 @@ where
         } else if let Some((node, before, after)) = waiting.pop() {
             let children = mem::replace(&mut converted, before);
             converted.push(node.with_children(children));
+            rest = after;
+        } else {
+            return converted;
+        }
+    }
+}
+
+/// `nodes`, a link's converted children, as link text. A link among them,
+/// which the parser does not build, is replaced by its own children. A node
+/// waits on a stack while its children are converted, so nesting takes no
+/// call depth.
+fn link_text<E>(nodes: Vec<ast::Inline<E>>) -> Vec<ast::LinkInline<E>>
+where
+    E: Extension,
+{
+    // Each waiting node, with its siblings converted before it and those
+    // still to convert after it.
+    let mut waiting = Vec::new();
+    let mut converted = Vec::new();
+    let mut rest = nodes.into_iter();
+    loop {
+        if let Some(node) = rest.next() {
+            let opened = match node {
+                ast::Inline::Code(code) => {
+                    converted.push(ast::LinkInline::Code(code));
+                    None
+                }
+                ast::Inline::Emphasis(emphasis) => Some((
+                    Waiting::Emphasis(emphasis.continues, emphasis.kind),
+                    emphasis.children,
+                )),
+                ast::Inline::Html(html) => {
+                    converted.push(ast::LinkInline::Html(html));
+                    None
+                }
+                ast::Inline::Image(image) => {
+                    converted.push(ast::LinkInline::Image(image));
+                    None
+                }
+                ast::Inline::LineBreak(line_break) => {
+                    converted.push(ast::LinkInline::LineBreak(line_break));
+                    None
+                }
+                ast::Inline::Link(link) => {
+                    converted.extend(link.children);
+                    None
+                }
+                ast::Inline::Strong(strong) => Some((
+                    Waiting::Strong(strong.continues, strong.kind),
+                    strong.children,
+                )),
+                ast::Inline::Text(text) => {
+                    converted.push(ast::LinkInline::Text(text));
+                    None
+                }
+            };
+            if let Some((parent, children)) = opened {
+                let before = mem::take(&mut converted);
+                let after = mem::replace(&mut rest, children.into_iter());
+                waiting.push((parent, before, after));
+            }
+        } else if let Some((parent, before, after)) = waiting.pop() {
+            let children = mem::replace(&mut converted, before);
+            converted.push(match parent {
+                Waiting::Emphasis(continues, kind) => {
+                    ast::LinkInline::Emphasis(ast::LinkEmphasis {
+                        children,
+                        continues,
+                        kind,
+                    })
+                }
+                Waiting::Strong(continues, kind) => ast::LinkInline::Strong(ast::LinkStrong {
+                    children,
+                    continues,
+                    kind,
+                }),
+            });
             rest = after;
         } else {
             return converted;

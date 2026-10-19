@@ -6,8 +6,8 @@ use core::ops::Range;
 use super::json::{reads_back_from_json, rebuilds_from_json};
 use super::{Rows, on_two_megabytes, outline, valid_body};
 use crate::parser::ast::{
-    Block, CodeBlock, FrontmatterFormat, Inline, Mapping, MarkdownBlock, RawDocument, TableCell,
-    Value,
+    Block, CodeBlock, FrontmatterFormat, Inline, LinkInline, Mapping, MarkdownBlock, RawDocument,
+    TableCell, Value,
 };
 use crate::parser::error::ParseError;
 use crate::parser::extension::{Construct, Context, Either, Extension, Plain, With, Written};
@@ -1789,6 +1789,38 @@ fn an_extension_that_only_reads_writes_the_plain_node_in_archies_form() {
         write(&marked, &WriteOptions::default()).unwrap(),
         "*a* **b** <br>\\\nc\n"
     );
+}
+
+#[test]
+fn an_emphasis_and_a_strong_claimed_inside_link_text_are_written_back_unchanged() {
+    let source = "[*a* and **b**](u)\n";
+    let document = parse_with::<Marks>(source, &ParseOptions::default())
+        .unwrap()
+        .document;
+    let children = match body_of(&document).sections[0].blocks.as_slice() {
+        [Block::Paragraph(paragraph)] => match paragraph.lines[0].children.as_slice() {
+            [Inline::Link(link)] => link.children.as_slice(),
+            _ => &[],
+        },
+        _ => &[],
+    };
+    let labels: Vec<Option<&str>> = children
+        .iter()
+        .map(|inline| {
+            let kind = match inline {
+                LinkInline::Code(code) => &code.kind,
+                LinkInline::Emphasis(emphasis) => &emphasis.kind,
+                LinkInline::Html(html) => &html.kind,
+                LinkInline::Image(image) => &image.kind,
+                LinkInline::LineBreak(line_break) => &line_break.kind,
+                LinkInline::Strong(strong) => &strong.kind,
+                LinkInline::Text(text) => &text.kind,
+            };
+            kind.0.as_deref().and_then(second).map(String::as_str)
+        })
+        .collect();
+    assert_eq!(labels, [Some("emphasis"), None, Some("strong")]);
+    assert_eq!(write(&document, &WriteOptions::default()).unwrap(), source);
 }
 
 #[test]

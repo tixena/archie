@@ -412,9 +412,13 @@ parts of an image's alt are joined with a space, and the parts of inline HTML wi
 - **Balanced brackets.** Brackets pair as CommonMark's stack of brackets pairs them, in
   one pass over each paragraph that keeps every code span, autolink, inline HTML and
   link target it reads for the scanner. Link text may hold balanced brackets:
-  `[a [b] c](d)` is a link holding `a [b] c`. Once a link is read, no `[` before it
-  opens a link, so a link never holds a link, at any depth, also through an image:
-  `[a ![[b](c)](d) e](f)` is the text `[a `, an image of `d`, and the text ` e](f)`.
+  `[a [b] c](d)` is a link holding `a [b] c`. Once a link, a wiki link or an autolink
+  is read, no `[` before it opens a link, so a link never holds a link, at any depth,
+  also through an image: `[a ![[b](c)](d) e](f)` is the text `[a `, an image of `d`,
+  and the text ` e](f)`, and `[<https://a.example>](https://b.example)` is the text
+  `[`, an autolink, and the text `](https://b.example)`. In the tree, a link's children
+  are `LinkInline` nodes: every inline node but `Link`, with `LinkEmphasis` and
+  `LinkStrong` for an emphasis and a strong, whose children are `LinkInline` nodes too.
   A bracket after a backslash, or inside a code span, an autolink, inline HTML, a wiki
   link, or a link's destination or label, is in no pair.
 - **Wiki links.** `[[target]]` and `[[target|alias]]` are read before a bracketed link
@@ -1021,7 +1025,9 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   `Link`, `List`, `MarkdownBlock`, `Paragraph`, `Section`, `Strong`, `Table`,
   `TableCell`, `TableRow`, `Text` and `ThematicBreak`. `Written<'node, T>` has the same
   variants over the model's nodes, which hold no span: `write` gets the plain node a
-  claimed node is written over.
+  claimed node is written over. It also has `LinkEmphasis` and `LinkStrong`: an
+  emphasis or a strong that an extension claimed inside a link's text, offered as
+  `Construct::Emphasis` or `Construct::Strong`, comes back as one of them.
 - archie builds the whole located tree first, then offers every node to the
   extensions, children before parents: a section's heading, blocks and subsections
   before the section, an item's or a cell's markdown block before the item or the

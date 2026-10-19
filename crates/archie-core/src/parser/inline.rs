@@ -318,10 +318,10 @@ impl<'src> Layout<'src> {
 
     /// The code spans, autolinks, inline HTML, links and images, each read
     /// once, for the scanner to take. Brackets pair by `CommonMark`'s stack
-    /// of brackets: once a link is read, no `[` before it opens one. A
-    /// bracket after a backslash, or inside a code span, an autolink, inline
-    /// HTML, a wiki link or embed, or the destination or label of a link or
-    /// an image, is in no pair.
+    /// of brackets: once a link, a wiki link or an autolink is read, no `[`
+    /// before it opens one. A bracket after a backslash, or inside a code
+    /// span, an autolink, inline HTML, a wiki link or embed, or the
+    /// destination or label of a link or an image, is in no pair.
     fn find(&self, definitions: &Definitions) -> HashMap<usize, Found> {
         let source = self.text.as_str();
         let bytes = source.as_bytes();
@@ -382,10 +382,14 @@ impl<'src> Layout<'src> {
                     self.code_end(at, ticks)
                         .map_or(at + ticks, |close| keep(&mut found, at, Found::Code(close)))
                 }
-                b'<' => autolink_at(source, at, end)
-                    .map(|(target, close)| Found::Autolink { close, target })
-                    .or_else(|| html::inline_end(source, at, &mut searches).map(Found::Html))
-                    .map_or(at + 1, |node| keep(&mut found, at, node)),
+                b'<' => match autolink_at(source, at, end) {
+                    Some((target, close)) => {
+                        active = open.len();
+                        keep(&mut found, at, Found::Autolink { close, target })
+                    }
+                    None => html::inline_end(source, at, &mut searches)
+                        .map_or(at + 1, |close| keep(&mut found, at, Found::Html(close))),
+                },
                 _ => at + 1,
             };
         }

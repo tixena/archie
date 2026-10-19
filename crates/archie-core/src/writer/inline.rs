@@ -4,7 +4,9 @@
 use core::fmt::{self, Write as _};
 use core::mem;
 
-use crate::parser::ast::{Continues, Emphasis, Inline, Link, LinkForm, Strong};
+use crate::parser::ast::{
+    Code, Continues, Html, Image, Inline, Kind, LineBreak, Link, LinkForm, LinkInline, Text,
+};
 use crate::parser::definition;
 use crate::parser::entity;
 use crate::parser::extension::{Extension, Written};
@@ -91,6 +93,39 @@ enum Side {
     Space,
 }
 
+/// A node of a line, or of a link's text, as the writer reads it.
+pub trait InlineNode<T>: Sized
+where
+    T: Extension,
+{
+    fn view(&self) -> View<'_, T, Self>;
+}
+
+/// An inline node, its children typed as the node that holds them.
+pub enum View<'node, T, N>
+where
+    T: Extension,
+{
+    Code(&'node Code<T>),
+    Emphasis {
+        children: &'node [N],
+        continues: Continues,
+        kind: &'node Kind<T>,
+        plain: Written<'node, T>,
+    },
+    Html(&'node Html<T>),
+    Image(&'node Image<T>),
+    LineBreak(&'node LineBreak<T>),
+    Link(&'node Link<T>),
+    Strong {
+        children: &'node [N],
+        continues: Continues,
+        kind: &'node Kind<T>,
+        plain: Written<'node, T>,
+    },
+    Text(&'node Text<T>),
+}
+
 impl Fence {
     /// A run of backticks longer than any inside `value`, padded when the
     /// value starts or ends with a backtick, or starts and ends with a
@@ -108,32 +143,97 @@ impl Fence {
     }
 }
 
+impl<T> InlineNode<T> for Inline<T>
+where
+    T: Extension,
+{
+    fn view(&self) -> View<'_, T, Self> {
+        match self {
+            Self::Code(code) => View::Code(code),
+            Self::Emphasis(emphasis) => View::Emphasis {
+                children: &emphasis.children,
+                continues: emphasis.continues,
+                kind: &emphasis.kind,
+                plain: Written::Emphasis(emphasis),
+            },
+            Self::Html(html) => View::Html(html),
+            Self::Image(image) => View::Image(image),
+            Self::LineBreak(line_break) => View::LineBreak(line_break),
+            Self::Link(link) => View::Link(link),
+            Self::Strong(strong) => View::Strong {
+                children: &strong.children,
+                continues: strong.continues,
+                kind: &strong.kind,
+                plain: Written::Strong(strong),
+            },
+            Self::Text(text) => View::Text(text),
+        }
+    }
+}
+
+impl<T> InlineNode<T> for LinkInline<T>
+where
+    T: Extension,
+{
+    fn view(&self) -> View<'_, T, Self> {
+        match self {
+            Self::Code(code) => View::Code(code),
+            Self::Emphasis(emphasis) => View::Emphasis {
+                children: &emphasis.children,
+                continues: emphasis.continues,
+                kind: &emphasis.kind,
+                plain: Written::LinkEmphasis(emphasis),
+            },
+            Self::Html(html) => View::Html(html),
+            Self::Image(image) => View::Image(image),
+            Self::LineBreak(line_break) => View::LineBreak(line_break),
+            Self::Strong(strong) => View::Strong {
+                children: &strong.children,
+                continues: strong.continues,
+                kind: &strong.kind,
+                plain: Written::LinkStrong(strong),
+            },
+            Self::Text(text) => View::Text(text),
+        }
+    }
+}
+
 impl Pieces {
     /// Adds the code span pieces among `nodes` and their children.
-    pub fn add<T>(&mut self, nodes: &[Inline<T>])
+    pub fn add<T, N>(&mut self, nodes: &[N])
     where
         T: Extension,
+        N: InlineNode<T>,
     {
         for node in nodes {
-            match node {
-                Inline::Code(code) if code.kind.0.is_none() => {
-                    self.code(&code.value, code.continues);
+            match node.view() {
+                View::Code(code) => {
+                    if code.kind.0.is_none() {
+                        self.code(&code.value, code.continues);
+                    }
                 }
-                Inline::Emphasis(emphasis) if emphasis.kind.0.is_none() => {
-                    self.add(&emphasis.children);
+                View::Emphasis {
+                    children,
+                    continues: _,
+                    kind,
+                    plain: _,
                 }
-                Inline::Link(link) if link.kind.0.is_none() && link.form == LinkForm::Markdown => {
-                    self.add(&link.children);
+                | View::Strong {
+                    children,
+                    continues: _,
+                    kind,
+                    plain: _,
+                } => {
+                    if kind.0.is_none() {
+                        self.add(children);
+                    }
                 }
-                Inline::Strong(strong) if strong.kind.0.is_none() => self.add(&strong.children),
-                Inline::Code(_)
-                | Inline::Emphasis(_)
-                | Inline::Html(_)
-                | Inline::Image(_)
-                | Inline::LineBreak(_)
-                | Inline::Link(_)
-                | Inline::Strong(_)
-                | Inline::Text(_) => {}
+                View::Link(link) => {
+                    if link.kind.0.is_none() && link.form == LinkForm::Markdown {
+                        self.add(&link.children);
+                    }
+                }
+                View::Html(_) | View::Image(_) | View::LineBreak(_) | View::Text(_) => {}
             }
         }
     }
@@ -163,9 +263,10 @@ impl Pieces {
     }
 
     /// The code span pieces among `nodes`.
-    pub fn of<T>(nodes: &[Inline<T>]) -> Self
+    pub fn of<T, N>(nodes: &[N]) -> Self
     where
         T: Extension,
+        N: InlineNode<T>,
     {
         let mut pieces = Self::default();
         pieces.add(nodes);
@@ -216,13 +317,19 @@ impl Segments {
         self.breaks = Breaks::Cut;
     }
 
-    /// `*emphasis*`.
-    pub fn emphasis<T>(&mut self, writer: &mut Writer, emphasis: &Emphasis<T>, link: bool)
-    where
+    /// `*emphasis*`, holding `children`.
+    pub fn emphasis<T, N>(
+        &mut self,
+        writer: &mut Writer,
+        continues: Continues,
+        children: &[N],
+        link: bool,
+    ) where
         T: Extension,
+        N: InlineNode<T>,
     {
-        self.wrapped(emphasis.continues, EMPHASIS, |segments| {
-            segments.nodes(writer, &emphasis.children, link);
+        self.wrapped(continues, EMPHASIS, |segments| {
+            segments.nodes(writer, children, link);
         });
     }
 
@@ -385,19 +492,30 @@ impl Segments {
 
     /// Adds `node`: what the extension that claimed it writes, or else its
     /// plain form. `link` is set between a link's brackets.
-    pub fn node<T>(&mut self, writer: &mut Writer, node: &Inline<T>, link: bool)
+    pub fn node<T, N>(&mut self, writer: &mut Writer, node: &N, link: bool)
     where
         T: Extension,
+        N: InlineNode<T>,
     {
-        let (kind, plain) = match node {
-            Inline::Code(code) => (&code.kind, Written::Code(code)),
-            Inline::Emphasis(emphasis) => (&emphasis.kind, Written::Emphasis(emphasis)),
-            Inline::Html(html) => (&html.kind, Written::Html(html)),
-            Inline::Image(image) => (&image.kind, Written::Image(image)),
-            Inline::LineBreak(line_break) => (&line_break.kind, Written::LineBreak(line_break)),
-            Inline::Link(anchor) => (&anchor.kind, Written::Link(anchor)),
-            Inline::Strong(strong) => (&strong.kind, Written::Strong(strong)),
-            Inline::Text(text) => (&text.kind, Written::Text(text)),
+        let (kind, plain) = match node.view() {
+            View::Code(code) => (&code.kind, Written::Code(code)),
+            View::Emphasis {
+                children: _,
+                continues: _,
+                kind,
+                plain,
+            }
+            | View::Strong {
+                children: _,
+                continues: _,
+                kind,
+                plain,
+            } => (kind, plain),
+            View::Html(html) => (&html.kind, Written::Html(html)),
+            View::Image(image) => (&image.kind, Written::Image(image)),
+            View::LineBreak(line_break) => (&line_break.kind, Written::LineBreak(line_break)),
+            View::Link(anchor) => (&anchor.kind, Written::Link(anchor)),
+            View::Text(text) => (&text.kind, Written::Text(text)),
         };
         match kind.0.as_deref() {
             Some(claimed) => self.markup(&writer.claimed(claimed, plain)),
@@ -407,11 +525,12 @@ impl Segments {
 
     /// Adds `nodes`, each run of plain emphases or of plain strongs next to
     /// each other and whole on their line inside one pair of marks.
-    pub fn nodes<T>(&mut self, writer: &mut Writer, nodes: &[Inline<T>], link: bool)
+    pub fn nodes<T, N>(&mut self, writer: &mut Writer, nodes: &[N], link: bool)
     where
         T: Extension,
+        N: InlineNode<T>,
     {
-        let touching = |left: &Inline<T>, right: &Inline<T>| {
+        let touching = |left: &N, right: &N| {
             whole_span(left)
                 .zip(whole_span(right))
                 .is_some_and(|((left_mark, _), (right_mark, _))| left_mark == right_mark)
@@ -424,35 +543,52 @@ impl Segments {
         }
     }
 
-    fn plain<T>(&mut self, writer: &mut Writer, node: &Inline<T>, link: bool)
+    fn plain<T, N>(&mut self, writer: &mut Writer, node: &N, link: bool)
     where
         T: Extension,
+        N: InlineNode<T>,
     {
-        match node {
-            Inline::Code(code) => self.code(&code.value, code.continues),
-            Inline::Emphasis(emphasis) => self.emphasis(writer, emphasis, link),
-            Inline::Html(html) => self.html(&html.value),
-            Inline::Image(image) => self.image(
+        match node.view() {
+            View::Code(code) => self.code(&code.value, code.continues),
+            View::Emphasis {
+                children,
+                continues,
+                kind: _,
+                plain: _,
+            } => self.emphasis(writer, continues, children, link),
+            View::Html(html) => self.html(&html.value),
+            View::Image(image) => self.image(
                 image.form,
                 image.continues,
                 &image.alt,
                 &image.target,
                 image.title.as_deref(),
             ),
-            Inline::LineBreak(_) => self.line_break(),
-            Inline::Link(anchor) => self.link(writer, anchor),
-            Inline::Strong(strong) => self.strong(writer, strong, link),
-            Inline::Text(text) => self.text(&text.value, link),
+            View::LineBreak(_) => self.line_break(),
+            View::Link(anchor) => self.link(writer, anchor),
+            View::Strong {
+                children,
+                continues,
+                kind: _,
+                plain: _,
+            } => self.strong(writer, continues, children, link),
+            View::Text(text) => self.text(&text.value, link),
         }
     }
 
-    /// `**strong**`.
-    pub fn strong<T>(&mut self, writer: &mut Writer, strong: &Strong<T>, link: bool)
-    where
+    /// `**strong**`, holding `children`.
+    pub fn strong<T, N>(
+        &mut self,
+        writer: &mut Writer,
+        continues: Continues,
+        children: &[N],
+        link: bool,
+    ) where
         T: Extension,
+        N: InlineNode<T>,
     {
-        self.wrapped(strong.continues, STRONG, |segments| {
-            segments.nodes(writer, &strong.children, link);
+        self.wrapped(continues, STRONG, |segments| {
+            segments.nodes(writer, children, link);
         });
     }
 
@@ -501,9 +637,10 @@ impl Segments {
 
     /// `run`, plain emphases or plain strongs next to each other, inside one
     /// pair of their mark, the children of each one after the other.
-    fn touching<T>(&mut self, writer: &mut Writer, run: &[Inline<T>], link: bool)
+    fn touching<T, N>(&mut self, writer: &mut Writer, run: &[N], link: bool)
     where
         T: Extension,
+        N: InlineNode<T>,
     {
         let spans = run.iter().filter_map(whole_span);
         let mark = spans.clone().next().map_or("", |(mark, _)| mark);
@@ -568,22 +705,31 @@ pub fn guard_definition(lines: &mut [String]) {
 
 /// Whether `nodes` hold a line break no extension claimed, among them or
 /// among the children of a plain emphasis, strong or link they hold.
-pub fn holds_line_break<T>(nodes: &[Inline<T>]) -> bool
+pub fn holds_line_break<T, N>(nodes: &[N]) -> bool
 where
     T: Extension,
+    N: InlineNode<T>,
 {
-    nodes.iter().any(|node| match node {
-        Inline::Emphasis(emphasis) => {
-            emphasis.kind.0.is_none() && holds_line_break(&emphasis.children)
+    nodes.iter().any(|node| match node.view() {
+        View::Emphasis {
+            children,
+            continues: _,
+            kind,
+            plain: _,
         }
-        Inline::LineBreak(line_break) => line_break.kind.0.is_none(),
-        Inline::Link(link) => {
+        | View::Strong {
+            children,
+            continues: _,
+            kind,
+            plain: _,
+        } => kind.0.is_none() && holds_line_break(children),
+        View::LineBreak(line_break) => line_break.kind.0.is_none(),
+        View::Link(link) => {
             link.kind.0.is_none()
                 && link.form == LinkForm::Markdown
                 && holds_line_break(&link.children)
         }
-        Inline::Strong(strong) => strong.kind.0.is_none() && holds_line_break(&strong.children),
-        Inline::Code(_) | Inline::Html(_) | Inline::Image(_) | Inline::Text(_) => false,
+        View::Code(_) | View::Html(_) | View::Image(_) | View::Text(_) => false,
     })
 }
 
@@ -865,45 +1011,58 @@ fn paired(destination: &str) -> bool {
 
 /// The mark and the children of `node`, when it is an emphasis or a strong
 /// that no extension claimed and that is whole on its line.
-fn whole_span<T>(node: &Inline<T>) -> Option<(&'static str, &[Inline<T>])>
+fn whole_span<'node, T, N>(node: &'node N) -> Option<(&'static str, &'node [N])>
 where
-    T: Extension,
+    T: Extension + 'node,
+    N: InlineNode<T>,
 {
-    match node {
-        Inline::Emphasis(emphasis)
-            if emphasis.kind.0.is_none() && emphasis.continues == Continues::Neither =>
-        {
-            Some((EMPHASIS, &emphasis.children))
-        }
-        Inline::Strong(strong)
-            if strong.kind.0.is_none() && strong.continues == Continues::Neither =>
-        {
-            Some((STRONG, &strong.children))
-        }
-        Inline::Code(_)
-        | Inline::Emphasis(_)
-        | Inline::Html(_)
-        | Inline::Image(_)
-        | Inline::LineBreak(_)
-        | Inline::Link(_)
-        | Inline::Strong(_)
-        | Inline::Text(_) => None,
-    }
+    let (mark, children, continues, kind) = match node.view() {
+        View::Emphasis {
+            children,
+            continues,
+            kind,
+            plain: _,
+        } => (EMPHASIS, children, continues, kind),
+        View::Strong {
+            children,
+            continues,
+            kind,
+            plain: _,
+        } => (STRONG, children, continues, kind),
+        View::Code(_)
+        | View::Html(_)
+        | View::Image(_)
+        | View::LineBreak(_)
+        | View::Link(_)
+        | View::Text(_) => return None,
+    };
+    (kind.0.is_none() && continues == Continues::Neither).then_some((mark, children))
 }
 
 /// The text of `node`, when it is text.
-fn text_of<T>(node: &Inline<T>) -> Option<&str>
+fn text_of<'node, T, N>(node: &'node N) -> Option<&'node str>
 where
-    T: Extension,
+    T: Extension + 'node,
+    N: InlineNode<T>,
 {
-    match node {
-        Inline::Text(text) => Some(&text.value),
-        Inline::Code(_)
-        | Inline::Emphasis(_)
-        | Inline::Html(_)
-        | Inline::Image(_)
-        | Inline::LineBreak(_)
-        | Inline::Link(_)
-        | Inline::Strong(_) => None,
+    match node.view() {
+        View::Text(text) => Some(&text.value),
+        View::Code(_)
+        | View::Emphasis {
+            children: _,
+            continues: _,
+            kind: _,
+            plain: _,
+        }
+        | View::Html(_)
+        | View::Image(_)
+        | View::LineBreak(_)
+        | View::Link(_)
+        | View::Strong {
+            children: _,
+            continues: _,
+            kind: _,
+            plain: _,
+        } => None,
     }
 }

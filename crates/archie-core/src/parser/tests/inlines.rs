@@ -1,9 +1,13 @@
+use core::ops::Range;
 use std::thread;
 
 use super::{check, check_spans, on_two_megabytes};
-use crate::parser::ast::{Block, Inline, RawDocument};
+use crate::parser::ast::{
+    Block, Continues, Inline, Kind, Link, LinkForm, LinkInline, RawDocument, Text,
+};
+use crate::parser::extension::Markdown;
 use crate::parser::inline::INLINE_CAP;
-use crate::parser::parse;
+use crate::parser::{located, parse};
 use crate::writer::{WriteOptions, write};
 
 #[test]
@@ -1386,6 +1390,88 @@ fn a_link_inside_an_image_inside_link_text_leaves_the_outer_brackets_text() {
 }
 
 #[test]
+fn an_autolink_in_link_text_stays_a_link_and_the_brackets_around_it_stay_text() {
+    check(
+        "[<https://a.example>](https://b.example)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Paragraph
+        Line
+          Text "["
+          Link form=Markdown target="https://a.example"
+            Text "https://a.example"
+          Text "](https://b.example)"
+"#,
+    );
+}
+
+#[test]
+fn an_autolink_in_an_emphasis_in_link_text_stays_a_link_and_the_brackets_stay_text() {
+    check(
+        "[*<https://a.example>*](https://b.example)\n",
+        r#"Document
+  MarkdownBlock
+    Section
+      Paragraph
+        Line
+          Text "["
+          Emphasis
+            Link form=Markdown target="https://a.example"
+              Text "https://a.example"
+          Text "](https://b.example)"
+"#,
+    );
+}
+
+#[test]
+fn a_hand_built_link_inside_a_link_moves_into_the_model_as_its_text() {
+    let located_text = |value: &str, span: Range<usize>| {
+        located::Inline::Text(located::Text {
+            kind: Kind(None),
+            span,
+            value: value.to_owned(),
+        })
+    };
+    let located_link = |children, target: &str, span| {
+        located::Inline::Link(located::Link {
+            children,
+            continues: Continues::Neither,
+            form: LinkForm::Markdown,
+            kind: Kind(None),
+            span,
+            target: target.to_owned(),
+            title: None,
+        })
+    };
+    let inner = located_link(vec![located_text("b", 4..5)], "c", 3..9);
+    let line = located::Line::<Markdown> {
+        children: vec![located_link(
+            vec![located_text("a ", 1..3), inner, located_text(" d", 9..11)],
+            "e",
+            0..15,
+        )],
+        kind: Kind(None),
+        span: 0..15,
+    };
+    let model_text = |value: &str| {
+        LinkInline::Text(Text {
+            kind: Kind(None),
+            value: value.to_owned(),
+        })
+    };
+    let expected = Inline::Link(Link {
+        children: vec![model_text("a "), model_text("b"), model_text(" d")],
+        continues: Continues::Neither,
+        form: LinkForm::Markdown,
+        kind: Kind(None),
+        target: "e".to_owned(),
+        title: None,
+    });
+    assert_eq!(line.into_model().children, [expected]);
+}
+
+#[test]
 fn ten_thousand_brackets_around_a_word_are_text_around_a_wiki_link() {
     let source = format!("{}x{}\n", "[".repeat(10_000), "]".repeat(10_000));
     let expected = format!(
@@ -1566,6 +1652,17 @@ fn strong_depth(nodes: &[Inline]) -> (usize, &[Inline]) {
     (depth, inner)
 }
 
+/// How deep strong emphasis nests from `nodes`, a link's text, down.
+fn link_strong_depth(nodes: &[LinkInline]) -> usize {
+    let mut inner = nodes;
+    let mut depth = 0_usize;
+    while let [LinkInline::Strong(strong)] = inner {
+        depth += 1;
+        inner = &strong.children;
+    }
+    depth
+}
+
 /// Checks that the one line of `document` is the text `stars`, strong
 /// emphasis nested `INLINE_CAP` deep around `a`, then `stars` again.
 fn assert_inline_capped(document: &RawDocument, stars: &str) {
@@ -1628,9 +1725,9 @@ fn a_link_that_would_nest_past_the_inline_cap_keeps_its_brackets_as_text() {
         assert_eq!(strong_depth(&nodes[1..2]).0, INLINE_CAP);
         let fewer = "*".repeat(2 * (INLINE_CAP - 1));
         let linked = parse(&format!("[{fewer}a{fewer}](u)\n")).document;
-        let (depth, _) = match only_line(&linked) {
-            [Inline::Link(link)] if link.target == "u" => strong_depth(&link.children),
-            _ => (0, &[][..]),
+        let depth = match only_line(&linked) {
+            [Inline::Link(link)] if link.target == "u" => link_strong_depth(&link.children),
+            _ => 0,
         };
         assert_eq!(depth, INLINE_CAP - 1);
     });

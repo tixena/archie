@@ -799,9 +799,9 @@ where
                 writer.code_block(&info, &code.value);
             }
             Self::Document(document) => writer.markdown_node(&document.body),
-            Self::Emphasis(emphasis) => {
-                writer.inline(|segments, parent| segments.emphasis(parent, emphasis, false));
-            }
+            Self::Emphasis(emphasis) => writer.inline(|segments, parent| {
+                segments.emphasis(parent, emphasis.continues, &emphasis.children, false);
+            }),
             Self::Heading(heading) => writer.heading(heading),
             Self::Html(html) => writer.put(&html.value),
             Self::Image(image) => writer.inline(|segments, _| {
@@ -821,13 +821,19 @@ where
             }
             Self::LineBreak(_) => writer.put("\\"),
             Self::Link(link) => writer.inline(|segments, parent| segments.link(parent, link)),
+            Self::LinkEmphasis(emphasis) => writer.inline(|segments, parent| {
+                segments.emphasis(parent, emphasis.continues, &emphasis.children, true);
+            }),
+            Self::LinkStrong(strong) => writer.inline(|segments, parent| {
+                segments.strong(parent, strong.continues, &strong.children, true);
+            }),
             Self::List(list) => writer.list(list),
             Self::MarkdownBlock(block) => writer.sections(&block.sections, Writer::section),
             Self::Paragraph(paragraph) => writer.paragraph(paragraph),
             Self::Section(section) => writer.plain_section(section),
-            Self::Strong(strong) => {
-                writer.inline(|segments, parent| segments.strong(parent, strong, false));
-            }
+            Self::Strong(strong) => writer.inline(|segments, parent| {
+                segments.strong(parent, strong.continues, &strong.children, false);
+            }),
             Self::Table(table) => table::write(writer, table),
             Self::TableCell(cell) => writer.markdown_node(&cell.body),
             Self::TableRow(row) => {

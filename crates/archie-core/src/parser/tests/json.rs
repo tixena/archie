@@ -9,12 +9,12 @@ use super::extension::Comments;
 use super::{on_two_megabytes, valid_body};
 use crate::parser::ast::{
     Args, Block, BlockQuote, Code, CodeBlock, Document, Emphasis, Heading, Html, Image, Inline,
-    InvalidDocument, InvalidFrontmatter, Item, Kind, Line, LineBreak, Link, List, Mapping,
-    MarkdownBlock, Paragraph, RawDocument, Section, Strong, Table, TableCell, TableRow, Text,
-    ThematicBreak, Value,
+    InvalidDocument, InvalidFrontmatter, Item, Kind, Line, LineBreak, Link, LinkEmphasis,
+    LinkInline, LinkStrong, List, Mapping, MarkdownBlock, Paragraph, RawDocument, Section, Strong,
+    Table, TableCell, TableRow, Text, ThematicBreak, Value,
 };
 use crate::parser::error::RebuildError;
-use crate::parser::extension::{Plain, With};
+use crate::parser::extension::{Markdown, Plain, With};
 use crate::parser::inline::INLINE_CAP;
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::{ParseOptions, from_json, parse, parse_with, rebuild_with, to_json};
@@ -180,6 +180,31 @@ fn json_that_is_not_a_document_does_not_read() {
     let read: Result<RawDocument, _> = from_json(r#"{"t":"valid"}"#);
     let error = read.unwrap_err().to_string();
     assert!(error.starts_with("missing field `bd`"), "{error}");
+}
+
+#[test]
+fn a_link_whose_text_holds_a_link_does_not_read_from_json() {
+    let json = concat!(
+        r#"{"t":"valid","bd":{"se":[{"bl":[{"t":"paragraph","li":[{"ch":[{"t":"link","#,
+        r#""ch":[{"t":"link","ch":[{"t":"text","v":"x"}],"co":"neither","#,
+        r#""fr":"markdown","tg":"https://a.example"}],"co":"neither","fr":"markdown","#,
+        r#""tg":"https://b.example"}]}]}],"ss":[]}]}}"#,
+    );
+    let error = from_json::<Markdown>(json).unwrap_err().to_string();
+    assert!(error.contains("unknown variant `link`"), "{error}");
+}
+
+#[test]
+fn a_link_holding_an_emphasis_and_a_strong_writes_the_json_it_wrote_before() {
+    assert_eq!(
+        to_json(&parse("[*a* and **b**](u)\n").document).unwrap(),
+        concat!(
+            r#"{"t":"valid","bd":{"se":[{"bl":[{"t":"paragraph","li":[{"ch":[{"t":"link","#,
+            r#""ch":[{"t":"emphasis","ch":[{"t":"text","v":"a"}],"co":"neither"},"#,
+            r#"{"t":"text","v":" and "},{"t":"strong","ch":[{"t":"text","v":"b"}],"#,
+            r#""co":"neither"}],"co":"neither","fr":"markdown","tg":"u"}]}]}],"ss":[]}]}}"#,
+        )
+    );
 }
 
 #[test]
@@ -446,6 +471,8 @@ fn no_node_writes_a_span_or_its_kind() {
         <Strong>::ts_definition(),
         <LineBreak>::ts_definition(),
         <Link>::ts_definition(),
+        <LinkEmphasis>::ts_definition(),
+        <LinkStrong>::ts_definition(),
         <Image>::ts_definition(),
         <Code>::ts_definition(),
         Value::ts_definition(),
@@ -554,13 +581,33 @@ fn unclaim_inlines(inlines: &mut [Inline]) {
             Inline::LineBreak(line_break) => line_break.kind = Kind(None),
             Inline::Link(link) => {
                 link.kind = Kind(None);
-                unclaim_inlines(&mut link.children);
+                unclaim_link_text(&mut link.children);
             }
             Inline::Strong(strong) => {
                 strong.kind = Kind(None);
                 unclaim_inlines(&mut strong.children);
             }
             Inline::Text(text) => text.kind = Kind(None),
+        }
+    }
+}
+
+fn unclaim_link_text(inlines: &mut [LinkInline]) {
+    for inline in inlines {
+        match inline {
+            LinkInline::Code(code) => code.kind = Kind(None),
+            LinkInline::Emphasis(emphasis) => {
+                emphasis.kind = Kind(None);
+                unclaim_link_text(&mut emphasis.children);
+            }
+            LinkInline::Html(html) => html.kind = Kind(None),
+            LinkInline::Image(image) => image.kind = Kind(None),
+            LinkInline::LineBreak(line_break) => line_break.kind = Kind(None),
+            LinkInline::Strong(strong) => {
+                strong.kind = Kind(None);
+                unclaim_link_text(&mut strong.children);
+            }
+            LinkInline::Text(text) => text.kind = Kind(None),
         }
     }
 }

@@ -9,8 +9,8 @@ use rkyv::with::With;
 
 use crate::parser::ast::{
     Alignment, ArchivedRawDocument, Args, Block, CodeBlock, Document, FrontmatterFormat, Heading,
-    Inline, Item, Kind, Line, LineBreak, List, Mapping, MarkdownBlock, Paragraph, RawDocument,
-    Section, Table, TableCell, TableFormat, TableRow, Text, Value,
+    Inline, Item, Kind, Line, LineBreak, LinkInline, List, Mapping, MarkdownBlock, Paragraph,
+    RawDocument, Section, Table, TableCell, TableFormat, TableRow, Text, Value,
 };
 use crate::parser::error::{ParseError, RebuildError};
 use crate::parser::extension::{Construct, Context, Extension, Markdown, Plain, Written};
@@ -325,13 +325,43 @@ fn clear_inlines(inlines: &mut [Inline]) {
             }
             Inline::Link(link) => {
                 clear_kind(&mut link.kind);
-                clear_inlines(&mut link.children);
+                clear_link_text(&mut link.children);
             }
             Inline::Strong(strong) => {
                 clear_kind(&mut strong.kind);
                 clear_inlines(&mut strong.children);
             }
             Inline::Text(text) => {
+                clear_kind(&mut text.kind);
+            }
+        }
+    }
+}
+
+fn clear_link_text(inlines: &mut [LinkInline]) {
+    for inline in inlines {
+        match inline {
+            LinkInline::Code(code) => {
+                clear_kind(&mut code.kind);
+            }
+            LinkInline::Emphasis(emphasis) => {
+                clear_kind(&mut emphasis.kind);
+                clear_link_text(&mut emphasis.children);
+            }
+            LinkInline::Html(html) => {
+                clear_kind(&mut html.kind);
+            }
+            LinkInline::Image(image) => {
+                clear_kind(&mut image.kind);
+            }
+            LinkInline::LineBreak(line_break) => {
+                clear_kind(&mut line_break.kind);
+            }
+            LinkInline::Strong(strong) => {
+                clear_kind(&mut strong.kind);
+                clear_link_text(&mut strong.children);
+            }
+            LinkInline::Text(text) => {
                 clear_kind(&mut text.kind);
             }
         }

@@ -20,7 +20,7 @@ use tixschema::model_schema;
 use crate::parser::extension::{Extension, Markdown, markdown_schema};
 use crate::parser::mirror::{
     self, AlignmentMirror, ArgsMirror, BlockMirror, ContinuesMirror, FrontmatterFormatMirror,
-    InlineMirror, LinkFormMirror, MappingMirror, TableFormatMirror,
+    InlineMirror, LinkFormMirror, LinkInlineMirror, MappingMirror, TableFormatMirror,
 };
 
 /// The stack left below which `grown` reads on a new segment. It holds the
@@ -741,8 +741,8 @@ where
 {
     #[serde(rename = "ch")]
     #[serde(deserialize_with = "grown")]
-    #[rkyv(omit_bounds, with = Map<InlineMirror<E>>)]
-    pub children: Vec<Inline<E>>,
+    #[rkyv(omit_bounds, with = Map<LinkInlineMirror<E>>)]
+    pub children: Vec<LinkInline<E>>,
     #[serde(rename = "co")]
     #[rkyv(with = ContinuesMirror)]
     pub continues: Continues,
@@ -757,6 +757,82 @@ where
     #[serde(rename = "ti")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+/// A node inside a link's text: any inline node but a link, at any depth.
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(bound = "")]
+#[serde(tag = "t", rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum LinkInline<E = Markdown>
+where
+    E: Extension,
+{
+    Code(Code<E>),
+    Emphasis(LinkEmphasis<E>),
+    Html(Html<E>),
+    Image(Image<E>),
+    LineBreak(LineBreak<E>),
+    Strong(LinkStrong<E>),
+    Text(Text<E>),
+}
+
+/// A `LinkInline` as rkyv archives it.
+pub type ArchivedLinkInline<E = Markdown> = mirror::ArchivedLinkInlineMirror<E>;
+
+/// Text between `*` or `_` inside a link's text.
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
+#[serde(bound = "")]
+#[rkyv(serialize_bounds(__S: Writer + Allocator, __S::Error: Source))]
+#[rkyv(deserialize_bounds(__D::Error: Source))]
+#[rkyv(bytecheck(bounds(__C: ArchiveContext, __C::Error: Source)))]
+#[rkyv(attr(non_exhaustive))]
+#[non_exhaustive]
+pub struct LinkEmphasis<E = Markdown>
+where
+    E: Extension,
+{
+    #[serde(rename = "ch")]
+    #[serde(deserialize_with = "grown")]
+    #[rkyv(omit_bounds, with = Map<LinkInlineMirror<E>>)]
+    pub children: Vec<LinkInline<E>>,
+    #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
+    pub continues: Continues,
+    #[serde(skip)]
+    #[rkyv(with = Skip)]
+    pub kind: Kind<E>,
+}
+
+/// Text between `**` or `__` inside a link's text.
+#[model_schema(default_types(E = Markdown), enable = ["decode_with", "mongodb"])]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, rkyv::Archive, rkyv::Serialize, RkyvDeserialize,
+)]
+#[serde(bound = "")]
+#[rkyv(serialize_bounds(__S: Writer + Allocator, __S::Error: Source))]
+#[rkyv(deserialize_bounds(__D::Error: Source))]
+#[rkyv(bytecheck(bounds(__C: ArchiveContext, __C::Error: Source)))]
+#[rkyv(attr(non_exhaustive))]
+#[non_exhaustive]
+pub struct LinkStrong<E = Markdown>
+where
+    E: Extension,
+{
+    #[serde(rename = "ch")]
+    #[serde(deserialize_with = "grown")]
+    #[rkyv(omit_bounds, with = Map<LinkInlineMirror<E>>)]
+    pub children: Vec<LinkInline<E>>,
+    #[serde(rename = "co")]
+    #[rkyv(with = ContinuesMirror)]
+    pub continues: Continues,
+    #[serde(skip)]
+    #[rkyv(with = Skip)]
+    pub kind: Kind<E>,
 }
 
 /// How a link or an image is written.

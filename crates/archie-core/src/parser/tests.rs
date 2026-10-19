@@ -27,7 +27,7 @@ use chrono::{
 
 use crate::parser::ast::{
     Alignment, Args, Block, CodeBlock, Continues, Document, FrontmatterFormat, Inline, Kind,
-    LinkForm, Mapping, MarkdownBlock, RawDocument, Section, TableFormat, Value,
+    LinkForm, LinkInline, Mapping, MarkdownBlock, RawDocument, Section, TableFormat, Value,
 };
 use crate::parser::extension::{Extension, Markdown};
 use crate::parser::line::line_at;
@@ -165,7 +165,7 @@ impl Rows<'_> {
                         link.continues,
                     );
                     self.push_unlocated(depth, label);
-                    self.inlines(depth + 1, &link.children);
+                    self.link_inlines(depth + 1, &link.children);
                 }
                 Inline::Strong(strong) => {
                     let label = format!("Strong{}", continues_label(strong.continues));
@@ -173,6 +173,49 @@ impl Rows<'_> {
                     self.inlines(depth + 1, &strong.children);
                 }
                 Inline::Text(text) => {
+                    self.push_unlocated(depth, format!("Text {:?}", text.value));
+                }
+            }
+        }
+    }
+
+    /// A link's text, outlined as `inlines` outlines a line.
+    fn link_inlines<E>(&mut self, depth: usize, inlines: &[LinkInline<E>])
+    where
+        E: Extension,
+    {
+        for inline in inlines {
+            match inline {
+                LinkInline::Code(code) => {
+                    let label = format!("Code {:?}{}", code.value, continues_label(code.continues));
+                    self.push_unlocated(depth, label);
+                }
+                LinkInline::Emphasis(emphasis) => {
+                    let label = format!("Emphasis{}", continues_label(emphasis.continues));
+                    self.push_unlocated(depth, label);
+                    self.link_inlines(depth + 1, &emphasis.children);
+                }
+                LinkInline::Html(html) => {
+                    let label = format!("Html {:?}{}", html.value, continues_label(html.continues));
+                    self.push_unlocated(depth, label);
+                }
+                LinkInline::Image(image) => {
+                    let label = image_label(
+                        image.form,
+                        &image.target,
+                        image.title.as_deref(),
+                        &image.alt,
+                        image.continues,
+                    );
+                    self.push_unlocated(depth, label);
+                }
+                LinkInline::LineBreak(_) => self.push_unlocated(depth, "LineBreak".to_owned()),
+                LinkInline::Strong(strong) => {
+                    let label = format!("Strong{}", continues_label(strong.continues));
+                    self.push_unlocated(depth, label);
+                    self.link_inlines(depth + 1, &strong.children);
+                }
+                LinkInline::Text(text) => {
                     self.push_unlocated(depth, format!("Text {:?}", text.value));
                 }
             }

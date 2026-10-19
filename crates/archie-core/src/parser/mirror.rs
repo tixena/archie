@@ -278,6 +278,39 @@ where
 }
 
 #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(remote = ast::LinkInline<E>)]
+#[rkyv(attr(non_exhaustive))]
+pub enum LinkInlineMirror<E = Markdown>
+where
+    E: Extension,
+{
+    Code(ast::Code<E>),
+    Emphasis(ast::LinkEmphasis<E>),
+    Html(ast::Html<E>),
+    Image(ast::Image<E>),
+    LineBreak(ast::LineBreak<E>),
+    Strong(ast::LinkStrong<E>),
+    Text(ast::Text<E>),
+}
+
+impl<E> From<LinkInlineMirror<E>> for ast::LinkInline<E>
+where
+    E: Extension,
+{
+    fn from(mirror: LinkInlineMirror<E>) -> Self {
+        match mirror {
+            LinkInlineMirror::Code(code) => Self::Code(code),
+            LinkInlineMirror::Emphasis(emphasis) => Self::Emphasis(emphasis),
+            LinkInlineMirror::Html(html) => Self::Html(html),
+            LinkInlineMirror::Image(image) => Self::Image(image),
+            LinkInlineMirror::LineBreak(line_break) => Self::LineBreak(line_break),
+            LinkInlineMirror::Strong(strong) => Self::Strong(strong),
+            LinkInlineMirror::Text(text) => Self::Text(text),
+        }
+    }
+}
+
+#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[rkyv(remote = ast::Continues)]
 #[rkyv(attr(non_exhaustive))]
 pub enum ContinuesMirror {
