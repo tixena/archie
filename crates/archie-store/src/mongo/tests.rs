@@ -339,6 +339,52 @@ async fn a_query_finds_the_files_by_their_frontmatter_and_compares_dates_as_date
 }
 
 #[tokio::test]
+async fn a_query_finds_a_frontmatter_key_holding_a_dot_by_its_whole_name() {
+    in_database("archie_test_dotted_keys", async |store| {
+        let files = [
+            ("notes/dotted.md", "---\na.b: x\n---\n# Dotted\n"),
+            ("notes/nested.md", "---\na:\n  b: x\n---\n# Nested\n"),
+            ("notes/status.md", "---\nstatus: open\n---\n# Status\n"),
+        ];
+        for (path, text) in files {
+            let at = StorePath::new(path).unwrap();
+            store
+                .write(&at, text.as_bytes(), &Precondition::None)
+                .await
+                .unwrap();
+        }
+        let dotted = frontmatter_is("a.b", &Value::String("x".into())).unwrap();
+        assert_eq!(
+            paths_of(&store.find(dotted).await.unwrap()),
+            ["notes/dotted.md"]
+        );
+        let open = frontmatter_is("status", &Value::String("open".into())).unwrap();
+        assert_eq!(
+            paths_of(&store.find(open).await.unwrap()),
+            ["notes/status.md"]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_query_finds_a_frontmatter_key_starting_with_a_dollar_by_its_name() {
+    in_database("archie_test_dollar_keys", async |store| {
+        let at = StorePath::new("notes/price.md").unwrap();
+        store
+            .write(&at, b"---\n$price: 3\n---\n", &Precondition::None)
+            .await
+            .unwrap();
+        let price = frontmatter_is("$price", &Value::Integer(3)).unwrap();
+        assert_eq!(
+            paths_of(&store.find(price).await.unwrap()),
+            ["notes/price.md"]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn a_document_of_13_nested_list_items_fails_the_write_naming_the_path_and_the_depth() {
     in_database("archie_test_depth", async |store| {
         let path = StorePath::new("notes/deep.md").unwrap();

@@ -3,7 +3,7 @@
 
 use archie_core::parser::ast::{Mapping, RawDocument, Value, raw_document_schema};
 use bson::oid::ObjectId;
-use bson::{Bson, Document};
+use bson::{Bson, Document, doc};
 use serde::{Deserialize, Serialize};
 use tixschema::model_schema;
 
@@ -72,8 +72,9 @@ pub fn from_record(record: Document) -> Result<StoredDocument, StoreError> {
         .map_err(|error| StoreError::Backend(format!("the record {id} does not read: {error}")))
 }
 
-/// The filter on the frontmatter key `key`, which no typed path names:
-/// `{ "doc.data.<key>": value }`, the value as `to_record` stores it.
+/// The filter on the frontmatter key `key`, the value as `to_record` stores
+/// it: `{ "doc.data.<key>": value }`, or a `$getField` match for a key a
+/// dotted path cannot name, one holding a `.` or starting with `$`.
 ///
 /// # Errors
 ///
@@ -81,6 +82,12 @@ pub fn from_record(record: Document) -> Result<StoredDocument, StoreError> {
 pub fn frontmatter_is(key: &str, value: &Value) -> Result<Document, StoreError> {
     let stored = bson::serialize_to_bson(value)
         .map_err(|error| StoreError::Backend(format!("{key}: {error}")))?;
+    if key.contains('.') || key.starts_with('$') {
+        return Ok(doc! { "$expr": { "$eq": [
+            { "$getField": { "field": { "$literal": key }, "input": "$doc.data" } },
+            stored,
+        ] } });
+    }
     let mut filter = Document::new();
     filter.insert(format!("doc.data.{key}"), stored);
     Ok(filter)

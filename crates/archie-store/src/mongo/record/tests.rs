@@ -553,6 +553,26 @@ fn the_filter_on_a_frontmatter_key_names_doc_data() {
 }
 
 #[test]
+fn the_filter_on_a_frontmatter_key_a_dotted_path_cannot_name_reads_it_by_name() {
+    let dotted = frontmatter_is("a.b", &string("x")).unwrap();
+    assert_eq!(
+        dotted,
+        doc! { "$expr": { "$eq": [
+            { "$getField": { "field": { "$literal": "a.b" }, "input": "$doc.data" } },
+            "x",
+        ] } }
+    );
+    let dollar = frontmatter_is("$price", &Value::Integer(3)).unwrap();
+    assert_eq!(
+        dollar,
+        doc! { "$expr": { "$eq": [
+            { "$getField": { "field": { "$literal": "$price" }, "input": "$doc.data" } },
+            3_i64,
+        ] } }
+    );
+}
+
+#[test]
 fn the_revision_is_the_sha_256_of_the_text() {
     assert_eq!(
         revision_of("").0,
