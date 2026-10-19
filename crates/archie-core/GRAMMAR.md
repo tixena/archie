@@ -1088,8 +1088,15 @@ pub trait Extension: Clone + Debug + PartialEq + Sized {
   out, with `read_yaml_lines(context.source, &context.lines_of(range))`.
 - `to_json(document)` writes a `RawDocument` as JSON, and `from_json::<E>(text)` reads
   it back, at any depth archie reads. No node writes its `kind` or a span. A document
-  is written `{"Valid": ...}`, or `{"Invalid": ...}` when no entry of its frontmatter
-  reads. `rebuild_with::<E>(document, &options)` builds the extension nodes again on
+  is written `{"t":"valid",...}`, or `{"t":"invalid",...}` when no entry of its
+  frontmatter reads, each field under its short name: `bd` for the body and `data`
+  for the frontmatter. An invalid frontmatter is `{"er": the error, "fo": "yaml" or
+  "toml", "tx": its text}`. A frontmatter value is written plain: a boolean, a number,
+  a text, a list and a mapping as themselves, a null as `null`; a date, a date-time
+  and a date-time with an offset as `{"$date":{"$numberLong":"<milliseconds>"}}`, read
+  back as a `Date` when it is at midnight UTC and as an `OffsetDateTime` in UTC
+  otherwise; a time of day as `{"t":"time","v":"07:32:00"}`.
+  `rebuild_with::<E>(document, &options)` builds the extension nodes again on
   such a document: it writes the plain tree in archie's form, with the frontmatter in
   YAML, an invalid one as it was read, and parses that text with `E`. It fails with
   `RebuildError::Write`, naming the key, when the `Toml` args of a code block hold a
