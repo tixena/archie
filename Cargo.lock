@@ -2031,7 +2031,8 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 [[package]]
 name = "os-shim"
 version = "0.1.0"
-source = "git+https://github.com/tixena/os-shim.git#f878ce216ac17689389e45984abaee41fd590cd6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e5f5f1a1899ba7779ea2c2ef842ab787b779b17129c7bb4f319f1eb4f7d06ff"
 dependencies = [
  "aws-sdk-s3",
  "ignore",
