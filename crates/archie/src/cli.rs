@@ -97,10 +97,7 @@ pub enum StoreArg {
 impl StoreArg {
     /// The store of `minio:` and `place`, `<bucket>` or `<bucket>/<prefix>`.
     fn minio(place: &str) -> Option<Self> {
-        let (bucket, prefix) = place
-            .split_once('/')
-            .map_or((place, None), |(bucket, prefix)| (bucket, Some(prefix)));
-        (!bucket.is_empty() && prefix.is_none_or(|part| !part.is_empty())).then(|| Self::Minio {
+        bucket_and_prefix(place).map(|(bucket, prefix)| Self::Minio {
             bucket: bucket.to_owned(),
             prefix: prefix.map(str::to_owned),
         })
@@ -166,6 +163,15 @@ impl From<SyntaxArg> for FrontmatterFormat {
             SyntaxArg::Yaml => Self::Yaml,
         }
     }
+}
+
+/// The bucket and the key prefix of `place`, `<bucket>` or `<bucket>/<prefix>`,
+/// neither empty.
+pub fn bucket_and_prefix(place: &str) -> Option<(&str, Option<&str>)> {
+    let (bucket, prefix) = place
+        .split_once('/')
+        .map_or((place, None), |(bucket, prefix)| (bucket, Some(prefix)));
+    (!bucket.is_empty() && prefix.is_none_or(|part| !part.is_empty())).then_some((bucket, prefix))
 }
 
 #[cfg(test)]

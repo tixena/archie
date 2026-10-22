@@ -1,5 +1,10 @@
-//! One file as one MongoDB record. The frontmatter is stored as plain BSON
-//! values, dates as BSON dates, so a query can name a frontmatter key.
+//! One file as one MongoDB record, and the object of each file it embeds as
+//! another.
+//!
+//! The frontmatter is stored as plain BSON values, dates as BSON dates, so a
+//! query can name a frontmatter key.
+
+use alloc::collections::BTreeMap;
 
 use archie_core::parser::ast::{Mapping, RawDocument, Value, raw_document_schema};
 use bson::oid::ObjectId;
@@ -12,17 +17,52 @@ use crate::{Revision, StoreError, file};
 /// The deepest record MongoDB holds, each document and each array one level.
 const MAX_DEPTH: usize = 100;
 
-/// One file of a MongoDB store: its path, its revision and its document.
+/// A document's claim on an object of the store's files: the document's path,
+/// and the path its embed names.
+#[model_schema(enable = ["decode_with", "mongodb"])]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Claim {
+    pub document: String,
+    pub path: String,
+}
+
+/// One file of a MongoDB store: its path, its revision, its document, and the
+/// SHA-256 of each file it embeds, by the file's path in the bundle.
 #[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct StoredDocument {
     #[serde(rename = "doc")]
     pub document: RawDocument,
+    #[serde(default)]
+    pub files: BTreeMap<String, String>,
     #[serde(rename = "_id")]
     pub id: ObjectId,
     pub path: String,
     pub revision: String,
+}
+
+/// The record of one object of a MongoDB store's files, in
+/// `<collection>_files`, keyed by the SHA-256 of its bytes.
+///
+/// It holds the object's key in the bucket, its media type, size and
+/// description, whether it is in the bucket, whether a deletion holds it, and
+/// each document that embeds it.
+#[model_schema(enable = ["decode_with", "mongodb"])]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct StoredObject {
+    pub content_type: String,
+    #[serde(default)]
+    pub deleting: bool,
+    pub description: String,
+    pub embedded_by: Vec<Claim>,
+    #[serde(rename = "_id")]
+    pub id: String,
+    pub object: String,
+    pub size: u64,
+    pub stored: bool,
 }
 
 /// The record sent to MongoDB: serde's BSON of `stored`.

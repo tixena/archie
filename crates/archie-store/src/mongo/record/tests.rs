@@ -1,7 +1,8 @@
-//! The record: the sample's record, each kind of frontmatter value stored and
-//! read back, the fixtures, an invalid document, records that do not read, the
-//! depth, the filter and the revision.
+//! The record: the sample's record, its files, each kind of frontmatter value
+//! stored and read back, the fixtures, an invalid document, records that do
+//! not read, the depth, the filter and the revision.
 
+use alloc::collections::BTreeMap;
 use std::thread;
 
 use archie_core::parser::ast::{InvalidDocument, Mapping, RawDocument, Value};
@@ -148,6 +149,7 @@ fn plain_tree(document: &RawDocument) -> RawDocument {
 fn stored(path: &str, text: &str) -> StoredDocument {
     StoredDocument {
         document: parse(text).document,
+        files: BTreeMap::new(),
         id: ObjectId::parse_str(ID).unwrap(),
         path: path.to_owned(),
         revision: revision_of(text).0,
@@ -223,6 +225,7 @@ fn the_sample_frontmatter_is_stored_as_the_sample_record() {
                 "owner": { "name": "Ada" },
             },
         },
+        "files": {},
         "_id": ObjectId::parse_str(ID).unwrap(),
         "path": "notes/task.md",
         "revision": "sha256:770bd77006283842c1a49279937c31aebe406b4ce74a55c14625d83c565b5f73",
@@ -264,6 +267,28 @@ fn the_sample_record_reads_back_as_the_sample_table_says() {
             "{key}"
         );
     }
+}
+
+#[test]
+fn the_files_of_a_record_are_stored_by_their_paths_in_the_bundle() {
+    let mut written = stored("notes/report.md", "![Logo](media/logo.png)\n");
+    written.files = BTreeMap::from([("media/logo.png".to_owned(), "3f1a".to_owned())]);
+    let record = to_record(&written).unwrap();
+    assert_eq!(
+        record.get_document("files").unwrap(),
+        &doc! { "media/logo.png": "3f1a" }
+    );
+    assert_eq!(from_record(record).unwrap(), written);
+}
+
+#[test]
+fn a_record_with_no_files_reads_as_a_document_with_no_files() {
+    let written = stored("notes/task.md", "# Task\n");
+    let mut record = to_record(&written).unwrap();
+    record.remove("files");
+    let back = from_record(record).unwrap();
+    assert_eq!(back.files, BTreeMap::new());
+    assert_eq!(back, written);
 }
 
 #[test]

@@ -17,11 +17,15 @@ use archie_store::document::{self, DocumentError};
 use archie_store::file::FileStore;
 #[cfg(feature = "mongodb")]
 use archie_store::mongo::MongoStore;
-#[cfg(feature = "minio")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 use archie_store::object::{ObjectConfig, ObjectStore};
 use archie_store::{Precondition, Revision, Store as _, StoreError, StorePath};
 use os_shim::System;
+#[cfg(any(feature = "minio", feature = "mongodb"))]
+use os_shim::bucket::MinioBucket;
 
+#[cfg(feature = "mongodb")]
+use crate::cli::bucket_and_prefix;
 use crate::cli::{Cli, Command, FormatArg, StoreArg, SyntaxArg};
 
 /// Why a command stopped: the line after `archie: `, and the exit code.
@@ -202,6 +206,41 @@ fn minio<'system>(
         .map(StorePath::new)
         .transpose()
         .map_err(|error| Failure::store(arg, &error))?;
+    let store = objects(system, bucket, under)?;
+    let at = as_written(path)?;
+    Ok((AnyStore::Minio(store), at))
+}
+
+/// The bucket a MongoDB store keeps its files in: `ARCHIE_MONGODB_BUCKET`,
+/// `<bucket>` or `<bucket>/<prefix>`, on the `MinIO` server the environment
+/// names.
+#[cfg(feature = "mongodb")]
+fn mongodb_files(system: &dyn System) -> Result<ObjectStore<MinioBucket>, Failure> {
+    let (name, holds) = (
+        "ARCHIE_MONGODB_BUCKET",
+        "the MinIO bucket of a MongoDB store's files",
+    );
+    let place = variable(system, name, holds)?;
+    let (bucket, prefix) = bucket_and_prefix(&place).ok_or_else(|| {
+        Failure::configuration(format!(
+            "{name} is not <bucket> or <bucket>/<prefix>: it holds {holds}"
+        ))
+    })?;
+    let under = prefix
+        .map(StorePath::new)
+        .transpose()
+        .map_err(|error| Failure::configuration(format!("{name}: {error}")))?;
+    objects(system, bucket, under)
+}
+
+/// The bucket `bucket`, its keys under `prefix`, on the `MinIO` server the
+/// environment names.
+#[cfg(any(feature = "minio", feature = "mongodb"))]
+fn objects(
+    system: &dyn System,
+    bucket: &str,
+    prefix: Option<StorePath>,
+) -> Result<ObjectStore<MinioBucket>, Failure> {
     let endpoint = variable(
         system,
         "ARCHIE_MINIO_ENDPOINT",
@@ -212,12 +251,9 @@ fn minio<'system>(
         "ARCHIE_MINIO_REGION",
         "the region the MinIO server expects",
     )?;
-    let config = ObjectConfig::new(endpoint, region, bucket.to_owned(), under);
+    let config = ObjectConfig::new(endpoint, region, bucket.to_owned(), prefix);
     // `open` fails only on a key missing from the environment.
-    let store = ObjectStore::open(system, config)
-        .map_err(|error| Failure::configuration(error.to_string()))?;
-    let at = as_written(path)?;
-    Ok((AnyStore::Minio(store), at))
+    ObjectStore::open(system, config).map_err(|error| Failure::configuration(error.to_string()))
 }
 
 /// The store `named` names, the file system's when it is `None`, and `path`
@@ -248,8 +284,9 @@ async fn open<'system>(
                 "ARCHIE_MONGODB_URI",
                 "the MongoDB connection string",
             )?;
+            let files = mongodb_files(system)?;
             let at = as_written(path)?;
-            let store = MongoStore::open(&uri, database, collection)
+            let store = MongoStore::open(&uri, database, collection, files)
                 .await
                 .map_err(|error| Failure::store(arg, &error))?;
             Ok((AnyStore::Mongo(store), at))

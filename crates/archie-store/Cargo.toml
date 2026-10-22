@@ -11,7 +11,8 @@ repository.workspace = true
 workspace = true
 
 [features]
-# The MongoDB store's record: archie-core's MongoDB layer, the driver and its BSON.
+# The MongoDB store: archie-core's MongoDB layer, the driver and its BSON, tokio's timer, and
+# the MinIO store that keeps its files.
 mongodb = [
     "archie-core/mongodb",
     "dep:mongodb",
@@ -19,6 +20,8 @@ mongodb = [
     "dep:serde",
     "dep:serde_json",
     "dep:tixschema",
+    "dep:tokio",
+    "minio",
 ]
 # The MinIO store: os-shim's MinIO client, and the Bucket trait it implements.
 minio = ["os-shim/minio", "os-shim/async"]
@@ -29,12 +32,13 @@ os-shim.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 
-# The MongoDB layer and the driver, under the mongodb feature
+# The MongoDB layer, the driver and tokio's timer, under the mongodb feature
 bson = { workspace = true, optional = true }
 mongodb = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tixschema = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["time"] }
 
 [dev-dependencies]
 chrono.workspace = true

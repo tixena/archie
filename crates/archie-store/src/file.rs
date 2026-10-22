@@ -261,11 +261,16 @@ fn missing(error: &io::Error) -> bool {
 
 /// `sha256:` and the 64 lowercase hexadecimal digits of the hash of `bytes`.
 pub(crate) fn revision(bytes: &[u8]) -> Revision {
-    let mut text = String::from("sha256:");
+    Revision(format!("sha256:{}", sha256(bytes)))
+}
+
+/// The 64 lowercase hexadecimal digits of the SHA-256 of `bytes`.
+pub(crate) fn sha256(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(64);
     for byte in Sha256::digest(bytes) {
         let _: fmt::Result = write!(text, "{byte:02x}");
     }
-    Revision(text)
+    text
 }
 
 #[cfg(test)]

@@ -1,10 +1,12 @@
-//! The store against the MongoDB server `just test-stores` starts, each test
-//! in a database of its own, dropped when the test ends.
+//! The store against the MongoDB and `RustFS` servers `just test-stores`
+//! starts, each test in a database of its own, dropped when the test ends, and
+//! its files under a key prefix of its own.
 
+use alloc::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 
-use archie_core::bundle::Missing;
+use archie_core::bundle::{BundledDocument, Missing};
 use archie_core::forms::{Form, encode};
 use archie_core::parser::ast::{Mapping, RawDocument, Value};
 use archie_core::parser::{from_json, parse, to_json};
@@ -13,14 +15,19 @@ use bson::oid::ObjectId;
 use bson::{DateTime, Document, doc};
 use mongodb::options::IndexOptions;
 use mongodb::{Client, Collection, IndexModel};
+use os_shim::bucket::MinioBucket;
 use os_shim::mock::MemorySystem;
+use os_shim::real::RealSystem;
 
-use super::MongoStore;
+use super::{MongoStore, embedded};
 use crate::any::AnyStore;
-use crate::document::{get, put};
-use crate::file::FileStore;
-use crate::mongo::record::{StoredDocument, from_record, frontmatter_is, revision_of, to_record};
-use crate::{Precondition, Store as _, StoreError, StorePath};
+use crate::document::{get, put, put_bundle};
+use crate::file::{self, FileStore};
+use crate::mongo::record::{
+    Claim, StoredDocument, StoredObject, from_record, frontmatter_is, revision_of, to_record,
+};
+use crate::object::{ObjectConfig, ObjectStore};
+use crate::{Precondition, Store as _, StoreError, StorePath, Stored};
 
 const FIXTURES: [&str; 21] = [
     include_str!("../../../archie-core/src/parser/tests/fixtures/api_reference.md"),
@@ -48,6 +55,12 @@ const FIXTURES: [&str; 21] = [
 
 const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
+const OTHER_PNG: &[u8] = b"\x89PNG\r\n\x1a\n another picture";
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
+
+const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
+
 /// Archie's form of `source` once its record has been through `to_record`
 /// and `from_record`, as MongoDB gives it back.
 fn back_from_mongodb(source: &str) -> String {
@@ -55,12 +68,28 @@ fn back_from_mongodb(source: &str) -> String {
     let archie = write(&parse(source).document, &options).unwrap();
     let stored = StoredDocument {
         document: parse(&archie).document,
+        files: BTreeMap::new(),
         id: ObjectId::new(),
         path: "a.md".to_owned(),
         revision: revision_of(&archie).0,
     };
     let back = from_record(to_record(&stored).unwrap()).unwrap();
     write(&back.document, &options).unwrap()
+}
+
+/// A claim of the document at `document` on the file at `path`.
+fn claim(document: &str, path: &str) -> Claim {
+    Claim {
+        document: document.to_owned(),
+        path: path.to_owned(),
+    }
+}
+
+/// The claims on the object of `bytes`, as its record holds them.
+async fn claims_on(store: &MongoStore, bytes: &[u8]) -> Vec<Claim> {
+    let record = object_record(store, bytes).await.unwrap();
+    let object: StoredObject = bson::deserialize_from_document(record).unwrap();
+    object.embedded_by
 }
 
 /// Gets the document at `path` from `from` in `form` and puts those bytes at
@@ -88,13 +117,27 @@ async fn copy(
     .unwrap();
 }
 
-/// Runs `scenario` over the collection `files` of the database `name`, then
-/// drops the database.
+/// The bucket `just test-stores` makes, its keys under `mongo/<name>`.
+fn files_of(name: &str) -> ObjectStore<MinioBucket> {
+    let config = ObjectConfig::new(
+        env::var("ARCHIE_TEST_MINIO_ENDPOINT").unwrap(),
+        "us-east-1".to_owned(),
+        env::var("ARCHIE_TEST_MINIO_BUCKET").unwrap(),
+        Some(path(&format!("mongo/{name}"))),
+    );
+    ObjectStore::open(&RealSystem::new(), config).unwrap()
+}
+
+/// Runs `scenario` over the collection `files` of the database `name`, its
+/// files under `mongo/<name>` in the bucket, then drops the database.
 async fn in_database<S>(name: &str, scenario: S)
 where
     S: AsyncFnOnce(MongoStore),
 {
-    scenario(MongoStore::open(&uri(), name, "files").await.unwrap()).await;
+    let store = MongoStore::open(&uri(), name, "files", files_of(name))
+        .await
+        .unwrap();
+    scenario(store).await;
     let client = Client::with_uri_str(uri()).await.unwrap();
     client.database(name).drop().await.unwrap();
 }
@@ -144,6 +187,21 @@ fn nested_items(count: usize) -> String {
     text
 }
 
+/// The path of the object of `bytes` in the bucket of the store's files.
+fn object_of(bytes: &[u8]) -> StorePath {
+    path(&format!("files/{}", file::sha256(bytes)))
+}
+
+/// The record of the object of `bytes`, as `files_files` holds it.
+async fn object_record(store: &MongoStore, bytes: &[u8]) -> Option<Document> {
+    let on_id = doc! { "_id": file::sha256(bytes) };
+    store.objects.find_one(on_id).await.unwrap()
+}
+
+fn path(text: &str) -> StorePath {
+    StorePath::new(text).unwrap()
+}
+
 /// The paths of `found`, sorted.
 fn paths_of(found: &[StoredDocument]) -> Vec<&str> {
     let mut paths: Vec<&str> = found.iter().map(|stored| stored.path.as_str()).collect();
@@ -154,6 +212,20 @@ fn paths_of(found: &[StoredDocument]) -> Vec<&str> {
 /// The tree `document` keeps once stored: each node's `kind` left out.
 fn plain_tree(document: &RawDocument) -> RawDocument {
     from_json(&to_json(document).unwrap()).unwrap()
+}
+
+/// `REPORT` with `picture` at `media/logo.png`.
+fn report_with(picture: &[u8]) -> BundledDocument {
+    let files = BTreeMap::from([("media/logo.png".to_owned(), picture.to_vec())]);
+    BundledDocument::new(parse(REPORT).document, files, Missing::Refuse).unwrap()
+}
+
+/// Puts `bundle` at `at` in `store`, replacing any document there.
+async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) {
+    let options = WriteOptions::default();
+    put_bundle(store, &path(at), bundle, &options, &Precondition::None)
+        .await
+        .unwrap();
 }
 
 /// A mapping of the one key `a`, to `value`.
@@ -490,9 +562,14 @@ async fn open_makes_the_unique_index_on_path_when_the_collection_has_none() {
             ("path_1".to_owned(), doc! { "path": 1_i32 }, true),
         ];
         assert_eq!(indexes(&store.collection).await, made);
-        let again = MongoStore::open(&uri(), "archie_test_index", "files")
-            .await
-            .unwrap();
+        let again = MongoStore::open(
+            &uri(),
+            "archie_test_index",
+            "files",
+            files_of("archie_test_index"),
+        )
+        .await
+        .unwrap();
         assert_eq!(indexes(&again.collection).await, made);
 
         let client = Client::with_uri_str(uri()).await.unwrap();
@@ -507,9 +584,14 @@ async fn open_makes_the_unique_index_on_path_when_the_collection_has_none() {
             )
             .build();
         named.create_index(by_path).await.unwrap();
-        let held = MongoStore::open(&uri(), "archie_test_index", "named")
-            .await
-            .unwrap();
+        let held = MongoStore::open(
+            &uri(),
+            "archie_test_index",
+            "named",
+            files_of("archie_test_index"),
+        )
+        .await
+        .unwrap();
         let kept = [
             ("_id_".to_owned(), doc! { "_id": 1_i32 }, false),
             ("by_path".to_owned(), doc! { "path": -1_i32 }, true),
@@ -546,6 +628,270 @@ async fn each_call_to_any_store_goes_to_the_mongodb_store_it_holds() {
             .await
             .unwrap();
         assert_eq!(any.list(None).await, Ok(Vec::new()));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn open_makes_the_index_on_embedded_by_path_of_the_files_collection_when_it_has_none() {
+    in_database("archie_test_files_index", async |store| {
+        let made = [
+            ("_id_".to_owned(), doc! { "_id": 1_i32 }, false),
+            (
+                "embedded_by.path_1".to_owned(),
+                doc! { "embedded_by.path": 1_i32 },
+                false,
+            ),
+        ];
+        assert_eq!(indexes(&store.objects).await, made);
+        let again = MongoStore::open(
+            &uri(),
+            "archie_test_files_index",
+            "files",
+            files_of("archie_test_files_index"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(indexes(&again.objects).await, made);
+
+        let client = Client::with_uri_str(uri()).await.unwrap();
+        let named: Collection<Document> = client
+            .database("archie_test_files_index")
+            .collection("named_files");
+        let by_path = IndexModel::builder()
+            .keys(doc! { "embedded_by.path": -1_i32 })
+            .options(IndexOptions::builder().name("by_path".to_owned()).build())
+            .build();
+        named.create_index(by_path).await.unwrap();
+        let held = MongoStore::open(
+            &uri(),
+            "archie_test_files_index",
+            "named",
+            files_of("archie_test_files_index"),
+        )
+        .await
+        .unwrap();
+        let kept = [
+            ("_id_".to_owned(), doc! { "_id": 1_i32 }, false),
+            (
+                "by_path".to_owned(),
+                doc! { "embedded_by.path": -1_i32 },
+                false,
+            ),
+        ];
+        assert_eq!(indexes(&held.objects).await, kept);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_save_stores_the_object_its_record_and_the_files_map_and_a_get_gives_each_file_back() {
+    in_database("archie_test_save", async |store| {
+        let bundle = report_with(PNG);
+        save(&store, "notes/report.md", &bundle).await;
+        let hash = file::sha256(PNG);
+        let object = object_of(PNG);
+        assert_eq!(store.files.read(&object).await.unwrap().bytes, PNG);
+        let record = doc! {
+            "_id": hash.as_str(),
+            "object": object.as_str(),
+            "content_type": "image/png",
+            "size": 27_i64,
+            "description": "Logo",
+            "stored": true,
+            "embedded_by": [{ "document": "notes/report.md", "path": "notes/media/logo.png" }],
+        };
+        assert_eq!(object_record(&store, PNG).await, Some(record));
+        let documents = store.find(Document::new()).await.unwrap();
+        let files = BTreeMap::from([("media/logo.png".to_owned(), hash)]);
+        assert_eq!(documents[0].files, files);
+        let report = path("notes/report.md");
+        assert_eq!(get(&store, &report, Missing::Refuse).await.unwrap(), bundle);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_second_save_of_the_same_document_claims_its_object_once_and_uploads_nothing() {
+    in_database("archie_test_save_twice", async |store| {
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        let object = object_of(PNG);
+        // With the object gone, only an upload could put it back.
+        store
+            .files
+            .delete(&object, &Precondition::None)
+            .await
+            .unwrap();
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        let claims = [claim("notes/report.md", "notes/media/logo.png")];
+        assert_eq!(claims_on(&store, PNG).await, claims);
+        let record = object_record(&store, PNG).await.unwrap();
+        assert!(record.get_bool("stored").unwrap());
+        let missing = StoreError::NotFound(object.clone());
+        assert_eq!(store.files.read(&object).await, Err(missing));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn two_documents_embedding_the_same_bytes_make_one_object_and_one_record_with_two_claims() {
+    in_database("archie_test_shared", async |store| {
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        save(&store, "drafts/report.md", &report_with(PNG)).await;
+        let records = store.objects.count_documents(Document::new()).await;
+        assert_eq!(records.unwrap(), 1);
+        let claims = [
+            claim("notes/report.md", "notes/media/logo.png"),
+            claim("drafts/report.md", "drafts/media/logo.png"),
+        ];
+        assert_eq!(claims_on(&store, PNG).await, claims);
+        assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_save_that_replaces_a_picture_releases_the_old_object_and_keeps_it_in_the_bucket() {
+    in_database("archie_test_replace", async |store| {
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        save(&store, "notes/report.md", &report_with(OTHER_PNG)).await;
+        let claims = [claim("notes/report.md", "notes/media/logo.png")];
+        assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        assert_eq!(claims_on(&store, PNG).await, []);
+        for bytes in [PNG, OTHER_PNG] {
+            let object = store.files.read(&object_of(bytes)).await.unwrap();
+            assert_eq!(object.bytes, bytes);
+        }
+        let report = path("notes/report.md");
+        let back = get(&store, &report, Missing::Refuse).await.unwrap();
+        assert_eq!(back, report_with(OTHER_PNG));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn each_step_of_a_save_that_replaces_a_picture_leaves_the_file_reading_one_whole_version() {
+    in_database("archie_test_replace_steps", async |store| {
+        let report = path("notes/report.md");
+        let logo = path("notes/media/logo.png");
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        let document = parse(REPORT).document;
+        let files = BTreeMap::from([(logo.clone(), OTHER_PNG.to_vec())]);
+        let replaced = embedded(&report, &document, &files).unwrap();
+        let picture = &replaced[0];
+        let claims = [claim("notes/report.md", "notes/media/logo.png")];
+
+        store.claim(&report, picture).await.unwrap();
+        assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        let record = object_record(&store, OTHER_PNG).await.unwrap();
+        assert!(!record.get_bool("stored").unwrap());
+        let missing = StoreError::NotFound(picture.object.clone());
+        assert_eq!(store.files.read(&picture.object).await, Err(missing));
+        assert_eq!(store.read(&logo).await.unwrap().bytes, PNG);
+
+        store.upload(picture).await.unwrap();
+        let uploaded = store.files.read(&picture.object).await.unwrap();
+        assert_eq!(uploaded.bytes, OTHER_PNG);
+        assert_eq!(store.read(&logo).await.unwrap().bytes, PNG);
+
+        let hashes = BTreeMap::from([("media/logo.png".to_owned(), picture.hash.clone())]);
+        store
+            .save(&report, &document, &hashes, &Precondition::None)
+            .await
+            .unwrap();
+        assert_eq!(claims_on(&store, PNG).await, claims);
+        assert_eq!(store.read(&logo).await.unwrap().bytes, OTHER_PNG);
+
+        store.release(&report, &hashes).await.unwrap();
+        assert_eq!(claims_on(&store, PNG).await, []);
+        assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        assert_eq!(store.read(&logo).await.unwrap().bytes, OTHER_PNG);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_read_of_a_files_own_path_gives_the_object_the_record_of_its_document_names() {
+    in_database("archie_test_file_path", async |store| {
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        let draft = path("notes/draft.md");
+        let files = BTreeMap::from([(path("notes/media/logo.png"), OTHER_PNG.to_vec())]);
+        let unsaved = embedded(&draft, &parse(REPORT).document, &files).unwrap();
+        // A claim whose document was never saved names no object.
+        store.claim(&draft, &unsaved[0]).await.unwrap();
+        let logo = path("notes/media/logo.png");
+        let read = store.read(&logo).await.unwrap();
+        let expected = Stored {
+            bytes: PNG.to_vec(),
+            revision: file::revision(PNG),
+        };
+        assert_eq!(read, expected);
+        let other = path("notes/media/other.png");
+        let missing = StoreError::NotFound(other.clone());
+        assert_eq!(store.read(&other).await, Err(missing));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_record_written_with_no_files_reads_as_a_document_with_no_files() {
+    in_database("archie_test_no_files", async |store| {
+        let report = path("notes/report.md");
+        let mut record = to_record(&StoredDocument {
+            document: parse(REPORT).document,
+            files: BTreeMap::new(),
+            id: ObjectId::new(),
+            path: report.as_str().to_owned(),
+            revision: revision_of(REPORT).0,
+        })
+        .unwrap();
+        record.remove("files");
+        store.collection.insert_one(record).await.unwrap();
+        let bundle = get(&store, &report, Missing::Keep).await.unwrap();
+        assert_eq!(bundle.files(), Vec::<&str>::new());
+        let logo = path("notes/media/logo.png");
+        let missing = StoreError::NotFound(logo.clone());
+        assert_eq!(store.read_embedded(&report, &logo).await, Err(missing));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_claim_while_a_deletion_holds_the_record_is_refused_and_changes_nothing() {
+    in_database("archie_test_claim_held", async |store| {
+        let report = path("notes/report.md");
+        let files = BTreeMap::from([(path("notes/media/logo.png"), PNG.to_vec())]);
+        let picture = embedded(&report, &parse(REPORT).document, &files).unwrap();
+        let held = doc! {
+            "_id": picture[0].hash.as_str(),
+            "object": picture[0].object.as_str(),
+            "content_type": "image/png",
+            "size": 27_i64,
+            "description": "Logo",
+            "stored": true,
+            "deleting": true,
+            "embedded_by": [],
+        };
+        store.objects.insert_one(held.clone()).await.unwrap();
+        assert_eq!(store.try_claim(&report, &picture[0]).await, Ok(false));
+        assert_eq!(object_record(&store, PNG).await, Some(held));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_file_outside_the_folder_of_its_document_fails_the_save_naming_it_and_claims_nothing() {
+    in_database("archie_test_outside", async |store| {
+        let report = path("notes/report.md");
+        let files = BTreeMap::from([(path("other/logo.png"), PNG.to_vec())]);
+        let written = store
+            .write_with_embedded(&report, REPORT, &files, &Precondition::None)
+            .await;
+        let refused = "other/logo.png: not in the folder of notes/report.md";
+        assert_eq!(written, Err(StoreError::Backend(refused.to_owned())));
+        let records = store.objects.count_documents(Document::new()).await;
+        assert_eq!(records.unwrap(), 0);
+        assert_eq!(store.list(None).await, Ok(Vec::new()));
     })
     .await;
 }

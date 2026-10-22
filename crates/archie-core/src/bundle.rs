@@ -569,6 +569,24 @@ pub fn embedded_paths(
     Ok(paths)
 }
 
+/// The media type a data URI gives the file at `path`, by its extension.
+#[must_use]
+pub fn media_type(path: &str) -> &'static str {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("gif") => "image/gif",
+        Some("jpeg" | "jpg") => "image/jpeg",
+        Some("md") => "text/markdown",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Each embed of `document`, the text at `folder`, that names a file, as the target as written
 /// and what it names in the bundle, in document order.
 fn paths_in(
@@ -960,23 +978,6 @@ fn data_uri(name: &str, bytes: &[u8]) -> String {
         percent_encoded(name),
         STANDARD.encode(bytes)
     )
-}
-
-/// The media type a data URI gives the file at `path`, by its extension.
-fn media_type(path: &str) -> &'static str {
-    let extension = Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase);
-    match extension.as_deref() {
-        Some("gif") => "image/gif",
-        Some("jpeg" | "jpg") => "image/jpeg",
-        Some("md") => "text/markdown",
-        Some("png") => "image/png",
-        Some("svg") => "image/svg+xml",
-        Some("webp") => "image/webp",
-        _ => "application/octet-stream",
-    }
 }
 
 /// `path` with each byte other than a letter, a digit, `-`, `.`, `_`, `~` or `/` written as

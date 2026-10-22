@@ -27,7 +27,7 @@ const FORMS: [&str; 4] = ["markdown", "json", "binary", "zip"];
 
 /// The four variables a `MinIO` store reads: a server no process listens on,
 /// whose connection is refused at once, and keys no output may show.
-#[cfg(feature = "minio")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 const MINIO_VARIABLES: [(&str, &str); 4] = [
     ("ARCHIE_MINIO_ENDPOINT", "http://127.0.0.1:1"),
     ("ARCHIE_MINIO_REGION", "us-east-1"),
@@ -55,11 +55,13 @@ fn archie(folder: &Path, arguments: &[&str], stdin: &[u8]) -> Assert {
 }
 
 /// Runs the binary in `folder` with `arguments`, `ARCHIE_MONGODB_URI` set to
-/// `uri` or removed when it is `None`.
+/// `uri` or removed when it is `None`, a bucket, and `MINIO_VARIABLES`.
 #[cfg(feature = "mongodb")]
 fn archie_with_uri(folder: &Path, arguments: &[&str], uri: Option<&OsStr>) -> Assert {
     let mut command = Command::cargo_bin("archie").unwrap();
     command.current_dir(folder).args(arguments);
+    command.env("ARCHIE_MONGODB_BUCKET", "archie-files");
+    command.envs(MINIO_VARIABLES);
     if let Some(value) = uri {
         command.env("ARCHIE_MONGODB_URI", value);
     } else {

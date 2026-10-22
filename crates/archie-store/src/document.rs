@@ -159,7 +159,7 @@ fn beside_all(
 }
 
 /// Whether the file at `name` is a note: its extension is `md`, in any case.
-fn is_note(name: &str) -> bool {
+pub(crate) fn is_note(name: &str) -> bool {
     Path::new(name)
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
@@ -174,7 +174,7 @@ fn note_text<'bytes>(name: &str, bytes: &'bytes [u8]) -> Result<&'bytes str, Bun
     })
 }
 
-fn parent_of(name: &str) -> &str {
+pub(crate) fn parent_of(name: &str) -> &str {
     name.rsplit_once('/').map_or("", |(folder, _)| folder)
 }
 

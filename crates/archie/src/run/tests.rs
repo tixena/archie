@@ -48,7 +48,7 @@ const JEKYLL_POST: &str = FIXTURES[10];
 
 /// The four variables a `MinIO` store reads: a server no process listens on,
 /// whose connection is refused at once, and keys no output may show.
-#[cfg(feature = "minio")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 const MINIO_VARIABLES: [(&str, &str); 4] = [
     ("ARCHIE_MINIO_ENDPOINT", "http://127.0.0.1:1"),
     ("ARCHIE_MINIO_REGION", "us-east-1"),
@@ -126,7 +126,7 @@ fn failed(ran: &Ran, code: u8, line: &str) {
 }
 
 /// Asserts neither key of `MINIO_VARIABLES` is on `ran`'s standard error.
-#[cfg(feature = "minio")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 fn hides_the_keys(ran: &Ran) {
     for (_, key) in &MINIO_VARIABLES[2..] {
         assert!(!ran.stderr.contains(key), "{}", ran.stderr);
@@ -134,7 +134,7 @@ fn hides_the_keys(ran: &Ran) {
 }
 
 /// `system` with each of `MINIO_VARIABLES` but the one named `left_out`.
-#[cfg(feature = "minio")]
+#[cfg(any(feature = "minio", feature = "mongodb"))]
 fn minio_variables(system: MemorySystem, left_out: Option<&str>) -> MemorySystem {
     MINIO_VARIABLES
         .iter()
@@ -142,6 +142,18 @@ fn minio_variables(system: MemorySystem, left_out: Option<&str>) -> MemorySystem
         .fold(system, |with, (name, value)| {
             with.with_env(name, value).unwrap()
         })
+}
+
+/// `system` with what a MongoDB store reads: `UNREACHABLE`, a bucket, and each
+/// of `MINIO_VARIABLES` but the one named `left_out`.
+#[cfg(feature = "mongodb")]
+fn mongodb_variables(system: MemorySystem, left_out: Option<&str>) -> MemorySystem {
+    let with = system
+        .with_env("ARCHIE_MONGODB_URI", UNREACHABLE)
+        .unwrap()
+        .with_env("ARCHIE_MONGODB_BUCKET", "archie-files")
+        .unwrap();
+    minio_variables(with, left_out)
 }
 
 fn read(system: &MemorySystem, path: &str) -> String {
@@ -448,10 +460,70 @@ fn a_mongodb_store_with_no_connection_string_exits_3_with_one_line_naming_the_va
 
 #[cfg(feature = "mongodb")]
 #[test]
-fn a_mongodb_server_that_cannot_be_reached_exits_4_naming_the_store() {
+fn a_mongodb_store_with_no_bucket_exits_3_with_one_line_naming_the_variable() {
     let system = vault("# A\n")
         .with_env("ARCHIE_MONGODB_URI", UNREACHABLE)
         .unwrap();
+    let line = "archie: ARCHIE_MONGODB_BUCKET is not set: it holds the MinIO bucket of a MongoDB store's files\n";
+    let got = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
+    failed(&got, 3, line);
+    let written = archie(
+        &system,
+        &["write", "b.md", "--store", "mongodb:notes/files"],
+        b"# B\n",
+    );
+    failed(&written, 3, line);
+    assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_mongodb_bucket_that_is_not_a_bucket_and_a_prefix_exits_3_naming_the_variable() {
+    let shape = "archie: ARCHIE_MONGODB_BUCKET is not <bucket> or <bucket>/<prefix>: it holds the MinIO bucket of a MongoDB store's files\n";
+    let prefix = "archie: ARCHIE_MONGODB_BUCKET: `a//b` is not a store path\n";
+    for (bucket, line) in [
+        ("", shape),
+        ("/files", shape),
+        ("archie-files/", shape),
+        ("archie-files/a//b", prefix),
+    ] {
+        let system = mongodb_variables(vault("# A\n"), None)
+            .with_env("ARCHIE_MONGODB_BUCKET", bucket)
+            .unwrap();
+        let got = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
+        failed(&got, 3, line);
+    }
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn each_minio_variable_left_out_of_a_mongodb_store_exits_3_with_one_line_naming_it() {
+    let lines = [
+        "archie: ARCHIE_MINIO_ENDPOINT is not set: it holds the MinIO server's address\n",
+        "archie: ARCHIE_MINIO_REGION is not set: it holds the region the MinIO server expects\n",
+        "archie: AWS_ACCESS_KEY_ID is not set: it holds the MinIO access key\n",
+        "archie: AWS_SECRET_ACCESS_KEY is not set: it holds the MinIO secret key\n",
+    ];
+    for ((name, _), line) in MINIO_VARIABLES.iter().zip(lines) {
+        let system = mongodb_variables(vault("# A\n"), Some(name));
+        let got = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
+        failed(&got, 3, line);
+        hides_the_keys(&got);
+        let written = archie(
+            &system,
+            &["write", "b.md", "--store", "mongodb:notes/files"],
+            b"# B\n",
+        );
+        failed(&written, 3, line);
+        hides_the_keys(&written);
+        assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+    }
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn a_mongodb_server_that_cannot_be_reached_exits_4_naming_the_store() {
+    let system = mongodb_variables(vault("# A\n"), None);
     let got = archie(&system, &["get", "a.md", "-s", "mongodb:notes/files"], b"");
     failed(&got, 4, "archie: mongodb:notes/files: ");
     let written = archie(
@@ -466,9 +538,7 @@ fn a_mongodb_server_that_cannot_be_reached_exits_4_naming_the_store() {
 #[cfg(feature = "mongodb")]
 #[test]
 fn with_a_mongodb_store_the_path_is_used_as_written_and_checked_before_connecting() {
-    let system = vault("# A\n")
-        .with_env("ARCHIE_MONGODB_URI", UNREACHABLE)
-        .unwrap();
+    let system = mongodb_variables(vault("# A\n"), None);
     for path in ["/notes/a.md", "./a.md", "notes/../a.md"] {
         let ran = archie(&system, &["get", path, "-s", "mongodb:notes/files"], b"");
         failed(

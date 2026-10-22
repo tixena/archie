@@ -9,10 +9,12 @@ use archie_core::writer::WriteOptions;
 use archie_store::any::AnyStore;
 use archie_store::document::{get, put};
 use archie_store::mongo::MongoStore;
+use archie_store::object::{ObjectConfig, ObjectStore};
 use archie_store::{Precondition, StorePath};
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin;
 use mongodb::Client;
+use os_shim::real::RealSystem;
 use predicates::ord::eq;
 use tokio::runtime::{Builder, Runtime};
 
@@ -22,6 +24,21 @@ const FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../archie-core/src/parser/tests/fixtures"
 );
+
+/// The key prefix the binary's MongoDB store keeps its files under.
+const PREFIX: &str = "binary/mongodb";
+
+const REGION: &str = "us-east-1";
+
+/// The bucket `just test-stores` makes.
+fn bucket() -> String {
+    env::var("ARCHIE_TEST_MINIO_BUCKET").unwrap()
+}
+
+/// The server's address `just test-stores` sets.
+fn endpoint() -> String {
+    env::var("ARCHIE_TEST_MINIO_ENDPOINT").unwrap()
+}
 
 /// The 21 markdown fixture files of archie-core, by name.
 fn fixtures() -> Vec<(String, String)> {
@@ -79,6 +96,9 @@ fn pipe(root: &Path, name: &str, store: &str) {
         .current_dir(root)
         .args(["write", name, "--store", store, "--allow-missing"])
         .env("ARCHIE_MONGODB_URI", uri())
+        .env("ARCHIE_MONGODB_BUCKET", format!("{}/{PREFIX}", bucket()))
+        .env("ARCHIE_MINIO_ENDPOINT", endpoint())
+        .env("ARCHIE_MINIO_REGION", REGION)
         .stdin(get.stdout.take().unwrap())
         .status()
         .unwrap();
@@ -94,7 +114,10 @@ fn uri() -> String {
 #[test]
 fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keeps_it() {
     let runtime = Builder::new_current_thread().enable_all().build().unwrap();
-    let opened = runtime.block_on(MongoStore::open(&uri(), DATABASE, "expected"));
+    let prefix = StorePath::new("binary/expected").unwrap();
+    let config = ObjectConfig::new(endpoint(), REGION.to_owned(), bucket(), Some(prefix));
+    let files = ObjectStore::open(&RealSystem::new(), config).unwrap();
+    let opened = runtime.block_on(MongoStore::open(&uri(), DATABASE, "expected", files));
     let expected = AnyStore::Mongo(opened.unwrap());
     let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let root = folder.path();
@@ -109,6 +132,9 @@ fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keep
             .current_dir(root)
             .args(["get", &name, "--store", &store, "--allow-missing"])
             .env("ARCHIE_MONGODB_URI", uri())
+            .env("ARCHIE_MONGODB_BUCKET", format!("{}/{PREFIX}", bucket()))
+            .env("ARCHIE_MINIO_ENDPOINT", endpoint())
+            .env("ARCHIE_MINIO_REGION", REGION)
             .assert()
             .success()
             .stdout(eq(kept.as_slice()));
