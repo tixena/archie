@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use os_shim::System;
 use os_shim::archive::{ZipOptions, to_zip_writer};
 use os_shim::mock::MemorySystem;
+use os_shim::{System, WriteMode};
 use sha2::{Digest as _, Sha256};
 
 use crate::parser::ast::{
@@ -399,13 +399,17 @@ impl BundledDocument {
     {
         let folder = path.parent().unwrap_or_else(|| Path::new(""));
         system.create_dir_all(folder)?;
-        system.write(path, writer::write(&self.document, options)?.as_bytes())?;
+        system.write(
+            path,
+            writer::write(&self.document, options)?.as_bytes(),
+            WriteMode::Replace,
+        )?;
         for (name, bytes) in &self.files {
             let file: PathBuf = folder.join(name);
             if let Some(parent) = file.parent() {
                 system.create_dir_all(parent)?;
             }
-            system.write(&file, bytes)?;
+            system.write(&file, bytes, WriteMode::Replace)?;
         }
         Ok(())
     }

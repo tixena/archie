@@ -42,7 +42,7 @@ unicase = "2.10"
 unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 
 # The operating system behind a trait, real or in memory
-os-shim = "0.1.0"
+os-shim = "0.1.1"
 
 # SHA-256, for the revision of a stored file
 sha2 = "0.11"

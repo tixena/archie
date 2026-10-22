@@ -8,7 +8,7 @@ use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use os_shim::System;
+use os_shim::{System, WriteMode};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -171,7 +171,7 @@ impl<'system> FileStore<'system> {
         let temporary = Self::temporary(&folder, name);
         let written = self
             .system
-            .write(&temporary, bytes)
+            .write(&temporary, bytes, WriteMode::Replace)
             .and_then(|()| self.system.rename(&temporary, &folder.join(name)));
         if let Err(error) = written {
             let _: io::Result<()> = self.system.remove_file(&temporary);
