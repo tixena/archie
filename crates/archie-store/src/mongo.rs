@@ -84,7 +84,7 @@ impl MongoStore {
         while !self.try_claim(path, file).await? {
             if tries == CLAIM_TRIES {
                 return Err(StoreError::Backend(format!(
-                    "{}: a deletion of its object still runs",
+                    "{}: a deletion of its object has not finished; `archie asset finish-deletions` finishes it once no other archie writes to this store",
                     file.path
                 )));
             }
@@ -98,8 +98,16 @@ impl MongoStore {
     /// record, when nothing embeds it and no other deletion holds it.
     async fn delete_object(&self, hash: &str) -> Result<(), StoreError> {
         if self.mark(hash).await? {
-            self.remove_object(hash).await?;
-            self.remove_record(hash).await?;
+            let object = object_path(hash)?;
+            let removed = match self.remove_object(hash).await {
+                Ok(()) => self.remove_record(hash).await,
+                Err(error) => Err(error),
+            };
+            removed.map_err(|error| {
+                StoreError::Backend(format!(
+                    "{object}: the change to the document is stored, and the deletion of this object stopped: {error}; `archie asset finish-deletions` finishes it"
+                ))
+            })?;
         }
         Ok(())
     }
@@ -121,6 +129,30 @@ impl MongoStore {
             found.push(from_record(record_of(records.current())?)?);
         }
         Ok(found)
+    }
+
+    /// Finishes each deletion that stopped after it marked its record: deletes
+    /// the object, then the record, and gives the SHA-256 of each, sorted.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::Backend` when MongoDB or the bucket fails.
+    pub async fn finish_deletions(&self) -> Result<Vec<String>, StoreError> {
+        let held = StoredObject::MONGO_FIELDS
+            .deleting()
+            .eq(true)
+            .map_err(|error| backend(&error))?;
+        let records = StoredObject::find(&self.objects, held)
+            .await
+            .map_err(|error| backend(&error))?;
+        let mut finished = Vec::new();
+        for record in records {
+            self.remove_object(&record.id).await?;
+            self.remove_record(&record.id).await?;
+            finished.push(record.id);
+        }
+        finished.sort_unstable();
+        Ok(finished)
     }
 
     /// The `files` of the record at `path`, read alone: none when no record
@@ -847,8 +879,12 @@ fn name_in<'file>(document: &StorePath, file: &'file str) -> Option<&'file str> 
 }
 
 /// The path, in the bucket of the store's files, of the object whose bytes
-/// have the SHA-256 `hash`.
-fn object_path(hash: &str) -> Result<StorePath, StoreError> {
+/// have the SHA-256 `hash`: `files/<sha256>`.
+///
+/// # Errors
+///
+/// `StoreError::InvalidPath` when `hash` does not make a store path.
+pub fn object_path(hash: &str) -> Result<StorePath, StoreError> {
     StorePath::new(&format!("files/{hash}"))
 }
 

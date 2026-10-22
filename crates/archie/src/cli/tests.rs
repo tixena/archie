@@ -2,7 +2,7 @@ use archie_core::forms::Form;
 use clap::error::ErrorKind;
 use clap::{CommandFactory as _, Parser as _};
 
-use super::{Cli, Command, FormatArg, StoreArg, SyntaxArg};
+use super::{AssetCommand, Cli, Command, FormatArg, StoreArg, SyntaxArg};
 
 #[test]
 fn the_command_line_is_well_formed() {
@@ -116,26 +116,59 @@ fn each_of_the_four_forms_parses_on_get_and_write_and_names_its_form() {
     for (text, form) in forms {
         for command in ["get", "write"] {
             let parsed = Cli::try_parse_from(["archie", command, "a.md", "-f", text]).unwrap();
-            let (Command::Get {
-                allow_missing: _,
-                embed: _,
-                format,
-                frontmatter: _,
-                output: _,
-                path: _,
-                store: _,
-            }
-            | Command::Write {
-                allow_missing: _,
-                format,
-                frontmatter: _,
-                input: _,
-                path: _,
-                store: _,
-            }) = parsed.command;
-            assert_eq!(Form::from(format), form, "{command} {text}");
+            let format = match parsed.command {
+                Command::Get {
+                    allow_missing: _,
+                    embed: _,
+                    format,
+                    frontmatter: _,
+                    output: _,
+                    path: _,
+                    store: _,
+                }
+                | Command::Write {
+                    allow_missing: _,
+                    format,
+                    frontmatter: _,
+                    input: _,
+                    path: _,
+                    store: _,
+                } => Some(format),
+                Command::Asset { command: _ } => None,
+            };
+            assert_eq!(format.map(Form::from), Some(form), "{command} {text}");
         }
     }
+}
+
+#[test]
+fn asset_finish_deletions_parses_its_store() {
+    let finish = Cli::try_parse_from([
+        "archie",
+        "asset",
+        "finish-deletions",
+        "--store",
+        "mongodb:notes/files",
+    ])
+    .unwrap();
+    assert!(
+        matches!(
+            &finish.command,
+            Command::Asset {
+                command: AssetCommand::FinishDeletions {
+                    store: StoreArg::Mongodb { collection, database },
+                },
+            } if collection == "files" && database == "notes"
+        ),
+        "{finish:?}"
+    );
+}
+
+#[test]
+fn asset_finish_deletions_without_a_store_is_a_usage_error_with_code_2() {
+    let error = Cli::try_parse_from(["archie", "asset", "finish-deletions"]).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    assert_eq!(error.exit_code(), 2_i32);
 }
 
 #[test]

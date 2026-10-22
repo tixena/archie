@@ -27,6 +27,7 @@
   - [archie query](reference/cli/query.md)
   - [archie search](reference/cli/search.md)
   - [archie write](reference/cli/write.md)
+  - [archie asset](reference/cli/asset.md)
   - [archie rm](reference/cli/rm.md)
   - [archie link](reference/cli/link.md)
   - [archie check](reference/cli/check.md)

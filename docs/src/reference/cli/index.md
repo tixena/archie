@@ -89,7 +89,8 @@ The table is written for the validation run; see
 [Exit codes](../exit-codes.md).
 
 `archie get` and `archie write` exit with their own codes, 0 to 4 and 6, given on
-[their pages](get.md#exit-codes).
+[their pages](get.md#exit-codes), and `archie asset` with its own, 0 and 2 to 4,
+given on [its page](asset.md#exit-codes).
 
 ## The commands
 
@@ -100,6 +101,7 @@ The table is written for the validation run; see
 | [`archie query`](query.md) | Selects documents by an expression over their frontmatter, in a language that also drives modification. |
 | [`archie search`](search.md) | Matches a pattern against document bodies and frontmatter. |
 | [`archie write`](write.md) | Stores one whole markdown document, with every file it embeds, read from standard input or a file. |
+| [`archie asset`](asset.md) | Commands on the files that documents embed: `archie asset finish-deletions` finishes each deletion of such a file that stopped halfway in a MongoDB store. |
 | [`archie rm`](rm.md) | Removes a file or a folder. |
 | [`archie link`](link.md) | Wraps mentions of a resource in links to that resource. |
 | [`archie check`](check.md) | Validates a corpus, or one path within it. |

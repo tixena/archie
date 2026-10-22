@@ -7,6 +7,17 @@ use std::path::PathBuf;
 use archie_core::forms::Form;
 use archie_core::parser::ast::FrontmatterFormat;
 
+#[derive(Debug, clap::Subcommand)]
+pub enum AssetCommand {
+    /// Finishes each deletion of an embedded file that stopped halfway. Run it only while no other
+    /// archie writes to the store.
+    FinishDeletions {
+        /// The MongoDB store, `mongodb:<database>/<collection>`.
+        #[arg(short, long)]
+        store: StoreArg,
+    },
+}
+
 #[derive(Debug, clap::Parser)]
 #[command(name = "archie", version, about = "Markdown documents as a typed tree")]
 pub struct Cli {
@@ -16,6 +27,11 @@ pub struct Cli {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
+    /// Commands on the files that documents embed.
+    Asset {
+        #[command(subcommand)]
+        command: AssetCommand,
+    },
     /// Writes the document at PATH to standard output, or to --output.
     Get {
         path: PathBuf,

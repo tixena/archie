@@ -16,7 +16,7 @@ use archie_store::any::AnyStore;
 use archie_store::document::{self, DocumentError};
 use archie_store::file::FileStore;
 #[cfg(feature = "mongodb")]
-use archie_store::mongo::MongoStore;
+use archie_store::mongo::{MongoStore, object_path};
 #[cfg(any(feature = "minio", feature = "mongodb"))]
 use archie_store::object::{ObjectConfig, ObjectStore};
 use archie_store::{Precondition, Revision, Store as _, StoreError, StorePath};
@@ -26,7 +26,7 @@ use os_shim::bucket::MinioBucket;
 
 #[cfg(feature = "mongodb")]
 use crate::cli::bucket_and_prefix;
-use crate::cli::{Cli, Command, FormatArg, StoreArg, SyntaxArg};
+use crate::cli::{AssetCommand, Cli, Command, FormatArg, StoreArg, SyntaxArg};
 
 /// Why a command stopped: the line after `archie: `, and the exit code.
 struct Failure {
@@ -47,6 +47,16 @@ impl Failure {
     #[cfg(any(feature = "minio", feature = "mongodb"))]
     const fn configuration(message: String) -> Self {
         Self { code: 3, message }
+    }
+
+    /// `asset finish-deletions` given `arg`, a store that keeps no deletions.
+    fn keeps_no_deletions(arg: &StoreArg) -> Self {
+        Self {
+            code: 2,
+            message: format!(
+                "{arg} keeps no deletions: asset finish-deletions takes --store mongodb:<database>/<collection>"
+            ),
+        }
     }
 
     /// `error` on one line naming `path` as the command line gave it, in place
@@ -132,6 +142,57 @@ fn as_written(path: &Path) -> Result<StorePath, Failure> {
     StorePath::new(text).map_err(|error| Failure::of_store(path, None, &error))
 }
 
+/// Finishes each deletion of an embedded file that stopped halfway in the
+/// MongoDB store `arg` names, and writes the key of each object it deleted to
+/// `stdout`, one per line.
+#[cfg(feature = "mongodb")]
+async fn finish_deletions(
+    system: &dyn System,
+    arg: &StoreArg,
+    stdout: &mut (dyn Write + Send),
+) -> Result<(), Failure> {
+    match arg {
+        StoreArg::Minio {
+            bucket: _,
+            prefix: _,
+        } => Err(Failure::keeps_no_deletions(arg)),
+        StoreArg::Mongodb {
+            collection,
+            database,
+        } => {
+            let store = mongodb(system, arg, database, collection).await?;
+            let finished = store
+                .finish_deletions()
+                .await
+                .map_err(|error| Failure::store(arg, &error))?;
+            for hash in finished {
+                let object = object_path(&hash).map_err(|error| Failure::store(arg, &error))?;
+                writeln!(stdout, "{object}")
+                    .map_err(|error| Failure::stream("standard output", &error))?;
+            }
+            stdout
+                .flush()
+                .map_err(|error| Failure::stream("standard output", &error))
+        }
+    }
+}
+
+/// The failure of `asset finish-deletions` with `arg` in a build without the
+/// MongoDB store, the one store that keeps deletions.
+#[cfg(not(feature = "mongodb"))]
+fn finish_deletions(arg: &StoreArg) -> Result<(), Failure> {
+    Err(match arg {
+        StoreArg::Minio {
+            bucket: _,
+            prefix: _,
+        } => Failure::keeps_no_deletions(arg),
+        StoreArg::Mongodb {
+            collection: _,
+            database: _,
+        } => Failure::unbuilt(arg, "MongoDB"),
+    })
+}
+
 /// Writes the document at `path` to `stdout`, or to the file `output`, whole.
 /// Markdown to `output` is that file and each file it embeds beside it, unless
 /// `embed` asks for the one file.
@@ -211,6 +272,27 @@ fn minio<'system>(
     Ok((AnyStore::Minio(store), at))
 }
 
+/// The MongoDB store `arg` names: the collection `collection` of the database
+/// `database`, on the server `ARCHIE_MONGODB_URI` names, its files in the
+/// bucket `ARCHIE_MONGODB_BUCKET` names.
+#[cfg(feature = "mongodb")]
+async fn mongodb(
+    system: &dyn System,
+    arg: &StoreArg,
+    database: &str,
+    collection: &str,
+) -> Result<MongoStore, Failure> {
+    let uri = variable(
+        system,
+        "ARCHIE_MONGODB_URI",
+        "the MongoDB connection string",
+    )?;
+    let files = mongodb_files(system)?;
+    MongoStore::open(&uri, database, collection, files)
+        .await
+        .map_err(|error| Failure::store(arg, &error))
+}
+
 /// The bucket a MongoDB store keeps its files in: `ARCHIE_MONGODB_BUCKET`,
 /// `<bucket>` or `<bucket>/<prefix>`, on the `MinIO` server the environment
 /// names.
@@ -279,16 +361,8 @@ async fn open<'system>(
             collection,
             database,
         } => {
-            let uri = variable(
-                system,
-                "ARCHIE_MONGODB_URI",
-                "the MongoDB connection string",
-            )?;
-            let files = mongodb_files(system)?;
             let at = as_written(path)?;
-            let store = MongoStore::open(&uri, database, collection, files)
-                .await
-                .map_err(|error| Failure::store(arg, &error))?;
+            let store = mongodb(system, arg, database, collection).await?;
             Ok((AnyStore::Mongo(store), at))
         }
     }
@@ -331,6 +405,14 @@ pub async fn run(
     stderr: &mut (dyn Write + Send),
 ) -> ExitCode {
     let done = match &cli.command {
+        #[cfg(feature = "mongodb")]
+        Command::Asset {
+            command: AssetCommand::FinishDeletions { store },
+        } => finish_deletions(system, store, stdout).await,
+        #[cfg(not(feature = "mongodb"))]
+        Command::Asset {
+            command: AssetCommand::FinishDeletions { store },
+        } => finish_deletions(store),
         Command::Get {
             path,
             allow_missing,

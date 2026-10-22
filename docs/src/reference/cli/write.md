@@ -142,7 +142,9 @@ of the collection `<collection>_files` names each object.
 A missing variable exits with code 3, on one line that names it. An
 `ARCHIE_MONGODB_BUCKET` that is not `<bucket>` or `<bucket>/<prefix>`, or whose
 prefix is not a store path, exits with code 3 too. A server that cannot be
-reached exits with code 4.
+reached exits with code 4. A write of a document that embeds a file whose
+deletion stopped halfway exits with code 4, naming
+[`archie asset finish-deletions`](asset.md), which finishes that deletion.
 
 ```console
 $ export ARCHIE_MONGODB_URI=mongodb://127.0.0.1:27017 ARCHIE_MONGODB_BUCKET=notes/mongodb

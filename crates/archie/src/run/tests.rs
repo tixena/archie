@@ -550,6 +550,65 @@ fn with_a_mongodb_store_the_path_is_used_as_written_and_checked_before_connectin
 }
 
 #[test]
+fn asset_finish_deletions_of_a_minio_store_exits_2_naming_the_store() {
+    let system = vault("# A\n");
+    let ran = archie(
+        &system,
+        &["asset", "finish-deletions", "--store", "minio:archie"],
+        b"",
+    );
+    failed(
+        &ran,
+        2,
+        "archie: minio:archie keeps no deletions: asset finish-deletions takes --store mongodb:<database>/<collection>\n",
+    );
+}
+
+#[cfg(feature = "mongodb")]
+#[test]
+fn asset_finish_deletions_with_no_connection_string_exits_3_with_one_line_naming_the_variable() {
+    let system = minio_variables(vault("# A\n"), None)
+        .with_env("ARCHIE_MONGODB_BUCKET", "archie-files")
+        .unwrap();
+    let ran = archie(
+        &system,
+        &[
+            "asset",
+            "finish-deletions",
+            "--store",
+            "mongodb:notes/files",
+        ],
+        b"",
+    );
+    failed(
+        &ran,
+        3,
+        "archie: ARCHIE_MONGODB_URI is not set: it holds the MongoDB connection string\n",
+    );
+}
+
+#[cfg(not(feature = "mongodb"))]
+#[test]
+fn asset_finish_deletions_exits_3_in_a_build_without_the_mongodb_store() {
+    let system = vault("# A\n");
+    let ran = archie(
+        &system,
+        &[
+            "asset",
+            "finish-deletions",
+            "--store",
+            "mongodb:notes/files",
+        ],
+        b"",
+    );
+    failed(
+        &ran,
+        3,
+        "archie: mongodb:notes/files: this archie is built without the MongoDB store\n",
+    );
+}
+
+#[test]
 fn a_standard_output_that_fails_exits_4() {
     let system = vault("# A\n");
     let cli = Cli::try_parse_from(["archie", "get", "a.md"]).unwrap();

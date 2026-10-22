@@ -22,6 +22,11 @@ use tokio::runtime::{Builder, Runtime};
 
 const DATABASE: &str = "archie_test_binary_copies";
 
+const FINISHED_DATABASE: &str = "archie_test_binary_finished";
+
+/// A prefix of its own, so its listing holds no other test's objects.
+const FINISHED_PREFIX: &str = "binary/finished";
+
 const FIXTURES: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../archie-core/src/parser/tests/fixtures"
@@ -170,6 +175,83 @@ fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keep
         let client = Client::with_uri_str(uri()).await.unwrap();
         client.database(DATABASE).drop().await.unwrap();
     });
+}
+
+#[test]
+fn asset_finish_deletions_finishes_a_deletion_that_stopped_and_a_write_of_its_bytes_then_succeeds()
+{
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let root = folder.path();
+    let store = format!("mongodb:{FINISHED_DATABASE}/files");
+    fs::create_dir_all(root.join("draft/media")).unwrap();
+    fs::write(root.join("draft/report.md"), REPORT).unwrap();
+    fs::write(root.join("draft/media/logo.png"), PNG).unwrap();
+    fs::write(root.join("draft/plain.md"), "# Report\n").unwrap();
+    let client = runtime.block_on(Client::with_uri_str(uri())).unwrap();
+    let records: Collection<Document> =
+        client.database(FINISHED_DATABASE).collection("files_files");
+    let embedding = [
+        "write",
+        "notes/report.md",
+        "-i",
+        "draft/report.md",
+        "--store",
+        &store,
+    ];
+    archie_on(root, FINISHED_PREFIX, &embedding).success();
+    let stored = runtime.block_on(async { records.find_one(doc! {}).await.unwrap().unwrap() });
+    let hash = stored.get_str("_id").unwrap();
+    let plain = [
+        "write",
+        "notes/report.md",
+        "-i",
+        "draft/plain.md",
+        "--store",
+        &store,
+    ];
+    archie_on(root, FINISHED_PREFIX, &plain).success();
+    let left = runtime.block_on(async { records.count_documents(doc! {}).await.unwrap() });
+    assert_eq!(left, 0);
+
+    let object = format!("files/{hash}");
+    let held = doc! {
+        "_id": hash,
+        "object": object.as_str(),
+        "content_type": "image/png",
+        "size": 27_i64,
+        "description": "Logo",
+        "stored": true,
+        "deleting": true,
+        "embedded_by": [],
+    };
+    runtime.block_on(async { records.insert_one(held).await.unwrap() });
+    let finish = ["asset", "finish-deletions", "--store", &store];
+    let line = format!("{object}\n");
+    archie_on(root, FINISHED_PREFIX, &finish)
+        .success()
+        .stdout(eq(line.as_bytes()));
+
+    let other = [
+        "write",
+        "notes/other.md",
+        "-i",
+        "draft/report.md",
+        "--store",
+        &store,
+    ];
+    archie_on(root, FINISHED_PREFIX, &other).success();
+    let get = [
+        "get",
+        "notes/other.md",
+        "-o",
+        "out/other.md",
+        "--store",
+        &store,
+    ];
+    archie_on(root, FINISHED_PREFIX, &get).success();
+    assert_eq!(fs::read(root.join("out/media/logo.png")).unwrap(), PNG);
+    runtime.block_on(async { client.database(FINISHED_DATABASE).drop().await.unwrap() });
 }
 
 #[test]

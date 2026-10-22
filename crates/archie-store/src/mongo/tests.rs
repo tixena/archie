@@ -564,6 +564,33 @@ fn files_of(name: &str) -> ObjectStore<MinioBucket> {
     ObjectStore::open(&RealSystem::new(), config).unwrap()
 }
 
+/// Stops a deletion of the logo `OLD_MD` embedded after its mark, and after
+/// its `remove_object` too where `object_removed` says so, then asserts that
+/// `finish_deletions` finishes it and that a save of `NEW_MD` embedding the
+/// logo stores it again.
+async fn finishes_a_stopped_deletion(store: &MongoStore, object_removed: bool) {
+    begin(store, Start::Unembedded(PNG)).await;
+    let hash = file::sha256(PNG);
+    assert_eq!(store.mark(&hash).await, Ok(true));
+    if object_removed {
+        store.remove_object(&hash).await.unwrap();
+    }
+    let new = path(NEW_MD);
+    let files = logo_files(NEW_MD, PNG);
+    let picture = embedded(&new, &parse(REPORT).document, &files).unwrap();
+    let logo = &picture[0];
+    assert_eq!(store.try_claim(&new, logo).await, Ok(false));
+
+    assert_eq!(store.finish_deletions().await, Ok(vec![hash]));
+    assert_eq!(object_record(store, PNG).await, None);
+    assert_eq!(store.files.list(None).await, Ok(Vec::new()));
+
+    assert_eq!(store.try_claim(&new, logo).await, Ok(true));
+    save(store, NEW_MD, &report_with(PNG)).await;
+    let read = store.read_embedded(&new, logo.path).await;
+    assert_eq!(read, Ok(PNG.to_vec()));
+}
+
 /// Runs `scenario` over the collection `files` of the database `name`, its
 /// files under `mongo/<name>` in the bucket, then drops the database.
 async fn in_database<S>(name: &str, scenario: S)
@@ -1658,6 +1685,38 @@ async fn a_deletion_of_a_document_releases_its_claims_and_deletes_each_object_it
         assert_eq!(object_record(&store, PNG).await, None);
         assert_eq!(store.files.list(None).await, Ok(Vec::new()));
         assert_eq!(store.list(None).await, Ok(Vec::new()));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn finishing_a_deletion_stopped_after_its_mark_deletes_the_object_and_the_record_and_a_save_claims_them_again()
+ {
+    in_database("archie_test_finish_after_mark", async |store| {
+        finishes_a_stopped_deletion(&store, false).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn finishing_a_deletion_stopped_after_its_object_was_removed_deletes_the_record_and_a_save_claims_them_again()
+ {
+    in_database("archie_test_finish_after_object", async |store| {
+        finishes_a_stopped_deletion(&store, true).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn finishing_deletions_where_no_deletion_holds_a_record_changes_nothing() {
+    in_database("archie_test_finish_nothing", async |store| {
+        begin(&store, Start::Embedded(PNG)).await;
+        let record = object_record(&store, PNG).await;
+        assert_eq!(store.finish_deletions().await, Ok(Vec::new()));
+        assert_eq!(object_record(&store, PNG).await, record);
+        let claims = [claim(REPORT_MD, "notes/media/logo.png")];
+        assert_eq!(claims_on(&store, PNG).await, claims);
+        assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
     })
     .await;
 }
