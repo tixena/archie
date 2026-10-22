@@ -2,6 +2,8 @@
 //! archived enums and resolvers rkyv generates live in this private module,
 //! and `ast` names the archived enums publicly.
 
+use alloc::collections::BTreeMap;
+
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use rkyv::Place;
 use rkyv::collections::swiss_table::{ArchivedIndexMap, IndexMapResolver};
@@ -11,6 +13,7 @@ use rkyv::string::ArchivedString;
 use rkyv::validation::ArchiveContext;
 use rkyv::with::{ArchiveWith, DeserializeWith, Map, SerializeWith, With};
 
+use crate::bundle::BundledDocument;
 use crate::parser::archive::{AsDays, AsDaysAndSeconds, AsLocalAndOffset, AsSecondsOfDay};
 use crate::parser::ast;
 use crate::parser::extension::{Extension, Markdown};
@@ -95,6 +98,17 @@ where
             RawDocumentMirror::Valid(valid) => Self::Valid(valid),
         }
     }
+}
+
+/// A `BundledDocument` as the binary form archives it: the tree and the files.
+#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(remote = BundledDocument)]
+#[rkyv(attr(non_exhaustive))]
+pub struct BundledDocumentMirror {
+    #[rkyv(getter = BundledDocument::document, with = RawDocumentMirror)]
+    pub document: ast::RawDocument,
+    #[rkyv(getter = BundledDocument::files_by_path)]
+    pub files: BTreeMap<String, Vec<u8>>,
 }
 
 #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]

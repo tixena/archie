@@ -236,6 +236,36 @@ fn a_get_with_toml_options_of_a_yaml_file_gives_toml_frontmatter() {
     on_both(&toml_of_yaml);
 }
 
+async fn above_the_folder(store: &AnyStore<'_>) {
+    let options = WriteOptions::default();
+    let path = StorePath::new("notes/a.md").unwrap();
+    let text = b"![Logo](../shared/logo.png)\n";
+    put(
+        store,
+        &path,
+        Form::Markdown,
+        text,
+        &options,
+        &Precondition::None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        get(store, &path, Form::Markdown, &options).await.unwrap(),
+        text
+    );
+    for form in FORMS {
+        let copied = StorePath::new(&format!("{form:?}/a.md")).unwrap();
+        copy(store, &path, &copied, form).await;
+        assert_eq!(store.read(&copied).await.unwrap().bytes, text, "{form:?}");
+    }
+}
+
+#[test]
+fn a_put_then_a_get_of_an_embed_above_the_folder_gives_back_its_text() {
+    on_both(&above_the_folder);
+}
+
 async fn binary_copied(store: &AnyStore<'_>) {
     let options = WriteOptions::default();
     let path = StorePath::new("a.md").unwrap();

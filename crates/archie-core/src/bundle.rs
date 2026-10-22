@@ -17,6 +17,7 @@ use crate::parser::ast::{
     Block, Document, Image, Inline, Line, LinkForm, LinkInline, MarkdownBlock, Paragraph,
     RawDocument, Section,
 };
+use crate::parser::mirror::BundledDocumentMirror;
 use crate::parser::parse;
 use crate::writer::{self, WriteError, WriteOptions};
 
@@ -62,7 +63,8 @@ pub enum BundledDocumentError {
 pub enum Missing {
     /// Carry no file for it, and keep its target as written.
     Keep,
-    /// Fail with `BundledDocumentError::Missing`.
+    /// Fail with `BundledDocumentError::Missing`, or `BundledDocumentError::Escapes` for a target
+    /// that leaves the document's folder.
     Refuse,
 }
 
@@ -144,6 +146,16 @@ enum Relative {
     Path(String),
 }
 
+/// What an embed's target names in the bundle, resolved from the folder of the text that holds it.
+#[derive(Clone, PartialEq, Eq)]
+enum Resolved {
+    /// A path that leaves the bundle's folder: a file no bundle can hold.
+    Escapes,
+    /// A path that is not UTF-8 once percent-decoded: a file no bundle can hold.
+    NotText,
+    Path(String),
+}
+
 impl BundledDocument {
     /// The document's file in a zip.
     pub const INDEX: &'static str = "index.md";
@@ -202,8 +214,10 @@ impl BundledDocument {
             Relative::NoFile | Relative::NotText => return Ok(None),
             Relative::Path(relative) => relative,
         };
-        let Some(path) = joined(folder, &relative, &embed.target)? else {
-            return Ok(None);
+        let path = match joined(folder, &relative, &embed.target) {
+            Ok(Some(path)) => path,
+            Ok(None) | Err(BundledDocumentError::Escapes { target: _ }) => return Ok(None),
+            Err(error) => return Err(error),
         };
         Ok(self.files.get(&path).map(|bytes| Held {
             bytes,
@@ -216,6 +230,11 @@ impl BundledDocument {
     #[must_use]
     pub fn files(&self) -> Vec<&str> {
         self.files.keys().map(String::as_str).collect()
+    }
+
+    /// The bytes of each file, by its path.
+    pub(crate) const fn files_by_path(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.files
     }
 
     /// The markdown file at `path` in `system`, and every file it embeds, read from the file's
@@ -245,7 +264,7 @@ impl BundledDocument {
         let mut files = BTreeMap::new();
         for name in named(&document, present)?
             .into_iter()
-            .filter_map(|(_, file)| file)
+            .filter_map(|(_, file)| file.into_path())
         {
             if let Some(bytes) = present(&name)? {
                 files.insert(name, bytes);
@@ -276,17 +295,22 @@ impl BundledDocument {
         Self::from_file(&system, &folder.join(Self::INDEX), missing)
     }
 
+    /// The tree and the bytes of each file, by its path, taken from the bundle.
+    pub(crate) fn into_parts(self) -> (RawDocument, BTreeMap<String, Vec<u8>>) {
+        (self.document, self.files)
+    }
+
     /// `document` and the files of `files` it embeds, an embedded note's own embeds included.
     /// Every embed written as a data URI becomes a file first.
     ///
     /// # Errors
     ///
-    /// `NotRelative` for a name of `files` that is not a path inside the bundle, `Escapes` for a
-    /// target that leaves the document's folder, `NotDataUri` for a data URI with no comma before
-    /// its data, `NotBase64` for one whose base64 does not decode, `Missing` for an embedded file
-    /// `files` does not hold when `missing` is
-    /// `Missing::Refuse`, `NotUtf8` for an embedded note, and the writer's error for a block quote
-    /// or a note whose data URIs became files and whose tree does not write.
+    /// `NotRelative` for a name of `files` that is not a path inside the bundle, `NotDataUri` for
+    /// a data URI with no comma before its data, `NotBase64` for one whose base64 does not decode,
+    /// `Escapes` for a target that leaves the document's folder and `Missing` for an embedded file
+    /// `files` does not hold when `missing` is `Missing::Refuse`, `NotUtf8` for an embedded note,
+    /// and the writer's error for a block quote or a note whose data URIs became files and whose
+    /// tree does not write.
     pub fn new(
         mut document: RawDocument,
         mut files: BTreeMap<String, Vec<u8>>,
@@ -298,15 +322,24 @@ impl BundledDocument {
         expand(&mut document, "", &mut files)?;
         let named = named(&document, |path| Ok(files.get(path).cloned()))?;
         if missing == Missing::Refuse
-            && let Some((target, _)) = named
+            && let Some((target, file)) = named
                 .iter()
-                .find(|(_, path)| path.as_ref().is_none_or(|name| !files.contains_key(name)))
+                .find(|(_, file)| !matches!(file, Resolved::Path(path) if files.contains_key(path)))
         {
-            return Err(BundledDocumentError::Missing {
-                target: target.clone(),
+            return Err(match file {
+                Resolved::Escapes => BundledDocumentError::Escapes {
+                    target: target.clone(),
+                },
+                Resolved::NotText | Resolved::Path(_) => BundledDocumentError::Missing {
+                    target: target.clone(),
+                },
             });
         }
-        files.retain(|path, _| named.iter().any(|(_, kept)| kept.as_ref() == Some(path)));
+        files.retain(|path, _| {
+            named
+                .iter()
+                .any(|(_, kept)| matches!(kept, Resolved::Path(held) if held == path))
+        });
         Ok(Self { document, files })
     }
 
@@ -421,6 +454,26 @@ impl BundledDocument {
     }
 }
 
+/// Unchecked: `forms::decode` makes the bundle again with `new`.
+impl From<BundledDocumentMirror> for BundledDocument {
+    fn from(mirror: BundledDocumentMirror) -> Self {
+        Self {
+            document: mirror.document,
+            files: mirror.files,
+        }
+    }
+}
+
+impl Resolved {
+    /// The path in the bundle, or `None` for a file no bundle can hold.
+    fn into_path(self) -> Option<String> {
+        match self {
+            Self::Path(path) => Some(path),
+            Self::Escapes | Self::NotText => None,
+        }
+    }
+}
+
 /// The path of the file `target`, a `![alt](target)` target, names from the document's folder,
 /// or `None` when it names none.
 ///
@@ -495,19 +548,19 @@ pub fn images_mut(
 /// Each file that `document`, the text at `folder`, embeds, as the target as written and the
 /// file's path in the bundle, each path once, in document order.
 ///
-/// An embedded note's own embeds are not followed, and a target that is not UTF-8 once
-/// percent-decoded is left out.
+/// An embedded note's own embeds are not followed, and a target that leaves the bundle's folder
+/// or is not UTF-8 once percent-decoded is left out.
 ///
 /// # Errors
 ///
-/// `Escapes` for a target that leaves the bundle's folder.
+/// None: each target names a path in the bundle or is left out.
 pub fn embedded_paths(
     document: &RawDocument,
     folder: &str,
 ) -> Result<Vec<(String, String)>, BundledDocumentError> {
     let mut paths: Vec<(String, String)> = Vec::new();
     for (target, file) in paths_in(document, folder)? {
-        if let Some(path) = file
+        if let Some(path) = file.into_path()
             && !paths.iter().any(|(_, known)| *known == path)
         {
             paths.push((target, path));
@@ -517,47 +570,47 @@ pub fn embedded_paths(
 }
 
 /// Each embed of `document`, the text at `folder`, that names a file, as the target as written
-/// and the file's path in the bundle, `None` for a file no bundle can hold, in document order.
+/// and what it names in the bundle, in document order.
 fn paths_in(
     document: &RawDocument,
     folder: &str,
-) -> Result<Vec<(String, Option<String>)>, BundledDocumentError> {
+) -> Result<Vec<(String, Resolved)>, BundledDocumentError> {
     let mut paths = Vec::new();
     for embed in embeds(document) {
-        let path = match relative_of(&embed) {
+        let file = match relative_of(&embed) {
             Relative::NoFile => continue,
-            Relative::NotText => None,
-            Relative::Path(relative) => {
-                let Some(path) = joined(folder, &relative, &embed.target)? else {
-                    continue;
-                };
-                Some(path)
-            }
+            Relative::NotText => Resolved::NotText,
+            Relative::Path(relative) => match joined(folder, &relative, &embed.target) {
+                Ok(Some(path)) => Resolved::Path(path),
+                Ok(None) => continue,
+                Err(BundledDocumentError::Escapes { target: _ }) => Resolved::Escapes,
+                Err(error) => return Err(error),
+            },
         };
-        paths.push((embed.target, path));
+        paths.push((embed.target, file));
     }
     Ok(paths)
 }
 
 /// Every file that `document` embeds, an embedded note's own embeds included, each path once, as
-/// the target as written and the file's path in the bundle, `None` for a file no bundle can hold.
-/// `text_of` gives an embedded note's bytes, or `None` when it is not there.
+/// the target as written and what it names in the bundle. `text_of` gives an embedded note's
+/// bytes, or `None` when it is not there.
 fn named<F>(
     document: &RawDocument,
     mut text_of: F,
-) -> Result<Vec<(String, Option<String>)>, BundledDocumentError>
+) -> Result<Vec<(String, Resolved)>, BundledDocumentError>
 where
     F: FnMut(&str) -> Result<Option<Vec<u8>>, BundledDocumentError>,
 {
-    let mut named: Vec<(String, Option<String>)> = Vec::new();
+    let mut named: Vec<(String, Resolved)> = Vec::new();
     let mut pending: Vec<(String, RawDocument)> = vec![(String::new(), document.clone())];
     while let Some((folder, note)) = pending.pop() {
         for (target, file) in paths_in(&note, &folder)? {
-            if file.is_some() && named.iter().any(|(_, known)| *known == file) {
+            if matches!(file, Resolved::Path(_)) && named.iter().any(|(_, known)| *known == file) {
                 continue;
             }
             named.push((target, file.clone()));
-            if let Some(path) = file
+            if let Some(path) = file.into_path()
                 && is_note(&path)
                 && let Some(bytes) = text_of(&path)?
             {
@@ -607,7 +660,7 @@ fn notes_of(
 ) -> Result<Vec<String>, BundledDocumentError> {
     Ok(paths_in(document, folder)?
         .into_iter()
-        .filter_map(|(_, file)| file)
+        .filter_map(|(_, file)| file.into_path())
         .filter(|path| is_note(path) && files.contains_key(path))
         .collect())
 }

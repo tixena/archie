@@ -1,6 +1,7 @@
-//! The forms a document takes outside archie, markdown, JSON and binary, each
-//! a pair of functions from bytes to a document and back.
+//! The forms a document takes outside archie, markdown, JSON, binary and zip,
+//! each a pair of functions from bytes to a bundle and back.
 
+use alloc::collections::BTreeMap;
 use core::str::from_utf8;
 
 use rkyv::de::Pool;
@@ -8,16 +9,17 @@ use rkyv::rancor::{self, Strategy};
 use rkyv::util::AlignedVec;
 use rkyv::with::{DeserializeWith as _, With};
 
-use crate::parser::ast::{ArchivedRawDocument, RawDocument};
-use crate::parser::mirror::RawDocumentMirror;
+use crate::bundle::{BundledDocument, BundledDocumentError, Missing};
+use crate::parser::ast::RawDocument;
+use crate::parser::mirror::{ArchivedBundledDocumentMirror, BundledDocumentMirror};
 use crate::parser::{from_json, parse, to_json};
 use crate::writer::{self, WriteError, WriteOptions, write_archived};
 
 /// `archie` and a zero byte, the bytes the binary form opens with.
 pub const BINARY_MAGIC: &[u8; 7] = b"archie\0";
 
-/// The version of the model's types, the byte after `BINARY_MAGIC`.
-pub const BINARY_VERSION: u8 = 3;
+/// The version of the archived types, the byte after `BINARY_MAGIC`.
+pub const BINARY_VERSION: u8 = 4;
 
 /// A form a document takes outside archie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub enum Form {
     Binary,
     Json,
     Markdown,
+    Zip,
 }
 
 /// Why bytes do not hold a document in a form.
@@ -34,6 +37,8 @@ pub enum Form {
 pub enum DecodeError {
     #[error(transparent)]
     Binary(#[from] rancor::Error),
+    #[error(transparent)]
+    BundledDocument(#[from] BundledDocumentError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error("not archie's binary form: the bytes do not open with `archie` and a zero byte")]
@@ -51,6 +56,8 @@ pub enum EncodeError {
     #[error(transparent)]
     Binary(#[from] rancor::Error),
     #[error(transparent)]
+    BundledDocument(#[from] BundledDocumentError),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Write(#[from] WriteError),
@@ -66,76 +73,122 @@ pub enum FormError {
     Encode(#[from] EncodeError),
 }
 
-/// The bytes of `document` in `form`. `options` names the frontmatter syntax
-/// of the markdown form.
+/// The text a store keeps for a document, and the files it keeps beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StoredBundle {
+    pub files: BTreeMap<String, Vec<u8>>,
+    pub text: String,
+}
+
+/// The bytes of `bundle` in `form`. `options` names the frontmatter syntax of
+/// the markdown and zip forms.
+///
+/// Markdown and JSON hold each file as a data URI in its embed, and zip holds
+/// `index.md` and each file at its path.
 ///
 /// # Errors
 ///
 /// The writer's error for the markdown form, `serde_json`'s or rkyv's for
-/// the others.
+/// the others, and the bundle's for a tree it cannot embed or a zip it cannot
+/// write.
 pub fn encode(
-    document: &RawDocument,
+    bundle: &BundledDocument,
     form: Form,
     options: &WriteOptions,
 ) -> Result<Vec<u8>, EncodeError> {
     match form {
         Form::Binary => {
-            let archived = rkyv::to_bytes::<rancor::Error>(
-                With::<RawDocument, RawDocumentMirror>::cast(document),
-            )?;
+            let archived = rkyv::to_bytes::<rancor::Error>(With::<
+                BundledDocument,
+                BundledDocumentMirror,
+            >::cast(bundle))?;
             Ok([BINARY_MAGIC.as_slice(), &[BINARY_VERSION], &archived].concat())
         }
         Form::Json => {
-            let mut text = to_json(document)?;
+            let mut text = to_json(&bundle.embedded()?)?;
             text.push('\n');
             Ok(text.into_bytes())
         }
-        Form::Markdown => Ok(writer::write(document, options)?.into_bytes()),
+        Form::Markdown => Ok(writer::write(&bundle.embedded()?, options)?.into_bytes()),
+        Form::Zip => {
+            let mut zip = Vec::new();
+            bundle.to_zip(&mut zip, options)?;
+            Ok(zip)
+        }
     }
 }
 
-/// The document `bytes` hold in `form`. The binary form is deserialized here; a
-/// caller that only writes it reads it in place through `stored_text`.
+/// The bundle `bytes` hold in `form`; every data URI becomes a file, and
+/// `missing` decides an embed with no file.
+///
+/// The binary form is deserialized here; a caller that only writes it reads it
+/// in place through `stored`.
 ///
 /// # Errors
 ///
 /// `DecodeError::NotUtf8` naming the offset of the first byte that is not, a
 /// JSON error, a header that is not archie's or names another version, an
-/// rkyv error.
-pub fn decode(bytes: &[u8], form: Form) -> Result<RawDocument, DecodeError> {
+/// rkyv error, and the bundle's error.
+pub fn decode(bytes: &[u8], form: Form, missing: Missing) -> Result<BundledDocument, DecodeError> {
     match form {
         Form::Binary => {
             let buffer = aligned(bytes)?;
-            let archived = rkyv::access::<ArchivedRawDocument, rancor::Error>(&buffer)?;
-            Ok(RawDocumentMirror::deserialize_with(
+            let archived = rkyv::access::<ArchivedBundledDocumentMirror, rancor::Error>(&buffer)?;
+            let read: BundledDocument = BundledDocumentMirror::deserialize_with(
                 archived,
                 Strategy::<_, rancor::Error>::wrap(&mut Pool::new()),
-            )?)
+            )?;
+            let (document, files) = read.into_parts();
+            Ok(BundledDocument::new(document, files, missing)?)
         }
-        Form::Json => Ok(from_json(text(bytes)?)?),
-        Form::Markdown => Ok(parse(text(bytes)?).document),
+        Form::Json => Ok(BundledDocument::new(
+            from_json(text(bytes)?)?,
+            BTreeMap::new(),
+            missing,
+        )?),
+        Form::Markdown => Ok(BundledDocument::new(
+            parse(text(bytes)?).document,
+            BTreeMap::new(),
+            missing,
+        )?),
+        Form::Zip => Ok(BundledDocument::from_zip(&mut &*bytes, missing)?),
     }
 }
 
-/// The text a store keeps for `bytes` in `form`: archie's form, its
-/// frontmatter in the syntax `options` names. JSON and binary are written,
-/// read and written again; binary is read in place with `write_archived`.
+/// The text a store keeps for `bytes` in `form`, archie's form with its
+/// frontmatter in the syntax `options` names, and the files beside it.
+///
+/// `missing` decides an embed with no file. JSON and binary are written, read
+/// and written again; binary is read in place with `write_archived`.
 ///
 /// # Errors
 ///
 /// The errors of `decode` and `encode`.
-pub fn stored_text(bytes: &[u8], form: Form, options: &WriteOptions) -> Result<String, FormError> {
-    let first = match form {
+pub fn stored(
+    bytes: &[u8],
+    form: Form,
+    options: &WriteOptions,
+    missing: Missing,
+) -> Result<StoredBundle, FormError> {
+    let bundle = match form {
         Form::Binary => {
             let buffer = aligned(bytes)?;
-            let archived = rkyv::access::<ArchivedRawDocument, rancor::Error>(&buffer)
+            let archived = rkyv::access::<ArchivedBundledDocumentMirror, rancor::Error>(&buffer)
                 .map_err(DecodeError::from)?;
-            write_archived(archived, options)
+            let files = rkyv::deserialize::<_, rancor::Error>(&archived.files)
+                .map_err(DecodeError::from)?;
+            reread(write_archived(&archived.document, options), files, missing)?
         }
-        Form::Json => writer::write(&decode(bytes, form)?, options),
-        Form::Markdown => return Ok(rewritten(text(bytes)?, options)?),
+        Form::Json => {
+            let document: RawDocument = from_json(text(bytes)?).map_err(DecodeError::from)?;
+            reread(writer::write(&document, options), BTreeMap::new(), missing)?
+        }
+        Form::Markdown | Form::Zip => decode(bytes, form, missing)?,
     };
-    Ok(rewritten(&first.map_err(EncodeError::from)?, options)?)
+    let (document, files) = bundle.into_parts();
+    let text = writer::write(&document, options).map_err(EncodeError::from)?;
+    Ok(StoredBundle { files, text })
 }
 
 /// `bytes` as text, or the offset of the first byte that is not UTF-8.
@@ -159,9 +212,14 @@ fn aligned(bytes: &[u8]) -> Result<AlignedVec, DecodeError> {
     Ok(buffer)
 }
 
-/// `text` parsed and written in archie's form.
-fn rewritten(text: &str, options: &WriteOptions) -> Result<String, EncodeError> {
-    Ok(writer::write(&parse(text).document, options)?)
+/// `written`, a tree written in archie's form, read back as a bundle with `files`.
+fn reread(
+    written: Result<String, WriteError>,
+    files: BTreeMap<String, Vec<u8>>,
+    missing: Missing,
+) -> Result<BundledDocument, FormError> {
+    let text = written.map_err(EncodeError::from)?;
+    Ok(BundledDocument::new(parse(&text).document, files, missing).map_err(DecodeError::from)?)
 }
 
 #[cfg(test)]

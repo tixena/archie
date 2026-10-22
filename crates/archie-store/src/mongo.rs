@@ -4,6 +4,7 @@ pub mod record;
 
 use core::fmt;
 
+use archie_core::bundle::Missing;
 use archie_core::forms::{Form, decode};
 use archie_core::parser::ast::RawDocument;
 use archie_core::writer::{self, WriteOptions};
@@ -264,8 +265,10 @@ impl Store for MongoStore {
         bytes: &[u8],
         precondition: &Precondition,
     ) -> Result<Revision, StoreError> {
-        let document = decode(bytes, Form::Markdown).map_err(|error| failed(path, &error))?;
-        self.write_document(path, &document, precondition).await
+        let bundle =
+            decode(bytes, Form::Markdown, Missing::Keep).map_err(|error| failed(path, &error))?;
+        self.write_document(path, bundle.document(), precondition)
+            .await
     }
 }
 

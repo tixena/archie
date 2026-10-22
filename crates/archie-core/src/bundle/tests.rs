@@ -366,21 +366,14 @@ fn json_for_a_stream_carries_each_file_and_reads_back() {
     let document = parse("![Logo](media/logo.png)\n").document;
     let given = files(&[("media/logo.png", PNG)]);
     let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
-    let json = encode(
-        &bundle.embedded().unwrap(),
-        Form::Json,
-        &WriteOptions::default(),
-    )
-    .unwrap();
+    let json = encode(&bundle, Form::Json, &WriteOptions::default()).unwrap();
     assert_eq!(
         String::from_utf8(json.clone()).unwrap(),
         "{\"t\":\"valid\",\"bd\":{\"se\":[{\"bl\":[{\"t\":\"paragraph\",\"li\":[{\"ch\":[{\"t\":\
          \"image\",\"at\":\"Logo\",\"co\":\"neither\",\"fr\":\"markdown\",\"tg\":\"data:image/png;\
          name=media/logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl\"}]}]}],\"ss\":[]}]}}\n"
     );
-    let decoded = decode(&json, Form::Json).unwrap();
-    let back = BundledDocument::new(decoded, BTreeMap::new(), Missing::Refuse).unwrap();
-    assert_eq!(back, bundle);
+    assert_eq!(decode(&json, Form::Json, Missing::Refuse).unwrap(), bundle);
 }
 
 #[test]
@@ -656,12 +649,65 @@ fn a_named_file_that_is_not_given_fails_naming_its_target() {
 #[test]
 fn a_target_above_the_folder_fails() {
     let document = parse("![Logo](../logo.png)\n").document;
-    let error = BundledDocument::new(document, BTreeMap::new(), Missing::Keep).unwrap_err();
+    let error = BundledDocument::new(document, BTreeMap::new(), Missing::Refuse).unwrap_err();
     assert_eq!(
         error.to_string(),
         "index.md names ../logo.png, which leaves the bundle's folder"
     );
     assert!(matches!(error, BundledDocumentError::Escapes { target } if target == "../logo.png"));
+}
+
+#[test]
+fn a_target_above_the_folder_is_refused_unless_it_is_allowed() {
+    let document = parse("![Logo](../shared/logo.png)\n\n![y](media/logo.png)\n").document;
+    let given = files(&[("media/logo.png", PNG)]);
+    assert!(matches!(
+        BundledDocument::new(document.clone(), given.clone(), Missing::Refuse),
+        Err(BundledDocumentError::Escapes { target }) if target == "../shared/logo.png"
+    ));
+    let kept = BundledDocument::new(document.clone(), given, Missing::Keep).unwrap();
+    assert_eq!(kept.files(), ["media/logo.png"]);
+    assert_eq!(kept.document(), &document);
+    assert_eq!(
+        embedded_text(&kept),
+        "![Logo](../shared/logo.png)\n\n\
+         ![y](data:image/png;name=media/logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl)\n"
+    );
+}
+
+#[test]
+fn a_target_above_the_folder_has_no_embedded_path() {
+    let document = parse("![Logo](../shared/logo.png)\n\n![y](media/logo.png)\n").document;
+    assert_eq!(
+        embedded_paths(&document, "").unwrap(),
+        [("media/logo.png".to_owned(), "media/logo.png".to_owned())]
+    );
+}
+
+#[test]
+fn a_note_s_target_above_the_folder_is_refused_unless_it_is_allowed() {
+    let system = MemorySystem::new()
+        .with_file("/notes/report.md", b"![[parts/intro]]\n")
+        .unwrap()
+        .with_file(
+            "/notes/parts/intro.md",
+            b"![x](../../shared/logo.png)\n\n![y](../media/logo.png)\n",
+        )
+        .unwrap()
+        .with_file("/notes/media/logo.png", PNG)
+        .unwrap();
+    let path = Path::new("/notes/report.md");
+    assert!(matches!(
+        BundledDocument::from_file(&system, path, Missing::Refuse),
+        Err(BundledDocumentError::Escapes { target }) if target == "../../shared/logo.png"
+    ));
+    let kept = BundledDocument::from_file(&system, path, Missing::Keep).unwrap();
+    assert_eq!(kept.files(), ["media/logo.png", "parts/intro.md"]);
+    assert_eq!(
+        first_note(&kept.embedded().unwrap()),
+        "![x](../../shared/logo.png)\n\n\
+         ![y](data:image/png;name=../media/logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl)\n"
+    );
 }
 
 #[test]

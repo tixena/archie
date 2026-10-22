@@ -1,6 +1,7 @@
 //! A document over any store: read in a form, and stored in archie's form.
 
-use archie_core::forms::{Form, FormError, decode, encode, stored_text};
+use archie_core::bundle::Missing;
+use archie_core::forms::{Form, FormError, decode, encode, stored};
 use archie_core::writer::WriteOptions;
 
 use crate::{Precondition, Revision, Store, StoreError, StorePath};
@@ -27,7 +28,7 @@ impl DocumentError {
 }
 
 /// The bytes of the document at `path` in `form`, its frontmatter in the
-/// syntax `options` names when `form` is markdown.
+/// syntax `options` names when `form` is markdown or zip.
 ///
 /// # Errors
 ///
@@ -42,9 +43,9 @@ where
     S: Store + Sync,
 {
     let stored = store.read(path).await?;
-    let document =
-        decode(&stored.bytes, Form::Markdown).map_err(|error| DocumentError::form(path, error))?;
-    encode(&document, form, options).map_err(|error| DocumentError::form(path, error))
+    let bundle = decode(&stored.bytes, Form::Markdown, Missing::Keep)
+        .map_err(|error| DocumentError::form(path, error))?;
+    encode(&bundle, form, options).map_err(|error| DocumentError::form(path, error))
 }
 
 /// Stores at `path` archie's form of the document `bytes` hold in `form`, if
@@ -64,8 +65,9 @@ pub async fn put<S>(
 where
     S: Store + Sync,
 {
-    let text =
-        stored_text(bytes, form, options).map_err(|error| DocumentError::form(path, error))?;
+    let text = stored(bytes, form, options, Missing::Keep)
+        .map_err(|error| DocumentError::form(path, error))?
+        .text;
     Ok(store.write(path, text.as_bytes(), precondition).await?)
 }
 
