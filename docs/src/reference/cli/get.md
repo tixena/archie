@@ -2,7 +2,7 @@
 
 `archie get` reads the document at a path and writes it to standard output, or to
 a named file, in one of three forms: markdown, JavaScript Object Notation (JSON),
-or rkyv's binary layout.
+or binary.
 
 ## Synopsis
 
@@ -17,7 +17,7 @@ The path is required.
 | Part | What it takes |
 |---|---|
 | `<PATH>` | The document to read. With no `--store`, a file of the machine, relative to the current folder or absolute. `.` and `..` are resolved from the text of the path, without following links, so `../notes/a.md` names the file a shell would name. With a `--store`, a path of that store, such as `notes/task.md`, used as written. |
-| `-f`, `--format <FORMAT>` | The form the document is written in: `markdown`, the default, `json`, or `rkyv`. |
+| `-f`, `--format <FORMAT>` | The form the document is written in: `markdown`, the default, `json`, or `binary`. |
 | `--frontmatter <SYNTAX>` | The syntax the frontmatter is written in, in the markdown form: `yaml`, the default, or `toml`. |
 | `-o`, `--output <FILE>` | A file of the machine to write the document to, in place of standard output. It is never a path in a store. |
 | `-s`, `--store <STORE>` | The store the document is in: `minio:<bucket>`, `minio:<bucket>/<prefix>`, or `mongodb:<database>/<collection>`. The file system when it is left out. |
@@ -31,14 +31,14 @@ version.
 |---|---|
 | `markdown` | archie's form of the document: the text archie writes for the tree it read, with the frontmatter in the syntax `--frontmatter` names. |
 | `json` | The tree as one JSON value, followed by a newline. |
-| `rkyv` | The tree in rkyv's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 1. |
+| `binary` | The tree in archie's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 3. |
 
 [`archie write`](write.md) reads the same three forms, so a document that leaves
 archie in a form comes back in it.
 
 ## Output
 
-Standard output carries only the document's bytes. They go out unchanged, rkyv
+Standard output carries only the document's bytes. They go out unchanged, binary
 included, whether standard output is a terminal or not.
 
 Nothing is written to standard output or to the `--output` file until the bytes
@@ -126,7 +126,7 @@ A `--store` value of any other shape is a usage error, code 2.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the rkyv form, or a value the frontmatter syntax cannot hold. |
+| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
 | 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` for `--store mongodb:` or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
 | 4 | The store failed: a file system error, such as a folder that is not writable or a path that is a folder, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to write standard output is code 4 too. |

@@ -2,7 +2,7 @@
 
 `archie write` stores a whole document at a path, read from standard input or from
 a named file in one of three forms: markdown, JavaScript Object Notation (JSON),
-or rkyv's binary layout. A second form of the command, which writes into the part
+or binary. A second form of the command, which writes into the part
 of one document that a path expression addresses, is not yet specified; it is
 described under [Writing into a part of a document](#writing-into-a-part-of-a-document).
 
@@ -21,7 +21,7 @@ The path is required.
 | Part | What it takes |
 |---|---|
 | `<PATH>` | Where the document is stored. With no `--store`, a file of the machine, relative to the current folder or absolute. `.` and `..` are resolved from the text of the path, without following links, so `../notes/a.md` names the file a shell would name. With a `--store`, a path of that store, such as `notes/task.md`, used as written. |
-| `-f`, `--format <FORMAT>` | The form the document is read in: `markdown`, the default, `json`, or `rkyv`. |
+| `-f`, `--format <FORMAT>` | The form the document is read in: `markdown`, the default, `json`, or `binary`. |
 | `--frontmatter <SYNTAX>` | The syntax the stored frontmatter is written in: `yaml`, the default, or `toml`. |
 | `-i`, `--input <FILE>` | A file of the machine to read the document from, in place of standard input. It is never a path in a store. |
 | `-s`, `--store <STORE>` | The store the document goes to: `minio:<bucket>`, `minio:<bucket>/<prefix>`, or `mongodb:<database>/<collection>`. The file system when it is left out. |
@@ -35,7 +35,7 @@ the version.
 |---|---|
 | `markdown` | Markdown text, with YAML or TOML frontmatter. |
 | `json` | The tree as one JSON value, as `archie get --format json` writes it. |
-| `rkyv` | The tree in rkyv's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 1. It is read in place, as `archie get --format rkyv` writes it. |
+| `binary` | The tree in archie's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 3. It is read in place, as `archie get --format binary` writes it. |
 
 Whatever the form, the file stored at the path is archie's form of the document:
 the markdown archie writes for the tree it read, with the frontmatter in the syntax
@@ -127,7 +127,7 @@ A `--store` value of any other shape is a usage error, code 2.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the rkyv form, or a value the frontmatter syntax cannot hold. |
+| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
 | 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` for `--store mongodb:` or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
 | 4 | The store failed: a file system error, such as a folder that is not writable, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to read standard input is code 4 too. |
@@ -146,7 +146,7 @@ and a second copy changes nothing.
 $ archie get notes/task.md | archie write copy.md
 $ archie get copy.md | archie write again.md && cmp copy.md again.md && echo same
 same
-$ archie get notes/task.md -f rkyv | archie write copy.md -f rkyv
+$ archie get notes/task.md -f binary | archie write copy.md -f binary
 ```
 
 The same copy through a JSON file:

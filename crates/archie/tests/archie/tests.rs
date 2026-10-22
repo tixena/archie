@@ -21,7 +21,7 @@ const FIXTURES: &str = concat!(
     "/../archie-core/src/parser/tests/fixtures"
 );
 
-const FORMS: [&str; 3] = ["markdown", "json", "rkyv"];
+const FORMS: [&str; 3] = ["markdown", "json", "binary"];
 
 /// The four variables a `MinIO` store reads: a server no process listens on,
 /// whose connection is refused at once, and keys no output may show.

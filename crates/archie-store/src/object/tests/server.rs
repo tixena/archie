@@ -43,7 +43,7 @@ const FIXTURES: [&str; 21] = [
     include_str!("../../../../archie-core/src/parser/tests/fixtures/zola_page.md"),
 ];
 
-const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Rkyv];
+const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
 /// The configuration `just test-stores` passes, its keys under `prefix`.
 fn config(prefix: &str) -> ObjectConfig {

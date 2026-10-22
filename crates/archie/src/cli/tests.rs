@@ -47,11 +47,11 @@ fn the_short_and_long_options_parse() {
         "get",
         "a.md",
         "-f",
-        "rkyv",
+        "binary",
         "--frontmatter",
         "toml",
         "-o",
-        "a.rkyv",
+        "a.bin",
         "-s",
         "minio:notes",
     ])
@@ -60,12 +60,12 @@ fn the_short_and_long_options_parse() {
         matches!(
             &get.command,
             Command::Get {
-                format: FormatArg::Rkyv,
+                format: FormatArg::Binary,
                 frontmatter: SyntaxArg::Toml,
                 output: Some(output),
                 path: _,
                 store: Some(StoreArg::Minio { bucket, prefix: None }),
-            } if output.as_os_str() == "a.rkyv" && bucket == "notes"
+            } if output.as_os_str() == "a.bin" && bucket == "notes"
         ),
         "{get:?}"
     );

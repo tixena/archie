@@ -45,7 +45,7 @@ const FIXTURES: [&str; 21] = [
     include_str!("../../../archie-core/src/parser/tests/fixtures/zola_page.md"),
 ];
 
-const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Rkyv];
+const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
 /// Archie's form of `source` once its record has been through `to_record`
 /// and `from_record`, as MongoDB gives it back.

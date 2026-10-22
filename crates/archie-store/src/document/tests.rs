@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use archie_core::forms::{DecodeError, Form, FormError, RKYV_MAGIC, RKYV_VERSION};
+use archie_core::forms::{BINARY_MAGIC, BINARY_VERSION, DecodeError, Form, FormError};
 use archie_core::parser::ast::{FrontmatterFormat, RawDocument};
 use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
@@ -41,7 +41,7 @@ const FIXTURES: [&str; 21] = [
     include_str!("../../../archie-core/src/parser/tests/fixtures/zola_page.md"),
 ];
 
-const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Rkyv];
+const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
 /// Runs `scenario` over a store on each system.
 fn on_both<S>(scenario: &S)
@@ -236,23 +236,23 @@ fn a_get_with_toml_options_of_a_yaml_file_gives_toml_frontmatter() {
     on_both(&toml_of_yaml);
 }
 
-async fn rkyv_copied(store: &AnyStore<'_>) {
+async fn binary_copied(store: &AnyStore<'_>) {
     let options = WriteOptions::default();
     let path = StorePath::new("a.md").unwrap();
     store
         .write(&path, b"* item\n", &Precondition::None)
         .await
         .unwrap();
-    let rkyv = get(store, &path, Form::Rkyv, &options).await.unwrap();
+    let binary = get(store, &path, Form::Binary, &options).await.unwrap();
     assert_eq!(
-        &rkyv[..8],
-        [RKYV_MAGIC.as_slice(), &[RKYV_VERSION]].concat()
+        &binary[..8],
+        [BINARY_MAGIC.as_slice(), &[BINARY_VERSION]].concat()
     );
     put(
         store,
         &path,
-        Form::Rkyv,
-        &rkyv,
+        Form::Binary,
+        &binary,
         &options,
         &Precondition::None,
     )
@@ -262,8 +262,8 @@ async fn rkyv_copied(store: &AnyStore<'_>) {
 }
 
 #[test]
-fn a_get_in_rkyv_puts_back_as_archies_form() {
-    on_both(&rkyv_copied);
+fn a_get_in_binary_puts_back_as_archies_form() {
+    on_both(&binary_copied);
 }
 
 #[tokio::test]

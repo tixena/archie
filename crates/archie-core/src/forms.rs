@@ -1,4 +1,4 @@
-//! The forms a document takes outside archie, markdown, JSON and rkyv, each
+//! The forms a document takes outside archie, markdown, JSON and binary, each
 //! a pair of functions from bytes to a document and back.
 
 use core::str::from_utf8;
@@ -13,19 +13,19 @@ use crate::parser::mirror::RawDocumentMirror;
 use crate::parser::{from_json, parse, to_json};
 use crate::writer::{self, WriteError, WriteOptions, write_archived};
 
-/// `archie` and a zero byte, the bytes the rkyv form opens with.
-pub const RKYV_MAGIC: &[u8; 7] = b"archie\0";
+/// `archie` and a zero byte, the bytes the binary form opens with.
+pub const BINARY_MAGIC: &[u8; 7] = b"archie\0";
 
-/// The version of the model's types, the byte after `RKYV_MAGIC`.
-pub const RKYV_VERSION: u8 = 3;
+/// The version of the model's types, the byte after `BINARY_MAGIC`.
+pub const BINARY_VERSION: u8 = 3;
 
 /// A form a document takes outside archie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Form {
+    Binary,
     Json,
     Markdown,
-    Rkyv,
 }
 
 /// Why bytes do not hold a document in a form.
@@ -33,14 +33,14 @@ pub enum Form {
 #[non_exhaustive]
 pub enum DecodeError {
     #[error(transparent)]
+    Binary(#[from] rancor::Error),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("not archie's rkyv form: the bytes do not open with `archie` and a zero byte")]
+    #[error("not archie's binary form: the bytes do not open with `archie` and a zero byte")]
     NotArchie,
     #[error("not UTF-8 at byte {offset}")]
     NotUtf8 { offset: usize },
-    #[error(transparent)]
-    Rkyv(#[from] rancor::Error),
-    #[error("archie's rkyv form version {found}, and this archie reads version {RKYV_VERSION}")]
+    #[error("archie's binary form version {found}, and this archie reads version {BINARY_VERSION}")]
     Version { found: u8 },
 }
 
@@ -49,9 +49,9 @@ pub enum DecodeError {
 #[non_exhaustive]
 pub enum EncodeError {
     #[error(transparent)]
-    Json(#[from] serde_json::Error),
+    Binary(#[from] rancor::Error),
     #[error(transparent)]
-    Rkyv(#[from] rancor::Error),
+    Json(#[from] serde_json::Error),
     #[error(transparent)]
     Write(#[from] WriteError),
 }
@@ -79,22 +79,22 @@ pub fn encode(
     options: &WriteOptions,
 ) -> Result<Vec<u8>, EncodeError> {
     match form {
+        Form::Binary => {
+            let archived = rkyv::to_bytes::<rancor::Error>(
+                With::<RawDocument, RawDocumentMirror>::cast(document),
+            )?;
+            Ok([BINARY_MAGIC.as_slice(), &[BINARY_VERSION], &archived].concat())
+        }
         Form::Json => {
             let mut text = to_json(document)?;
             text.push('\n');
             Ok(text.into_bytes())
         }
         Form::Markdown => Ok(writer::write(document, options)?.into_bytes()),
-        Form::Rkyv => {
-            let archived = rkyv::to_bytes::<rancor::Error>(
-                With::<RawDocument, RawDocumentMirror>::cast(document),
-            )?;
-            Ok([RKYV_MAGIC.as_slice(), &[RKYV_VERSION], &archived].concat())
-        }
     }
 }
 
-/// The document `bytes` hold in `form`. The rkyv form is deserialized here; a
+/// The document `bytes` hold in `form`. The binary form is deserialized here; a
 /// caller that only writes it reads it in place through `stored_text`.
 ///
 /// # Errors
@@ -104,9 +104,7 @@ pub fn encode(
 /// rkyv error.
 pub fn decode(bytes: &[u8], form: Form) -> Result<RawDocument, DecodeError> {
     match form {
-        Form::Json => Ok(from_json(text(bytes)?)?),
-        Form::Markdown => Ok(parse(text(bytes)?).document),
-        Form::Rkyv => {
+        Form::Binary => {
             let buffer = aligned(bytes)?;
             let archived = rkyv::access::<ArchivedRawDocument, rancor::Error>(&buffer)?;
             Ok(RawDocumentMirror::deserialize_with(
@@ -114,26 +112,28 @@ pub fn decode(bytes: &[u8], form: Form) -> Result<RawDocument, DecodeError> {
                 Strategy::<_, rancor::Error>::wrap(&mut Pool::new()),
             )?)
         }
+        Form::Json => Ok(from_json(text(bytes)?)?),
+        Form::Markdown => Ok(parse(text(bytes)?).document),
     }
 }
 
 /// The text a store keeps for `bytes` in `form`: archie's form, its
-/// frontmatter in the syntax `options` names. JSON and rkyv are written, read
-/// and written again; rkyv is read in place with `write_archived`.
+/// frontmatter in the syntax `options` names. JSON and binary are written,
+/// read and written again; binary is read in place with `write_archived`.
 ///
 /// # Errors
 ///
 /// The errors of `decode` and `encode`.
 pub fn stored_text(bytes: &[u8], form: Form, options: &WriteOptions) -> Result<String, FormError> {
     let first = match form {
-        Form::Json => writer::write(&decode(bytes, form)?, options),
-        Form::Markdown => return Ok(rewritten(text(bytes)?, options)?),
-        Form::Rkyv => {
+        Form::Binary => {
             let buffer = aligned(bytes)?;
             let archived = rkyv::access::<ArchivedRawDocument, rancor::Error>(&buffer)
                 .map_err(DecodeError::from)?;
             write_archived(archived, options)
         }
+        Form::Json => writer::write(&decode(bytes, form)?, options),
+        Form::Markdown => return Ok(rewritten(text(bytes)?, options)?),
     };
     Ok(rewritten(&first.map_err(EncodeError::from)?, options)?)
 }
@@ -145,13 +145,13 @@ fn text(bytes: &[u8]) -> Result<&str, DecodeError> {
     })
 }
 
-/// The bytes after archie's rkyv header, copied where rkyv reads them in place.
+/// The bytes after archie's binary header, copied where rkyv reads them in place.
 fn aligned(bytes: &[u8]) -> Result<AlignedVec, DecodeError> {
     let (&version, archived) = bytes
-        .strip_prefix(RKYV_MAGIC.as_slice())
+        .strip_prefix(BINARY_MAGIC.as_slice())
         .and_then(<[u8]>::split_first)
         .ok_or(DecodeError::NotArchie)?;
-    if version != RKYV_VERSION {
+    if version != BINARY_VERSION {
         return Err(DecodeError::Version { found: version });
     }
     let mut buffer = AlignedVec::with_capacity(archived.len());

@@ -39,7 +39,7 @@ const FIXTURES: [&str; 21] = [
     include_str!("../../../archie-core/src/parser/tests/fixtures/zola_page.md"),
 ];
 
-const FORMS: [&str; 3] = ["markdown", "json", "rkyv"];
+const FORMS: [&str; 3] = ["markdown", "json", "binary"];
 
 const JEKYLL_POST: &str = FIXTURES[10];
 

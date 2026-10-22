@@ -54,7 +54,7 @@ the inheritance chain from [`archie trace`](trace.md), the interactive proposal
 from [`archie inbox`](inbox.md), and the export document from
 [`archie export`](export.md) — each shown on its own page. [`archie get`](get.md)
 and [`archie write`](write.md) take `--format` with forms of their own instead:
-`markdown`, the default, `json`, or `rkyv`.
+`markdown`, the default, `json`, or `binary`.
 
 ## Exit codes
 
@@ -78,7 +78,7 @@ The table is written for the validation run; see
 | Command | What it does |
 |---|---|
 | [`archie ls`](ls.md) | Lists the contents of a corpus. |
-| [`archie get`](get.md) | Writes one markdown document to standard output or a file, in markdown, JSON or rkyv. |
+| [`archie get`](get.md) | Writes one markdown document to standard output or a file, in markdown, JSON or binary. |
 | [`archie query`](query.md) | Selects documents by an expression over their frontmatter, in a language that also drives modification. |
 | [`archie search`](search.md) | Matches a pattern against document bodies and frontmatter. |
 | [`archie write`](write.md) | Stores one whole markdown document read from standard input or a file. |

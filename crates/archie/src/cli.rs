@@ -52,17 +52,17 @@ pub enum Command {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum FormatArg {
+    Binary,
     Json,
     Markdown,
-    Rkyv,
 }
 
 impl From<FormatArg> for Form {
     fn from(format: FormatArg) -> Self {
         match format {
+            FormatArg::Binary => Self::Binary,
             FormatArg::Json => Self::Json,
             FormatArg::Markdown => Self::Markdown,
-            FormatArg::Rkyv => Self::Rkyv,
         }
     }
 }
