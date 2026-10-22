@@ -9,7 +9,7 @@ use core::fmt;
 use core::str::from_utf8;
 use core::time::Duration;
 
-use archie_core::bundle::{Missing, embedded_paths, images_mut, media_type};
+use archie_core::bundle::{Missing, embedded_paths, media_type};
 use archie_core::forms::{Form, decode};
 use archie_core::parser::ast::RawDocument;
 use archie_core::parser::parse;
@@ -724,13 +724,8 @@ fn descriptions(
 ) -> Result<BTreeMap<String, String>, StoreError> {
     let mut described = BTreeMap::new();
     let mut pending = vec![(String::new(), document.clone())];
-    while let Some((folder, mut text)) = pending.pop() {
-        let mut alts = Vec::new();
-        images_mut(&mut text, &mut |image| {
-            alts.push((image.target.clone(), image.alt.clone()));
-        })
-        .map_err(|error| backend(&error))?;
-        for (target, name) in embedded_paths(&text, &folder).map_err(|error| backend(&error))? {
+    while let Some((folder, text)) = pending.pop() {
+        for (embed, name) in embedded_paths(&text, &folder).map_err(|error| backend(&error))? {
             if described.contains_key(&name) {
                 continue;
             }
@@ -740,11 +735,7 @@ fn descriptions(
                 let note = from_utf8(bytes).map_err(|error| failed(file, &error))?;
                 pending.push((parent_of(&name).to_owned(), parse(note).document));
             }
-            let alt = alts
-                .iter()
-                .find(|(written, _)| *written == target)
-                .map_or_else(String::new, |(_, alt)| alt.clone());
-            described.insert(name, alt);
+            described.insert(name, embed.alt);
         }
     }
     Ok(described)

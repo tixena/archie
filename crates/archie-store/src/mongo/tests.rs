@@ -499,6 +499,12 @@ const fn deleting(picture: &'static [u8]) -> [Step; 3] {
     ]
 }
 
+/// The `description` of the record of the object of `bytes`.
+async fn description_of(store: &MongoStore, bytes: &[u8]) -> String {
+    let record = object_record(store, bytes).await.unwrap();
+    record.get_str("description").unwrap().to_owned()
+}
+
 /// Deletes every document, record and object of `store`.
 async fn empty(store: &MongoStore) {
     store.collection.delete_many(Document::new()).await.unwrap();
@@ -1321,6 +1327,45 @@ async fn a_save_stores_the_object_its_record_and_the_files_map_and_a_get_gives_e
         assert_eq!(documents[0].files, files);
         let report = path("notes/report.md");
         assert_eq!(get(&store, &report, Missing::Refuse).await.unwrap(), bundle);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn two_embeds_of_one_target_in_two_forms_give_each_file_the_alt_text_of_its_own_embed() {
+    in_database("archie_test_same_target", async |store| {
+        let note = b"# Logo\n";
+        let files = BTreeMap::from([
+            ("logo".to_owned(), PNG.to_vec()),
+            ("logo.md".to_owned(), note.to_vec()),
+        ]);
+        let document = parse("![Picture](logo)\n\n![[logo|Note]]\n").document;
+        let bundle = BundledDocument::new(document, files, Missing::Refuse).unwrap();
+        save(&store, "notes/report.md", &bundle).await;
+        assert_eq!(description_of(&store, PNG).await, "Picture");
+        assert_eq!(description_of(&store, note).await, "Note");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn an_embed_with_no_alt_gives_an_empty_description_and_a_note_s_own_embed_describes_its_file()
+{
+    in_database("archie_test_note_alt", async |store| {
+        let chart = b"chart";
+        let files = BTreeMap::from([
+            ("a.png".to_owned(), PNG.to_vec()),
+            ("b.png".to_owned(), OTHER_PNG.to_vec()),
+            ("media/chart.png".to_owned(), chart.to_vec()),
+            ("parts/intro.md".to_owned(), INTRO.as_bytes().to_vec()),
+        ]);
+        let document = parse("![](a.png)\n\n![[b.png]]\n\n![[parts/intro]]\n").document;
+        let bundle = BundledDocument::new(document, files, Missing::Refuse).unwrap();
+        save(&store, "notes/report.md", &bundle).await;
+        assert_eq!(description_of(&store, PNG).await, "");
+        assert_eq!(description_of(&store, OTHER_PNG).await, "");
+        assert_eq!(description_of(&store, chart).await, "chart");
+        assert_eq!(description_of(&store, INTRO.as_bytes()).await, "");
     })
     .await;
 }

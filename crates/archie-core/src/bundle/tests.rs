@@ -62,6 +62,15 @@ const TARGETS: [&str; 8] = [
     "note#Heading",
 ];
 
+/// The embed of `form` with `target` and `alt`.
+fn embed(form: LinkForm, target: &str, alt: &str) -> Embed {
+    Embed {
+        alt: alt.to_owned(),
+        form,
+        target: target.to_owned(),
+    }
+}
+
 /// `pairs` as the files a bundle is made from.
 fn files(pairs: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
     pairs
@@ -223,7 +232,10 @@ fn a_path_holding_a_backslash_is_a_file_no_bundle_can_hold() {
     assert_eq!(kept.document(), &document);
     assert_eq!(
         embedded_paths(&document, "").unwrap(),
-        [("media/logo.png".to_owned(), "media/logo.png".to_owned())]
+        [(
+            embed(LinkForm::Markdown, "media/logo.png", "y"),
+            "media/logo.png".to_owned()
+        )]
     );
 }
 
@@ -233,15 +245,21 @@ fn a_wiki_target_and_a_note_s_target_are_paths_from_the_folder_of_the_text_that_
     assert_eq!(
         embedded_paths(&document, "").unwrap(),
         [
-            ("logo.png".to_owned(), "logo.png".to_owned()),
-            ("sub/note#Heading".to_owned(), "sub/note.md".to_owned()),
+            (
+                embed(LinkForm::Wiki, "logo.png", "100"),
+                "logo.png".to_owned()
+            ),
+            (
+                embed(LinkForm::Wiki, "sub/note#Heading", ""),
+                "sub/note.md".to_owned()
+            ),
         ]
     );
     let note = parse("![chart](../media/chart.png)\n").document;
     assert_eq!(
         embedded_paths(&note, "parts").unwrap(),
         [(
-            "../media/chart.png".to_owned(),
+            embed(LinkForm::Markdown, "../media/chart.png", "chart"),
             "media/chart.png".to_owned()
         )]
     );
@@ -255,6 +273,36 @@ fn every_kind_of_place_holds_a_picture() {
     let forms: Vec<LinkForm> = found.iter().map(|embed| embed.form).collect();
     assert_eq!(forms[..7], [LinkForm::Markdown; 7]);
     assert_eq!(forms[7], LinkForm::Wiki);
+}
+
+#[test]
+fn each_embed_carries_its_alt_text_or_its_wiki_alias_and_an_empty_one_when_it_has_none() {
+    let document =
+        parse("![Picture](logo)\n\n![[logo|Note]]\n\n![](a.png)\n\n![[b.png]]\n").document;
+    assert_eq!(
+        embeds(&document),
+        [
+            embed(LinkForm::Markdown, "logo", "Picture"),
+            embed(LinkForm::Wiki, "logo", "Note"),
+            embed(LinkForm::Markdown, "a.png", ""),
+            embed(LinkForm::Wiki, "b.png", ""),
+        ]
+    );
+}
+
+#[test]
+fn each_embedded_path_comes_with_the_embed_that_resolves_to_it_when_two_embeds_share_a_target() {
+    let document = parse("![Picture](logo)\n\n![[logo|Note]]\n").document;
+    assert_eq!(
+        embedded_paths(&document, "").unwrap(),
+        [
+            (
+                embed(LinkForm::Markdown, "logo", "Picture"),
+                "logo".to_owned()
+            ),
+            (embed(LinkForm::Wiki, "logo", "Note"), "logo.md".to_owned()),
+        ]
+    );
 }
 
 #[test]
@@ -845,7 +893,10 @@ fn a_target_above_the_folder_has_no_embedded_path() {
     let document = parse("![Logo](../shared/logo.png)\n\n![y](media/logo.png)\n").document;
     assert_eq!(
         embedded_paths(&document, "").unwrap(),
-        [("media/logo.png".to_owned(), "media/logo.png".to_owned())]
+        [(
+            embed(LinkForm::Markdown, "media/logo.png", "y"),
+            "media/logo.png".to_owned()
+        )]
     );
 }
 
@@ -984,7 +1035,10 @@ fn a_target_that_is_not_utf8_once_decoded_has_no_embedded_path() {
     let document = parse("![x](media/%FF.png)\n\n![y](media/logo.png)\n").document;
     assert_eq!(
         embedded_paths(&document, "").unwrap(),
-        [("media/logo.png".to_owned(), "media/logo.png".to_owned())]
+        [(
+            embed(LinkForm::Markdown, "media/logo.png", "y"),
+            "media/logo.png".to_owned()
+        )]
     );
 }
 
@@ -1055,10 +1109,7 @@ fn quotes_nested_deeper_than_the_block_cap_run_through_both_walks() {
     let mut document = parse(&format!("{marks}![q](media/q.png)\n")).document;
     assert_eq!(
         embeds(&document),
-        [Embed {
-            form: LinkForm::Markdown,
-            target: "media/q.png".to_owned(),
-        }]
+        [embed(LinkForm::Markdown, "media/q.png", "q")]
     );
     images_mut(&mut document, &mut |image| {
         "media/r.png".clone_into(&mut image.target);

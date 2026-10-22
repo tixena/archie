@@ -68,10 +68,12 @@ pub enum Missing {
     Refuse,
 }
 
-/// An embed as written: `![alt](target)` or `![[target]]`.
+/// An embed as written: `![alt](target)` or `![[target|alt]]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Embed {
+    /// The text in brackets, or the wiki alias; empty when none.
+    pub alt: String,
     pub form: LinkForm,
     pub target: String,
 }
@@ -328,17 +330,17 @@ impl BundledDocument {
         expand(&mut document, "", &mut files)?;
         let named = named(&document, |path| Ok(files.get(path).cloned()))?;
         if missing == Missing::Refuse
-            && let Some((target, file)) = named
+            && let Some((embed, file)) = named
                 .iter()
                 .find(|(_, file)| !matches!(file, Resolved::Path(path) if files.contains_key(path)))
         {
             return Err(match file {
                 Resolved::Escapes => BundledDocumentError::Escapes {
-                    target: target.clone(),
+                    target: embed.target.clone(),
                 },
                 Resolved::NotPortable | Resolved::NotText | Resolved::Path(_) => {
                     BundledDocumentError::Missing {
-                        target: target.clone(),
+                        target: embed.target.clone(),
                     }
                 }
             });
@@ -433,6 +435,7 @@ impl BundledDocument {
         let mut failure = None;
         images_mut(&mut note.document, &mut |image| {
             let embed = Embed {
+                alt: image.alt.clone(),
                 form: image.form,
                 target: image.target.clone(),
             };
@@ -491,6 +494,7 @@ impl Resolved {
 /// percent-decoded.
 pub fn path_of(target: &str) -> Result<Option<String>, BundledDocumentError> {
     let embed = Embed {
+        alt: String::new(),
         form: LinkForm::Markdown,
         target: target.to_owned(),
     };
@@ -553,7 +557,7 @@ pub fn images_mut(
     write_back(document, &mut levels)
 }
 
-/// Each file that `document`, the text at `folder`, embeds, as the target as written and the
+/// Each file that `document`, the text at `folder`, embeds, as the embed as written and the
 /// file's path in the bundle, each path once, in document order.
 ///
 /// An embedded note's own embeds are not followed, and a target that leaves the bundle's folder,
@@ -565,13 +569,13 @@ pub fn images_mut(
 pub fn embedded_paths(
     document: &RawDocument,
     folder: &str,
-) -> Result<Vec<(String, String)>, BundledDocumentError> {
-    let mut paths: Vec<(String, String)> = Vec::new();
-    for (target, file) in paths_in(document, folder)? {
+) -> Result<Vec<(Embed, String)>, BundledDocumentError> {
+    let mut paths: Vec<(Embed, String)> = Vec::new();
+    for (embed, file) in paths_in(document, folder)? {
         if let Some(path) = file.into_path()
             && !paths.iter().any(|(_, known)| *known == path)
         {
-            paths.push((target, path));
+            paths.push((embed, path));
         }
     }
     Ok(paths)
@@ -595,12 +599,12 @@ pub fn media_type(path: &str) -> &'static str {
     }
 }
 
-/// Each embed of `document`, the text at `folder`, that names a file, as the target as written
+/// Each embed of `document`, the text at `folder`, that names a file, as the embed as written
 /// and what it names in the bundle, in document order.
 fn paths_in(
     document: &RawDocument,
     folder: &str,
-) -> Result<Vec<(String, Resolved)>, BundledDocumentError> {
+) -> Result<Vec<(Embed, Resolved)>, BundledDocumentError> {
     let mut paths = Vec::new();
     for embed in embeds(document) {
         let file = match relative_of(&embed) {
@@ -614,29 +618,29 @@ fn paths_in(
                 Err(error) => return Err(error),
             },
         };
-        paths.push((embed.target, file));
+        paths.push((embed, file));
     }
     Ok(paths)
 }
 
 /// Every file that `document` embeds, an embedded note's own embeds included, each path once, as
-/// the target as written and what it names in the bundle. `text_of` gives an embedded note's
+/// the embed as written and what it names in the bundle. `text_of` gives an embedded note's
 /// bytes, or `None` when it is not there.
 fn named<F>(
     document: &RawDocument,
     mut text_of: F,
-) -> Result<Vec<(String, Resolved)>, BundledDocumentError>
+) -> Result<Vec<(Embed, Resolved)>, BundledDocumentError>
 where
     F: FnMut(&str) -> Result<Option<Vec<u8>>, BundledDocumentError>,
 {
-    let mut named: Vec<(String, Resolved)> = Vec::new();
+    let mut named: Vec<(Embed, Resolved)> = Vec::new();
     let mut pending: Vec<(String, RawDocument)> = vec![(String::new(), document.clone())];
     while let Some((folder, note)) = pending.pop() {
-        for (target, file) in paths_in(&note, &folder)? {
+        for (embed, file) in paths_in(&note, &folder)? {
             if matches!(file, Resolved::Path(_)) && named.iter().any(|(_, known)| *known == file) {
                 continue;
             }
-            named.push((target, file.clone()));
+            named.push((embed, file.clone()));
             if let Some(path) = file.into_path()
                 && is_note(&path)
                 && let Some(bytes) = text_of(&path)?
@@ -759,6 +763,7 @@ fn named_path(
     media: &str,
 ) -> Result<Option<String>, BundledDocumentError> {
     let embed = Embed {
+        alt: String::new(),
         form,
         target: target.to_owned(),
     };
@@ -780,7 +785,7 @@ fn named_path(
 
 /// Whether `embed`, written as an image alone, reads back as the same embed.
 fn reads_back(embed: &Embed) -> Result<bool, WriteError> {
-    let image = Image::new(embed.form, embed.target.clone(), None, String::new());
+    let image = Image::new(embed.form, embed.target.clone(), None, embed.alt.clone());
     let line = Line::new(vec![Inline::Image(image)]);
     let section = Section::new(
         None,
@@ -1155,6 +1160,7 @@ fn found_in(document: &RawDocument) -> Vec<Found> {
     };
     let embed = |image: &Image| {
         Found::Embed(Embed {
+            alt: image.alt.clone(),
             form: image.form,
             target: image.target.clone(),
         })
