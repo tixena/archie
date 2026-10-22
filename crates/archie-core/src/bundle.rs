@@ -798,7 +798,11 @@ fn target_of(form: LinkForm, name: &str, fragment: &str) -> String {
 /// `NotBase64` when its base64 does not decode.
 fn data_of(target: &str) -> Result<Option<Data>, BundledDocumentError> {
     let uri = &target[..target.find('#').unwrap_or(target.len())];
-    let Some(data) = uri.strip_prefix("data:") else {
+    let Some(data) = uri
+        .get(..5)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("data:"))
+        .and_then(|_| uri.get(5..))
+    else {
         return Ok(None);
     };
     let Some((header, payload)) = data.split_once(',') else {
@@ -809,7 +813,10 @@ fn data_of(target: &str) -> Result<Option<Data>, BundledDocumentError> {
     let mut parts = header.split(';');
     let media = parts.next().unwrap_or_default().to_ascii_lowercase();
     let parameters: Vec<&str> = parts.collect();
-    let bytes = if parameters.last() == Some(&"base64") {
+    let bytes = if parameters
+        .last()
+        .is_some_and(|last| last.eq_ignore_ascii_case("base64"))
+    {
         STANDARD
             .decode(payload)
             .map_err(|source| BundledDocumentError::NotBase64 {
@@ -821,7 +828,12 @@ fn data_of(target: &str) -> Result<Option<Data>, BundledDocumentError> {
     };
     let name = parameters
         .iter()
-        .find_map(|parameter| parameter.strip_prefix("name="))
+        .find_map(|parameter| {
+            parameter
+                .split_once('=')
+                .filter(|(key, _)| key.eq_ignore_ascii_case("name"))
+                .map(|(_, value)| value)
+        })
         .map(percent_decoded)
         .filter(|decoded| {
             decoded

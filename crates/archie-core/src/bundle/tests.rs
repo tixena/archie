@@ -586,6 +586,45 @@ fn a_data_uri_with_no_comma_fails_even_when_missing_files_are_kept() {
 }
 
 #[test]
+fn a_data_uri_s_scheme_and_base64_marker_are_read_in_any_case() {
+    for target in [
+        "DATA:image/png;base64,iVBORw0KGgo=",
+        "Data:image/png;BASE64,iVBORw0KGgo=",
+    ] {
+        let bundle = read_back(&format!("![x]({target})\n"));
+        assert_eq!(bundle.files(), ["media/4c4b6a3be1314ab8.png"], "{target}");
+        assert_eq!(
+            bundle.file("media/4c4b6a3be1314ab8.png"),
+            Some(b"\x89PNG\r\n\x1a\n".as_slice()),
+            "{target}"
+        );
+        assert_eq!(
+            embeds(bundle.document())[0].target,
+            "media/4c4b6a3be1314ab8.png",
+            "{target}"
+        );
+    }
+}
+
+#[test]
+fn a_data_uri_whose_scheme_is_not_lower_case_with_no_comma_fails() {
+    let target = "DATA:image/png;base64";
+    let document = parse(&format!("![x]({target})\n")).document;
+    let error = BundledDocument::new(document, BTreeMap::new(), Missing::Refuse).unwrap_err();
+    assert!(matches!(
+        error,
+        BundledDocumentError::NotDataUri { target: named } if named == target
+    ));
+}
+
+#[test]
+fn a_data_uri_s_name_parameter_is_read_in_any_case() {
+    let bundle = read_back("![x](data:image/png;NAME=media/logo.png;base64,iVBORw0KGgo=)\n");
+    assert_eq!(bundle.files(), ["media/logo.png"]);
+    assert_eq!(embeds(bundle.document())[0].target, "media/logo.png");
+}
+
+#[test]
 fn a_note_read_from_a_file_has_its_data_uris_made_files() {
     let system = MemorySystem::new()
         .with_file("/notes/report.md", b"![[note]]\n")
