@@ -1,15 +1,21 @@
 //! A markdown document with every file it embeds, as one unit, and its forms on disk.
 
 use alloc::collections::BTreeMap;
+use core::fmt::{self, Write as _};
+use core::slice;
 use std::io::{self, Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use os_shim::System;
 use os_shim::archive::{ZipOptions, to_zip_writer};
 use os_shim::mock::MemorySystem;
+use sha2::{Digest as _, Sha256};
 
 use crate::parser::ast::{
-    Block, Image, Inline, LinkForm, LinkInline, MarkdownBlock, RawDocument, Section,
+    Block, Document, Image, Inline, Line, LinkForm, LinkInline, MarkdownBlock, Paragraph,
+    RawDocument, Section,
 };
 use crate::parser::parse;
 use crate::writer::{self, WriteError, WriteOptions};
@@ -34,6 +40,14 @@ pub enum BundledDocumentError {
     Missing { target: String },
     #[error("the bundle holds no index.md")]
     NoIndex,
+    #[error("index.md names {target}, whose base64 does not decode")]
+    NotBase64 {
+        target: String,
+        #[source]
+        source: base64::DecodeError,
+    },
+    #[error("index.md names {target}, a data URI with no comma before its data")]
+    NotDataUri { target: String },
     #[error("{name} is not a path inside the bundle")]
     NotRelative { name: String },
     #[error("{path} is not UTF-8 at byte {offset}")]
@@ -60,10 +74,26 @@ pub struct Embed {
     pub target: String,
 }
 
+/// What a data URI carries: its bytes, its media type, and its `name` when that is UTF-8 once
+/// percent-decoded.
+struct Data {
+    bytes: Vec<u8>,
+    media: String,
+    name: Option<String>,
+}
+
 /// What `found_in` finds: an embed, or the text of a block quote, which the tree keeps unread.
 enum Found {
     Embed(Embed),
     Quote(String),
+}
+
+/// A file of the bundle that an embed names: its bytes, its path in the bundle, and its path
+/// from the folder of the text that holds the embed.
+struct Held<'bundle> {
+    bytes: &'bundle [u8],
+    path: String,
+    relative: String,
 }
 
 /// A node `found_in` has still to walk.
@@ -82,6 +112,15 @@ enum NodeMut<'tree> {
     Inline(&'tree mut Inline),
     LinkInline(&'tree mut LinkInline),
     Section(&'tree mut Section),
+}
+
+/// A text `embedded` writes: the note at `path`, or the document when `path` is empty, the
+/// notes it embeds still to be written, and the bytes of each one written.
+struct Note {
+    document: RawDocument,
+    path: String,
+    pending: Vec<(String, RawDocument)>,
+    written: BTreeMap<String, Vec<u8>>,
 }
 
 /// What `places_mut` finds: an image, or the text of a block quote.
@@ -114,10 +153,63 @@ impl BundledDocument {
         &self.document
     }
 
+    /// The tree with each file written into its embed as a data URI that carries the file's
+    /// path, from the folder of the text that embeds it, as its `name`. An embedded note is
+    /// written with its own embeds as data URIs first.
+    ///
+    /// # Errors
+    ///
+    /// The writer's error for a block quote or an embedded note whose changed tree does not
+    /// write.
+    pub fn embedded(&self) -> Result<RawDocument, BundledDocumentError> {
+        let mut root = self.note(String::new(), self.document.clone(), &[])?;
+        let mut stack: Vec<Note> = Vec::new();
+        loop {
+            let top = stack.last_mut().unwrap_or(&mut root);
+            if let Some((path, document)) = top.pending.pop() {
+                let open: Vec<&str> = stack.iter().map(|note| note.path.as_str()).collect();
+                let note = self.note(path, document, &open)?;
+                stack.push(note);
+            } else if let Some(mut done) = stack.pop() {
+                self.write_files_into(&mut done)?;
+                let text = writer::write(&done.document, &WriteOptions::default())?;
+                stack
+                    .last_mut()
+                    .unwrap_or(&mut root)
+                    .written
+                    .insert(done.path, text.into_bytes());
+            } else {
+                break;
+            }
+        }
+        self.write_files_into(&mut root)?;
+        Ok(root.document)
+    }
+
     /// The bytes of the file at `path`, as `files` lists it.
     #[must_use]
     pub fn file(&self, path: &str) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
+    }
+
+    /// The file of the bundle that `embed`, in the text at `folder`, names.
+    fn file_of(
+        &self,
+        folder: &str,
+        embed: &Embed,
+    ) -> Result<Option<Held<'_>>, BundledDocumentError> {
+        let relative = match relative_of(embed) {
+            Relative::NoFile | Relative::NotText => return Ok(None),
+            Relative::Path(relative) => relative,
+        };
+        let Some(path) = joined(folder, &relative, &embed.target)? else {
+            return Ok(None);
+        };
+        Ok(self.files.get(&path).map(|bytes| Held {
+            bytes,
+            path,
+            relative,
+        }))
     }
 
     /// The paths of the files, sorted.
@@ -185,20 +277,25 @@ impl BundledDocument {
     }
 
     /// `document` and the files of `files` it embeds, an embedded note's own embeds included.
+    /// Every embed written as a data URI becomes a file first.
     ///
     /// # Errors
     ///
     /// `NotRelative` for a name of `files` that is not a path inside the bundle, `Escapes` for a
-    /// target that leaves the document's folder, `Missing` for an embedded file `files` does not
-    /// hold when `missing` is `Missing::Refuse`, and `NotUtf8` for an embedded note.
+    /// target that leaves the document's folder, `NotDataUri` for a data URI with no comma before
+    /// its data, `NotBase64` for one whose base64 does not decode, `Missing` for an embedded file
+    /// `files` does not hold when `missing` is
+    /// `Missing::Refuse`, `NotUtf8` for an embedded note, and the writer's error for a block quote
+    /// or a note whose data URIs became files and whose tree does not write.
     pub fn new(
-        document: RawDocument,
+        mut document: RawDocument,
         mut files: BTreeMap<String, Vec<u8>>,
         missing: Missing,
     ) -> Result<Self, BundledDocumentError> {
         if let Some(name) = files.keys().find(|name| !is_inside(name)) {
             return Err(BundledDocumentError::NotRelative { name: name.clone() });
         }
+        expand(&mut document, "", &mut files)?;
         let named = named(&document, |path| Ok(files.get(path).cloned()))?;
         if missing == Missing::Refuse
             && let Some((target, _)) = named
@@ -211,6 +308,35 @@ impl BundledDocument {
         }
         files.retain(|path, _| named.iter().any(|(_, kept)| kept.as_ref() == Some(path)));
         Ok(Self { document, files })
+    }
+
+    /// `document`, the text at `path`, with each note of the bundle it embeds as still to be
+    /// written, once, unless that note is at `path` or in `open`, the notes being written around
+    /// it.
+    fn note(
+        &self,
+        path: String,
+        document: RawDocument,
+        open: &[&str],
+    ) -> Result<Note, BundledDocumentError> {
+        let mut pending: Vec<(String, RawDocument)> = Vec::new();
+        for embed in embeds(&document) {
+            if let Some(held) = self.file_of(parent_of(&path), &embed)?
+                && is_note(&held.path)
+                && held.path != path
+                && !open.contains(&held.path.as_str())
+                && !pending.iter().any(|(known, _)| *known == held.path)
+            {
+                let note = parse(&text(&held.path, held.bytes.to_vec())?).document;
+                pending.push((held.path, note));
+            }
+        }
+        Ok(Note {
+            document,
+            path,
+            pending,
+            written: BTreeMap::new(),
+        })
     }
 
     /// The tree written at `path` in `system` with `options`, and each file at its path from
@@ -255,6 +381,43 @@ impl BundledDocument {
         self.to_file(&system, &Path::new("/").join(Self::INDEX), options)?;
         to_zip_writer(&system, Path::new("/"), sink, ZipOptions::default())?;
         Ok(())
+    }
+
+    /// Each embed of `note` that names a file of the bundle written as that file's data URI, an
+    /// embedded note's bytes taken from `written`. A note not in `written`, one being written
+    /// around `note`, keeps its target.
+    fn write_files_into(&self, note: &mut Note) -> Result<(), BundledDocumentError> {
+        let folder = parent_of(&note.path);
+        let written = &note.written;
+        let mut failure = None;
+        images_mut(&mut note.document, &mut |image| {
+            let embed = Embed {
+                form: image.form,
+                target: image.target.clone(),
+            };
+            let held = match self.file_of(folder, &embed) {
+                Ok(Some(held)) => held,
+                Ok(None) => return,
+                Err(error) => {
+                    failure = Some(error);
+                    return;
+                }
+            };
+            let bytes = if is_note(&held.path) {
+                let Some(written_note) = written.get(&held.path) else {
+                    return;
+                };
+                written_note.as_slice()
+            } else {
+                held.bytes
+            };
+            image.target = format!(
+                "{}{}",
+                data_uri(&held.relative, bytes),
+                fragment_of(&embed.target)
+            );
+        })?;
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -395,9 +558,7 @@ where
             }
             named.push((target, file.clone()));
             if let Some(path) = file
-                && Path::new(&path)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+                && is_note(&path)
                 && let Some(bytes) = text_of(&path)?
             {
                 pending.push((
@@ -408,6 +569,232 @@ where
         }
     }
     Ok(named)
+}
+
+/// Each embed written as a data URI, in `document`, the text at `folder`, and in every note of
+/// `files` it embeds, an embedded note's own notes included, made a file of `files` as
+/// `data_uri_to_file` names it. A note whose tree changed is written back into `files`.
+fn expand(
+    document: &mut RawDocument,
+    folder: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), BundledDocumentError> {
+    data_uris_to_files(document, folder, files)?;
+    let mut notes = notes_of(document, folder, files)?;
+    let mut expanded: Vec<String> = Vec::new();
+    while let Some(path) = notes.pop() {
+        if expanded.contains(&path) {
+            continue;
+        }
+        let mut note = parse(&text(&path, files[&path].clone())?).document;
+        let before = note.clone();
+        data_uris_to_files(&mut note, parent_of(&path), files)?;
+        notes.extend(notes_of(&note, parent_of(&path), files)?);
+        if note != before {
+            let written = writer::write(&note, &WriteOptions::default())?;
+            files.insert(path.clone(), written.into_bytes());
+        }
+        expanded.push(path);
+    }
+    Ok(())
+}
+
+/// The path of each note of `files` that `document`, the text at `folder`, embeds.
+fn notes_of(
+    document: &RawDocument,
+    folder: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<Vec<String>, BundledDocumentError> {
+    Ok(paths_in(document, folder)?
+        .into_iter()
+        .filter_map(|(_, file)| file)
+        .filter(|path| is_note(path) && files.contains_key(path))
+        .collect())
+}
+
+/// Each embed of `document`, the text at `folder`, written as a data URI made a file of
+/// `files` as `data_uri_to_file` names it.
+fn data_uris_to_files(
+    document: &mut RawDocument,
+    folder: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), BundledDocumentError> {
+    let mut failure = None;
+    images_mut(document, &mut |image| {
+        if failure.is_none()
+            && let Err(error) = data_uri_to_file(image, folder, files)
+        {
+            failure = Some(error);
+        }
+    })?;
+    failure.map_or(Ok(()), Err)
+}
+
+/// The data URI `image` targets, in the text at `folder`, made a file of `files`, and its target
+/// that file's path from `folder`: the data URI's `name` when `named_path` keeps it and that path
+/// holds no other bytes, else `media/` and the first 16 hex digits of the SHA-256 of its bytes.
+fn data_uri_to_file(
+    image: &mut Image,
+    folder: &str,
+    files: &mut BTreeMap<String, Vec<u8>>,
+) -> Result<(), BundledDocumentError> {
+    let Some(Data { bytes, media, name }) = data_of(&image.target)? else {
+        return Ok(());
+    };
+    let fragment = fragment_of(&image.target);
+    let kept = match name {
+        Some(named) => {
+            let target = target_of(image.form, &named, fragment);
+            named_path(folder, image.form, &target, &media)?
+                .filter(|path| files.get(path).is_none_or(|held| *held == bytes))
+                .map(|path| (target, path))
+        }
+        None => None,
+    };
+    let (target, path) = kept.unwrap_or_else(|| {
+        let hashed = hashed_name(&bytes, &media);
+        (
+            target_of(image.form, &hashed, fragment),
+            beside(folder, &hashed),
+        )
+    });
+    image.target = target;
+    files.insert(path, bytes);
+    Ok(())
+}
+
+/// The path in the bundle that `target`, the target of an embed of `form` in the text at `folder`,
+/// names once the embed is written and read back, for a data URI of `media` type. `None` when it
+/// reads back as another target, names no file, `index.md` or a path above the bundle, or names a
+/// note and `media` is not `text/markdown`.
+fn named_path(
+    folder: &str,
+    form: LinkForm,
+    target: &str,
+    media: &str,
+) -> Result<Option<String>, BundledDocumentError> {
+    let embed = Embed {
+        form,
+        target: target.to_owned(),
+    };
+    if !reads_back(&embed)? {
+        return Ok(None);
+    }
+    let relative = match relative_of(&embed) {
+        Relative::NoFile | Relative::NotText => return Ok(None),
+        Relative::Path(relative) => relative,
+    };
+    match joined(folder, &relative, target) {
+        Ok(path) => Ok(path.filter(|resolved| {
+            is_inside(resolved) && (media == "text/markdown" || !is_note(resolved))
+        })),
+        Err(BundledDocumentError::Escapes { target: _ }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `embed`, written as an image alone, reads back as the same embed.
+fn reads_back(embed: &Embed) -> Result<bool, WriteError> {
+    let image = Image::new(embed.form, embed.target.clone(), None, String::new());
+    let line = Line::new(vec![Inline::Image(image)]);
+    let section = Section::new(
+        None,
+        vec![Block::Paragraph(Paragraph::new(vec![line]))],
+        Vec::new(),
+    );
+    let document: RawDocument =
+        RawDocument::Valid(Document::new(MarkdownBlock::new(vec![section]), None));
+    let text = writer::write(&document, &WriteOptions::default())?;
+    Ok(embeds(&parse(&text).document) == slice::from_ref(embed))
+}
+
+/// The target an embed of `form` takes to name `name` from the folder of its text, followed by
+/// `fragment`: percent-encoded in `![alt](target)`, as written in `![[target]]`.
+fn target_of(form: LinkForm, name: &str, fragment: &str) -> String {
+    match form {
+        LinkForm::Markdown => format!("{}{fragment}", percent_encoded(name)),
+        LinkForm::Wiki => format!("{name}{fragment}"),
+    }
+}
+
+/// What the data URI `target` carries, or `None` when it is not a data URI. A `#` part after the
+/// data is not part of it; `NotDataUri` names `target` when no comma comes before its data, and
+/// `NotBase64` when its base64 does not decode.
+fn data_of(target: &str) -> Result<Option<Data>, BundledDocumentError> {
+    let uri = &target[..target.find('#').unwrap_or(target.len())];
+    let Some(data) = uri.strip_prefix("data:") else {
+        return Ok(None);
+    };
+    let Some((header, payload)) = data.split_once(',') else {
+        return Err(BundledDocumentError::NotDataUri {
+            target: target.to_owned(),
+        });
+    };
+    let mut parts = header.split(';');
+    let media = parts.next().unwrap_or_default().to_ascii_lowercase();
+    let parameters: Vec<&str> = parts.collect();
+    let bytes = if parameters.last() == Some(&"base64") {
+        STANDARD
+            .decode(payload)
+            .map_err(|source| BundledDocumentError::NotBase64 {
+                target: target.to_owned(),
+                source,
+            })?
+    } else {
+        percent_decoded(payload)
+    };
+    let name = parameters
+        .iter()
+        .find_map(|parameter| parameter.strip_prefix("name="))
+        .map(percent_decoded)
+        .filter(|decoded| {
+            decoded
+                .utf8_chunks()
+                .all(|chunk| chunk.invalid().is_empty())
+        })
+        .map(|decoded| decoded.utf8_chunks().map(|chunk| chunk.valid()).collect());
+    Ok(Some(Data { bytes, media, name }))
+}
+
+/// The extension a file of `media` type gets when its data URI carries no name.
+fn extension_of(media: &str) -> &'static str {
+    match media {
+        "image/gif" => "gif",
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/svg+xml" => "svg",
+        "image/webp" => "webp",
+        "text/markdown" => "md",
+        _ => "bin",
+    }
+}
+
+/// `media/`, the first 16 hex digits of the SHA-256 of `bytes`, and the extension of a file of
+/// `media` type.
+fn hashed_name(bytes: &[u8], media: &str) -> String {
+    let mut name = String::from("media/");
+    for byte in Sha256::digest(bytes).iter().take(8) {
+        let _: fmt::Result = write!(name, "{byte:02x}");
+    }
+    name.push('.');
+    name.push_str(extension_of(media));
+    name
+}
+
+/// The path in the bundle of `relative`, a path with no empty, `.` or `..` part, from `folder`.
+fn beside(folder: &str, relative: &str) -> String {
+    if folder.is_empty() {
+        relative.to_owned()
+    } else {
+        format!("{folder}/{relative}")
+    }
+}
+
+/// Whether the file at `path` is a note: its extension is `md`, in any case.
+fn is_note(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 /// The path an embed names, relative to the folder of the text that holds it, not yet resolved.
@@ -502,6 +889,52 @@ fn percent_decoded(text: &str) -> Vec<u8> {
         }
     }
     decoded
+}
+
+/// A data URI of `bytes` that carries `name`, with the media type of `name`'s extension.
+fn data_uri(name: &str, bytes: &[u8]) -> String {
+    format!(
+        "data:{};name={};base64,{}",
+        media_type(name),
+        percent_encoded(name),
+        STANDARD.encode(bytes)
+    )
+}
+
+/// The media type a data URI gives the file at `path`, by its extension.
+fn media_type(path: &str) -> &'static str {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("gif") => "image/gif",
+        Some("jpeg" | "jpg") => "image/jpeg",
+        Some("md") => "text/markdown",
+        Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// `path` with each byte other than a letter, a digit, `-`, `.`, `_`, `~` or `/` written as
+/// `%` and two hex digits.
+fn percent_encoded(path: &str) -> String {
+    let mut encoded = String::with_capacity(path.len());
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            encoded.push(char::from(byte));
+        } else {
+            let _: fmt::Result = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+/// The `#` part of `target`, `#` included, or nothing.
+fn fragment_of(target: &str) -> &str {
+    target.find('#').map_or("", |at| &target[at..])
 }
 
 fn parent_of(path: &str) -> &str {

@@ -111,6 +111,7 @@ dependencies = [
 name = "archie-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bson",
  "chrono",
  "indexmap",
@@ -120,6 +121,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_stacker",
+ "sha2",
  "stacker",
  "thiserror",
  "tixschema",

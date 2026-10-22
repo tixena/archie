@@ -47,6 +47,12 @@ rkyv.workspace = true
 # The file systems and the zip of a self-contained document
 os-shim = { workspace = true, features = ["zip"] }
 
+# Files written into embeds as data URIs
+base64.workspace = true
+
+# The name of a file that a data URI carries without one
+sha2.workspace = true
+
 # TypeScript type + Zod schema generation from Rust models
 tixschema.workspace = true
 

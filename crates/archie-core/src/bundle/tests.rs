@@ -5,15 +5,17 @@ use alloc::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::Path;
 
+use base64::DecodeError;
 use os_shim::System as _;
 use os_shim::archive::{ZipOptions, ZipStreamWriter, to_zip_writer};
 use os_shim::mock::MemorySystem;
 
 use super::{
-    BundledDocument, BundledDocumentError, Embed, Missing, embedded_paths, embeds, images_mut,
-    path_of, read,
+    BundledDocument, BundledDocumentError, Embed, Missing, data_of, embedded_paths, embeds,
+    images_mut, path_of, read,
 };
-use crate::parser::ast::LinkForm;
+use crate::forms::{Form, decode, encode};
+use crate::parser::ast::{LinkForm, RawDocument};
 use crate::parser::lexer::BLOCK_CAP;
 use crate::parser::parse;
 use crate::writer::{WriteOptions, write};
@@ -99,6 +101,23 @@ fn zip_of(system: &MemorySystem) -> Vec<u8> {
     let mut zip = Vec::new();
     to_zip_writer(system, Path::new("/"), &mut zip, ZipOptions::default()).unwrap();
     zip
+}
+
+/// The text of `bundle` written embedded.
+fn embedded_text(bundle: &BundledDocument) -> String {
+    write(&bundle.embedded().unwrap(), &WriteOptions::default()).unwrap()
+}
+
+/// The bundle of `text` read with no file given.
+fn read_back(text: &str) -> BundledDocument {
+    BundledDocument::new(parse(text).document, BTreeMap::new(), Missing::Refuse).unwrap()
+}
+
+/// The text of the note whose data URI is the target of the first embed of `document`.
+fn first_note(document: &RawDocument) -> String {
+    let data = data_of(&embeds(document)[0].target).unwrap().unwrap();
+    assert_eq!(data.media, "text/markdown");
+    String::from_utf8(data.bytes).unwrap()
 }
 
 #[test]
@@ -240,6 +259,46 @@ fn every_embed_travels_and_a_link_does_not() {
         bundle.files(),
         ["dark.png", "logo.png", "sub/note.md", "sub/pic.png"]
     );
+    let text = embedded_text(&bundle);
+    assert_eq!(
+        text,
+        "![[data:image/png;name=logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl|100]]\n\n\
+         ![[data:text/markdown;name=sub/note.md;base64,IyBIZWFkaW5nCgohW3BdKGRhdGE6aW1hZ2UvcG5nO25hb\
+         WU9cGljLnBuZztiYXNlNjQsY0dsaikKCltvdGhlcl0ob3RoZXIubWQpCg==#Heading]]\n\n\
+         ![d](data:image/png;name=dark.png;base64,ZGFyaw==#gh-dark-mode-only)\n\n\
+         [spec](docs/spec.pdf)\n"
+    );
+    let back = read_back(&text);
+    assert_eq!(back.files(), bundle.files());
+    for path in bundle.files() {
+        assert_eq!(back.file(path), bundle.file(path), "{path}");
+    }
+    let targets: Vec<String> = embeds(back.document())
+        .into_iter()
+        .map(|embed| embed.target)
+        .collect();
+    assert_eq!(
+        targets,
+        [
+            "logo.png",
+            "sub/note.md#Heading",
+            "dark.png#gh-dark-mode-only"
+        ]
+    );
+}
+
+#[test]
+fn an_embedded_note_carries_its_own_embeds_inside_its_data_uri() {
+    let document = parse("![[sub/note]]\n").document;
+    let given = files(&[
+        ("sub/note.md", b"![p](pic.png)\n".as_slice()),
+        ("sub/pic.png", b"pic".as_slice()),
+    ]);
+    let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
+    assert_eq!(
+        first_note(&bundle.embedded().unwrap()),
+        "![p](data:image/png;name=pic.png;base64,cGlj)\n"
+    );
 }
 
 #[test]
@@ -248,6 +307,317 @@ fn a_note_that_embeds_itself_is_read_once() {
     let given = files(&[("self.md", b"![[self]]\n".as_slice())]);
     let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
     assert_eq!(bundle.files(), ["self.md"]);
+    let text = embedded_text(&bundle);
+    assert_eq!(
+        text,
+        "![[data:text/markdown;name=self.md;base64,IVtbc2VsZl1dCg==]]\n"
+    );
+    let back = read_back(&text);
+    assert_eq!(back.files(), ["self.md"]);
+    assert_eq!(back.file("self.md"), Some(b"![[self]]\n".as_slice()));
+}
+
+#[test]
+fn two_notes_that_embed_each_other_are_written_once_each() {
+    let document = parse("![[a]]\n").document;
+    let given = files(&[
+        ("a.md", b"![[b]]\n".as_slice()),
+        ("b.md", b"![[a]]\n".as_slice()),
+    ]);
+    let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
+    let embedded = bundle.embedded().unwrap();
+    let note_a = first_note(&embedded);
+    assert!(note_a.starts_with("![[data:text/markdown;name=b.md;base64,"));
+    assert_eq!(first_note(&parse(&note_a).document), "![[a]]\n");
+    let back = read_back(&write(&embedded, &WriteOptions::default()).unwrap());
+    assert_eq!(back.files(), ["a.md", "b.md"]);
+}
+
+#[test]
+fn markdown_for_a_stream_carries_each_file_and_reads_back() {
+    let document = parse(
+        "# Report\n\n![Logo](media/my%20logo.png)\n\n> quoted ![q](media/q.png)\n\n\
+         | a |\n|---|\n| ![t](media/t.png) |\n\n[![badge](media/b.png)](https://ci)\n",
+    )
+    .document;
+    let given = files(&[
+        ("media/b.png", b"b".as_slice()),
+        ("media/my logo.png", PNG),
+        ("media/q.png", b"q".as_slice()),
+        ("media/t.png", b"t".as_slice()),
+    ]);
+    let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
+    let text = embedded_text(&bundle);
+    assert_eq!(
+        text,
+        "# Report\n\n\
+         ![Logo](data:image/png;name=media/my%20logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl)\n\n\
+         > quoted ![q](data:image/png;name=media/q.png;base64,cQ==)\n\n\
+         | a                                                 |\n\
+         | ------------------------------------------------- |\n\
+         | ![t](data:image/png;name=media/t.png;base64,dA==) |\n\n\
+         [![badge](data:image/png;name=media/b.png;base64,Yg==)](https://ci)\n"
+    );
+    assert_eq!(read_back(&text), bundle);
+}
+
+#[test]
+fn json_for_a_stream_carries_each_file_and_reads_back() {
+    let document = parse("![Logo](media/logo.png)\n").document;
+    let given = files(&[("media/logo.png", PNG)]);
+    let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
+    let json = encode(
+        &bundle.embedded().unwrap(),
+        Form::Json,
+        &WriteOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(json.clone()).unwrap(),
+        "{\"t\":\"valid\",\"bd\":{\"se\":[{\"bl\":[{\"t\":\"paragraph\",\"li\":[{\"ch\":[{\"t\":\
+         \"image\",\"at\":\"Logo\",\"co\":\"neither\",\"fr\":\"markdown\",\"tg\":\"data:image/png;\
+         name=media/logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl\"}]}]}],\"ss\":[]}]}}\n"
+    );
+    let decoded = decode(&json, Form::Json).unwrap();
+    let back = BundledDocument::new(decoded, BTreeMap::new(), Missing::Refuse).unwrap();
+    assert_eq!(back, bundle);
+}
+
+#[test]
+fn a_data_uri_with_no_name_becomes_a_file() {
+    let document = parse(
+        "![Logo](data:image/png;base64,iVBORw0KGgo=)\n\n![Icon](data:image/svg+xml,%3Csvg%2F%3E)\n",
+    )
+    .document;
+    let bundle = BundledDocument::new(document, BTreeMap::new(), Missing::Refuse).unwrap();
+    assert_eq!(
+        bundle.files(),
+        ["media/4c4b6a3be1314ab8.png", "media/d4dc56669143034f.svg"]
+    );
+    assert_eq!(
+        bundle.file("media/4c4b6a3be1314ab8.png"),
+        Some(b"\x89PNG\r\n\x1a\n".as_slice())
+    );
+    assert_eq!(
+        bundle.file("media/d4dc56669143034f.svg"),
+        Some(b"<svg/>".as_slice())
+    );
+    let system = MemorySystem::new();
+    let path = Path::new("/out/report.md");
+    bundle
+        .to_file(&system, path, &WriteOptions::default())
+        .unwrap();
+    assert_eq!(
+        system.read_to_string(path).unwrap(),
+        "![Logo](media/4c4b6a3be1314ab8.png)\n\n![Icon](media/d4dc56669143034f.svg)\n"
+    );
+}
+
+#[test]
+fn a_markdown_file_with_data_uris_is_written_back_with_files() {
+    let system = MemorySystem::new()
+        .with_file(
+            "/notes/report.md",
+            b"![Logo](data:image/png;name=media/logo.png;base64,iVBORw0KGgo=)\n",
+        )
+        .unwrap();
+    let path = Path::new("/notes/report.md");
+    let bundle = BundledDocument::from_file(&system, path, Missing::Refuse).unwrap();
+    assert_eq!(bundle.files(), ["media/logo.png"]);
+    let copy = Path::new("/out/report.md");
+    bundle
+        .to_file(&system, copy, &WriteOptions::default())
+        .unwrap();
+    assert_eq!(
+        system.read_to_string(copy).unwrap(),
+        "![Logo](media/logo.png)\n"
+    );
+    assert_eq!(
+        read(&system, Path::new("/out/media/logo.png")).unwrap(),
+        b"\x89PNG\r\n\x1a\n"
+    );
+}
+
+#[test]
+fn a_name_that_is_not_a_path_inside_the_bundle_gives_the_hashed_name() {
+    for name in ["../logo.png", "/logo.png", "index.md", "%FF.png"] {
+        let source = format!("![Logo](data:image/png;name={name};base64,iVBORw0KGgo=)\n");
+        let bundle = read_back(&source);
+        assert_eq!(bundle.files(), ["media/4c4b6a3be1314ab8.png"], "{name}");
+        assert_eq!(
+            embeds(bundle.document())[0].target,
+            "media/4c4b6a3be1314ab8.png",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_name_whose_path_holds_other_bytes_gives_the_hashed_name() {
+    let source = "![a](media/logo.png)\n\n\
+                  ![b](data:image/png;name=media/logo.png;base64,iVBORw0KGgo=)\n";
+    let given = files(&[("media/logo.png", PNG)]);
+    let bundle = BundledDocument::new(parse(source).document, given, Missing::Refuse).unwrap();
+    assert_eq!(
+        bundle.files(),
+        ["media/4c4b6a3be1314ab8.png", "media/logo.png"]
+    );
+    assert_eq!(bundle.file("media/logo.png"), Some(PNG));
+    let given_same = files(&[("media/logo.png", b"\x89PNG\r\n\x1a\n".as_slice())]);
+    let same = BundledDocument::new(parse(source).document, given_same, Missing::Refuse).unwrap();
+    assert_eq!(same.files(), ["media/logo.png"]);
+}
+
+#[test]
+fn a_data_uri_whose_base64_does_not_decode_fails_even_when_missing_files_are_kept() {
+    let target = "data:image/png;base64,iVBOR!";
+    for missing in [Missing::Refuse, Missing::Keep] {
+        let document = parse(&format!("![x]({target})\n")).document;
+        let error = BundledDocument::new(document, BTreeMap::new(), missing).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "index.md names data:image/png;base64,iVBOR!, whose base64 does not decode"
+        );
+        assert!(
+            matches!(
+                error,
+                BundledDocumentError::NotBase64 {
+                    target: named,
+                    source: DecodeError::InvalidByte(5, b'!'),
+                } if named == target
+            ),
+            "{missing:?}"
+        );
+    }
+}
+
+#[test]
+fn a_data_uri_with_no_comma_fails_even_when_missing_files_are_kept() {
+    let target = "data:image/png;base64";
+    for missing in [Missing::Refuse, Missing::Keep] {
+        let document = parse(&format!("![x]({target})\n")).document;
+        let error = BundledDocument::new(document, BTreeMap::new(), missing).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "index.md names data:image/png;base64, a data URI with no comma before its data"
+        );
+        assert!(
+            matches!(
+                error,
+                BundledDocumentError::NotDataUri { target: named } if named == target
+            ),
+            "{missing:?}"
+        );
+    }
+}
+
+#[test]
+fn a_note_read_from_a_file_has_its_data_uris_made_files() {
+    let system = MemorySystem::new()
+        .with_file("/notes/report.md", b"![[note]]\n")
+        .unwrap()
+        .with_file(
+            "/notes/note.md",
+            b"![p](data:image/png;name=pic.png;base64,cGlj)\n",
+        )
+        .unwrap();
+    let path = Path::new("/notes/report.md");
+    let bundle = BundledDocument::from_file(&system, path, Missing::Refuse).unwrap();
+    assert_eq!(bundle.files(), ["note.md", "pic.png"]);
+    assert_eq!(bundle.file("note.md"), Some(b"![p](pic.png)\n".as_slice()));
+    assert_eq!(bundle.file("pic.png"), Some(b"pic".as_slice()));
+    let copy = Path::new("/out/report.md");
+    bundle
+        .to_file(&system, copy, &WriteOptions::default())
+        .unwrap();
+    assert_eq!(system.read_to_string(copy).unwrap(), "![[note]]\n");
+    assert_eq!(
+        system.read_to_string(Path::new("/out/note.md")).unwrap(),
+        "![p](pic.png)\n"
+    );
+}
+
+#[test]
+fn a_note_s_picture_above_its_folder_reads_back_from_the_embedded_text_at_its_path() {
+    let system = MemorySystem::new()
+        .with_file(
+            "/notes/report.md",
+            b"# Report\n\n![Logo](media/logo.png)\n\n![[parts/intro]]\n",
+        )
+        .unwrap()
+        .with_file("/notes/media/logo.png", PNG)
+        .unwrap()
+        .with_file("/notes/parts/intro.md", b"![chart](../media/chart.png)\n")
+        .unwrap()
+        .with_file("/notes/media/chart.png", b"chart")
+        .unwrap();
+    let path = Path::new("/notes/report.md");
+    let bundle = BundledDocument::from_file(&system, path, Missing::Refuse).unwrap();
+    let back = read_back(&embedded_text(&bundle));
+    assert_eq!(
+        back.files(),
+        ["media/chart.png", "media/logo.png", "parts/intro.md"]
+    );
+    for file in bundle.files() {
+        assert_eq!(back.file(file), bundle.file(file), "{file}");
+    }
+    assert_eq!(
+        back.document(),
+        &parse("# Report\n\n![Logo](media/logo.png)\n\n![[parts/intro.md]]\n").document
+    );
+}
+
+#[test]
+fn a_wiki_name_that_a_wiki_target_cannot_carry_gives_the_hashed_name() {
+    for name in ["c%23.png", "c%7C.png", "c%5B.png", "c%5D.png"] {
+        let bundle = read_back(&format!(
+            "![[data:image/png;name={name};base64,iVBORw0KGgo=]]\n"
+        ));
+        assert_eq!(bundle.files(), ["media/4c4b6a3be1314ab8.png"], "{name}");
+        assert_eq!(
+            embeds(bundle.document())[0].target,
+            "media/4c4b6a3be1314ab8.png",
+            "{name}"
+        );
+        assert_eq!(read_back(&embedded_text(&bundle)), bundle, "{name}");
+    }
+}
+
+#[test]
+fn a_wiki_name_read_back_as_a_web_address_or_a_note_gives_the_hashed_name_and_keeps_its_bytes() {
+    for name in ["c:d.png", "sub/a"] {
+        let bundle = read_back(&format!(
+            "![[data:image/png;name={name};base64,iVBORw0KGgo=]]\n"
+        ));
+        assert_eq!(bundle.files(), ["media/4c4b6a3be1314ab8.png"], "{name}");
+        assert_eq!(
+            bundle.file("media/4c4b6a3be1314ab8.png"),
+            Some(b"\x89PNG\r\n\x1a\n".as_slice()),
+            "{name}"
+        );
+        assert_eq!(
+            embeds(bundle.document())[0].target,
+            "media/4c4b6a3be1314ab8.png",
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_target_with_an_empty_part_reads_back_from_the_embedded_text_at_the_path_it_names() {
+    let document = parse("![x](media//logo.png)\n").document;
+    let given = files(&[("media/logo.png", PNG)]);
+    let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
+    let text = embedded_text(&bundle);
+    assert_eq!(
+        text,
+        "![x](data:image/png;name=media//logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl)\n"
+    );
+    let back = read_back(&text);
+    assert_eq!(back.files(), ["media/logo.png"]);
+    assert_eq!(back.file("media/logo.png"), Some(PNG));
+    assert_eq!(embeds(back.document())[0].target, "media//logo.png");
+    assert_eq!(back, bundle);
 }
 
 #[test]
@@ -373,15 +743,16 @@ fn a_missing_file_is_refused_unless_it_is_allowed() {
     let system = MemorySystem::new()
         .with_file("/notes/a.md", b"![Logo](media/logo.png)\n")
         .unwrap();
-    let read_back =
+    let from_disk =
         BundledDocument::from_file(&system, Path::new("/notes/a.md"), Missing::Keep).unwrap();
-    read_back
+    from_disk
         .to_file(&system, Path::new("/out/a.md"), &WriteOptions::default())
         .unwrap();
     assert_eq!(
         system.read_to_string(Path::new("/out/a.md")).unwrap(),
         "![Logo](media/logo.png)\n"
     );
+    assert_eq!(embedded_text(&from_disk), "![Logo](media/logo.png)\n");
 }
 
 #[test]

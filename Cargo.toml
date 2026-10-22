@@ -47,6 +47,9 @@ os-shim = "0.1.0"
 # SHA-256, for the revision of a stored file
 sha2 = "0.11"
 
+# Base64, for files written into embeds as data URIs
+base64 = "0.22"
+
 # Async runtime, for the binary and the tests of the stores
 tokio = { version = "1", default-features = false }
 
