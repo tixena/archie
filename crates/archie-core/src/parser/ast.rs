@@ -56,7 +56,7 @@ where
     E: Extension,
 {
     /// `node`, an extension's node. The plain node that carries it is not
-    /// changed, and JSON, rkyv and the stores keep only that plain node.
+    /// changed, and JSON, binary and the stores keep only that plain node.
     #[must_use]
     pub fn new(node: E::Node<E>) -> Self {
         Self(Some(Box::new(node)))
