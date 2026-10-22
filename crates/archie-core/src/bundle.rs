@@ -141,6 +141,9 @@ struct Quote {
 enum Relative {
     /// A web address, a data URI, an absolute path or no path at all.
     NoFile,
+    /// A path holding a `\`, which a zip reads as a separator and a store refuses: a file no
+    /// bundle can hold.
+    NotPortable,
     /// A path that is not UTF-8 once percent-decoded: a file no bundle can hold.
     NotText,
     Path(String),
@@ -151,6 +154,9 @@ enum Relative {
 enum Resolved {
     /// A path that leaves the bundle's folder: a file no bundle can hold.
     Escapes,
+    /// A path holding a `\`, which a zip reads as a separator and a store refuses: a file no
+    /// bundle can hold.
+    NotPortable,
     /// A path that is not UTF-8 once percent-decoded: a file no bundle can hold.
     NotText,
     Path(String),
@@ -211,7 +217,7 @@ impl BundledDocument {
         embed: &Embed,
     ) -> Result<Option<Held<'_>>, BundledDocumentError> {
         let relative = match relative_of(embed) {
-            Relative::NoFile | Relative::NotText => return Ok(None),
+            Relative::NoFile | Relative::NotPortable | Relative::NotText => return Ok(None),
             Relative::Path(relative) => relative,
         };
         let path = match joined(folder, &relative, &embed.target) {
@@ -330,9 +336,11 @@ impl BundledDocument {
                 Resolved::Escapes => BundledDocumentError::Escapes {
                     target: target.clone(),
                 },
-                Resolved::NotText | Resolved::Path(_) => BundledDocumentError::Missing {
-                    target: target.clone(),
-                },
+                Resolved::NotPortable | Resolved::NotText | Resolved::Path(_) => {
+                    BundledDocumentError::Missing {
+                        target: target.clone(),
+                    }
+                }
             });
         }
         files.retain(|path, _| {
@@ -469,7 +477,7 @@ impl Resolved {
     fn into_path(self) -> Option<String> {
         match self {
             Self::Path(path) => Some(path),
-            Self::Escapes | Self::NotText => None,
+            Self::Escapes | Self::NotPortable | Self::NotText => None,
         }
     }
 }
@@ -488,7 +496,7 @@ pub fn path_of(target: &str) -> Result<Option<String>, BundledDocumentError> {
     };
     match relative_of(&embed) {
         Relative::NoFile => Ok(None),
-        Relative::NotText => Err(BundledDocumentError::Missing {
+        Relative::NotPortable | Relative::NotText => Err(BundledDocumentError::Missing {
             target: target.to_owned(),
         }),
         Relative::Path(relative) => joined("", &relative, target),
@@ -548,8 +556,8 @@ pub fn images_mut(
 /// Each file that `document`, the text at `folder`, embeds, as the target as written and the
 /// file's path in the bundle, each path once, in document order.
 ///
-/// An embedded note's own embeds are not followed, and a target that leaves the bundle's folder
-/// or is not UTF-8 once percent-decoded is left out.
+/// An embedded note's own embeds are not followed, and a target that leaves the bundle's folder,
+/// is not UTF-8 once percent-decoded or is a `![[target]]` holding a `\` is left out.
 ///
 /// # Errors
 ///
@@ -597,6 +605,7 @@ fn paths_in(
     for embed in embeds(document) {
         let file = match relative_of(&embed) {
             Relative::NoFile => continue,
+            Relative::NotPortable => Resolved::NotPortable,
             Relative::NotText => Resolved::NotText,
             Relative::Path(relative) => match joined(folder, &relative, &embed.target) {
                 Ok(Some(path)) => Resolved::Path(path),
@@ -757,7 +766,7 @@ fn named_path(
         return Ok(None);
     }
     let relative = match relative_of(&embed) {
-        Relative::NoFile | Relative::NotText => return Ok(None),
+        Relative::NoFile | Relative::NotPortable | Relative::NotText => return Ok(None),
         Relative::Path(relative) => relative,
     };
     match joined(folder, &relative, target) {
@@ -889,7 +898,8 @@ fn is_note(path: &str) -> bool {
 }
 
 /// The path an embed names, relative to the folder of the text that holds it, not yet resolved.
-/// `![alt](target)` is an address: percent-decoded, its `?` and `#` parts cut off.
+/// `![alt](target)` is an address: percent-decoded, each `\` read as `/`, its `?` and `#` parts
+/// cut off.
 /// `![[target]]` is a name: kept as written, its `#` part cut off, and `<target>.md` when it has
 /// no extension.
 fn relative_of(embed: &Embed) -> Relative {
@@ -911,8 +921,18 @@ fn relative_of(embed: &Embed) -> Relative {
             {
                 return Relative::NotText;
             }
-            Relative::Path(decoded.utf8_chunks().map(|chunk| chunk.valid()).collect())
+            let path = decoded
+                .utf8_chunks()
+                .map(|chunk| chunk.valid())
+                .collect::<String>()
+                .replace('\\', "/");
+            if path.starts_with('/') {
+                Relative::NoFile
+            } else {
+                Relative::Path(path)
+            }
         }
+        LinkForm::Wiki if reference.contains('\\') => Relative::NotPortable,
         LinkForm::Wiki => {
             let named = Path::new(reference).extension().is_some();
             Relative::Path(if named {
@@ -1015,11 +1035,12 @@ fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(folder, _)| folder)
 }
 
-/// Whether `name` is a path inside the bundle: no empty, `.` or `..` part, no leading `/`,
-/// and not the zip's own `index.md`.
+/// Whether `name` is a path inside the bundle: no empty, `.` or `..` part, no leading `/`, no
+/// `\`, and not the zip's own `index.md`.
 fn is_inside(name: &str) -> bool {
     name != BundledDocument::INDEX
         && !name.starts_with('/')
+        && !name.contains('\\')
         && name
             .split('/')
             .all(|part| !part.is_empty() && part != "." && part != "..")

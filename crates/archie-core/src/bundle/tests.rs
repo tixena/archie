@@ -183,6 +183,51 @@ fn a_target_maps_to_its_file_path() {
 }
 
 #[test]
+fn a_backslash_in_an_address_is_a_path_separator() {
+    for target in ["media\\logo.png", "media%5Clogo.png", "media%5clogo.png"] {
+        assert_eq!(
+            path_of(target).unwrap().as_deref(),
+            Some("media/logo.png"),
+            "{target}"
+        );
+    }
+    for target in [
+        "\\\\server\\logo.png",
+        "\\logo.png",
+        "%5C%5Cserver/logo.png",
+    ] {
+        assert_eq!(path_of(target).unwrap(), None, "{target}");
+    }
+    let document = parse("![x](media\\logo.png)\n\n![y](\\server\\logo.png)\n").document;
+    let given = files(&[("media/logo.png", PNG)]);
+    let bundle = BundledDocument::new(document, given, Missing::Refuse).unwrap();
+    assert_eq!(bundle.files(), ["media/logo.png"]);
+    assert_eq!(bundle.file("media/logo.png"), Some(PNG));
+}
+
+#[test]
+fn a_path_holding_a_backslash_is_a_file_no_bundle_can_hold() {
+    let named = files(&[("x.png", PNG), ("a\\b.png", PNG)]);
+    assert!(matches!(
+        BundledDocument::new(parse("![x](x.png)\n").document, named, Missing::Keep),
+        Err(BundledDocumentError::NotRelative { name }) if name == "a\\b.png"
+    ));
+    let document = parse("![[a\\b.png]]\n\n![y](media/logo.png)\n").document;
+    let given = files(&[("media/logo.png", PNG)]);
+    assert!(matches!(
+        BundledDocument::new(document.clone(), given.clone(), Missing::Refuse),
+        Err(BundledDocumentError::Missing { target }) if target == "a\\b.png"
+    ));
+    let kept = BundledDocument::new(document.clone(), given, Missing::Keep).unwrap();
+    assert_eq!(kept.files(), ["media/logo.png"]);
+    assert_eq!(kept.document(), &document);
+    assert_eq!(
+        embedded_paths(&document, "").unwrap(),
+        [("media/logo.png".to_owned(), "media/logo.png".to_owned())]
+    );
+}
+
+#[test]
 fn a_wiki_target_and_a_note_s_target_are_paths_from_the_folder_of_the_text_that_holds_them() {
     let document = parse("![[logo.png|100]]\n\n![[sub/note#Heading]]\n").document;
     assert_eq!(

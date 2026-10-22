@@ -163,6 +163,29 @@ fn each_form_of_the_sample_bundle_reads_back_as_the_same_bundle() {
 }
 
 #[test]
+fn a_bundle_whose_address_holds_a_backslash_reads_back_from_each_form_with_its_file() {
+    let logo = |text: &str| {
+        let files = BTreeMap::from([("media/logo.png".to_owned(), PNG.to_vec())]);
+        BundledDocument::new(parse(text).document, files, Missing::Refuse).unwrap()
+    };
+    let bundle = logo("![x](media\\logo.png)\n");
+    let named = logo("![x](media/logo.png)\n");
+    for form in FORMS {
+        let bytes = encode(&bundle, form, &WriteOptions::default()).unwrap();
+        // A data URI names its file by its path, and that name is the target read back.
+        let expected = match form {
+            Form::Binary | Form::Zip => &bundle,
+            Form::Json | Form::Markdown => &named,
+        };
+        assert_eq!(
+            &decode(&bytes, form, Missing::Refuse).unwrap(),
+            expected,
+            "{form:?}"
+        );
+    }
+}
+
+#[test]
 fn markdown_and_json_hold_each_file_as_a_named_data_uri_and_the_zip_holds_it_at_its_path() {
     let options = WriteOptions::default();
     let uri = "data:image/png;name=media/logo.png;base64,iVBORw0KGgogbm90IGEgcmVhbCBwaWN0dXJl";

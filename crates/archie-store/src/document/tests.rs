@@ -1,6 +1,7 @@
 //! `get`, `put` and `put_bundle` over `AnyStore::File`, each scenario on
 //! `MemorySystem` and on `RealSystem` in a temporary folder.
 
+use alloc::collections::BTreeMap;
 use std::path::PathBuf;
 
 use archie_core::bundle::{BundledDocument, BundledDocumentError, Missing};
@@ -480,13 +481,14 @@ async fn not_held(store: &AnyStore<'_>, text: &str, target: &str) {
     );
 }
 
-async fn not_a_store_path(store: &AnyStore<'_>) {
+async fn backslash_missing(store: &AnyStore<'_>) {
     not_held(store, "![x](a\\b.png)\n", "a\\b.png").await;
 }
 
 #[test]
-fn a_get_of_an_embed_that_is_not_a_store_path_gives_no_file_under_keep_and_fails_under_refuse() {
-    on_both(&not_a_store_path);
+fn a_get_of_an_embed_written_with_a_backslash_whose_file_is_missing_gives_no_file_under_keep_and_fails_under_refuse()
+ {
+    on_both(&backslash_missing);
 }
 
 async fn a_folder(store: &AnyStore<'_>) {
@@ -503,19 +505,42 @@ fn a_get_of_an_embed_that_names_a_folder_gives_no_file_under_keep_and_fails_unde
     on_both(&a_folder);
 }
 
-async fn put_not_a_store_path(store: &AnyStore<'_>) {
+async fn put_backslash(store: &AnyStore<'_>) {
+    let held = BTreeMap::from([("a\\b.png".to_owned(), PNG.to_vec())]);
+    let refused = BundledDocument::new(parse("![x](a\\b.png)\n").document, held, Missing::Refuse);
+    assert!(
+        matches!(
+            &refused,
+            Err(BundledDocumentError::NotRelative { name }) if name == "a\\b.png"
+        ),
+        "{refused:?}"
+    );
     let options = WriteOptions::default();
     let path = StorePath::new("notes/back.md").unwrap();
-    let given = bundle_of("![x](a\\b.png)\n", &[("a\\b.png", PNG)]);
-    let invalid = StoreError::InvalidPath("notes/a\\b.png".to_owned());
-    let from_bundle = put_bundle(store, &path, &given, &options, &Precondition::None).await;
-    assert!(
-        matches!(&from_bundle, Err(DocumentError::Store(error)) if *error == invalid),
-        "{from_bundle:?}"
+    let given = bundle_of("![x](a\\b.png)\n", &[("a/b.png", PNG)]);
+    put_bundle(store, &path, &given, &options, &Precondition::None)
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&store.list(None).await.unwrap()),
+        ["notes/a/b.png", "notes/back.md"]
     );
-    for form in FORMS {
+    let file = StorePath::new("notes/a/b.png").unwrap();
+    assert_eq!(store.read(&file).await.unwrap().bytes, PNG);
+}
+
+#[test]
+fn a_bundle_cannot_hold_a_file_named_with_a_backslash_and_one_in_an_address_is_put_as_a_slash() {
+    on_both(&put_backslash);
+}
+
+async fn backslash_beside(store: &AnyStore<'_>) {
+    let options = WriteOptions::default();
+    let given = bundle_of("![x](media\\logo.png)\n", &[("media/logo.png", PNG)]);
+    for form in [Form::Binary, Form::Json, Form::Markdown, Form::Zip] {
         let bytes = encode(&given, form, &options).unwrap();
-        let from_form = put(
+        let path = StorePath::new(&format!("{form:?}/notes/report.md")).unwrap();
+        put(
             store,
             &path,
             form,
@@ -524,18 +549,19 @@ async fn put_not_a_store_path(store: &AnyStore<'_>) {
             &Precondition::None,
             Missing::Refuse,
         )
-        .await;
-        assert!(
-            matches!(&from_form, Err(DocumentError::Store(error)) if *error == invalid),
-            "{form:?}: {from_form:?}"
-        );
+        .await
+        .unwrap();
+        let logo = StorePath::new(&format!("{form:?}/notes/media/logo.png")).unwrap();
+        assert_eq!(store.read(&logo).await.unwrap().bytes, PNG, "{form:?}");
+        let back = get(store, &path, Missing::Refuse).await.unwrap();
+        assert_eq!(back.files(), ["media/logo.png"], "{form:?}");
+        assert_eq!(back.file("media/logo.png"), Some(PNG), "{form:?}");
     }
-    assert_eq!(store.list(None).await, Ok(Vec::new()));
 }
 
 #[test]
-fn a_put_of_a_file_that_is_not_a_store_path_fails_with_invalid_path_and_writes_nothing() {
-    on_both(&put_not_a_store_path);
+fn a_put_in_each_form_of_an_address_holding_a_backslash_keeps_its_file_that_a_get_gives_back() {
+    on_both(&backslash_beside);
 }
 
 async fn bundle_beside(store: &AnyStore<'_>) {
