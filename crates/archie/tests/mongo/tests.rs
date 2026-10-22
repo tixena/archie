@@ -10,10 +10,12 @@ use archie_store::any::AnyStore;
 use archie_store::document::{get, put};
 use archie_store::mongo::MongoStore;
 use archie_store::object::{ObjectConfig, ObjectStore};
-use archie_store::{Precondition, StorePath};
+use archie_store::{Precondition, Store as _, StorePath};
 use assert_cmd::Command;
+use assert_cmd::assert::Assert;
 use assert_cmd::cargo::cargo_bin;
-use mongodb::Client;
+use mongodb::bson::{Document, doc};
+use mongodb::{Client, Collection};
 use os_shim::real::RealSystem;
 use predicates::ord::eq;
 use tokio::runtime::{Builder, Runtime};
@@ -25,10 +27,35 @@ const FIXTURES: &str = concat!(
     "/../archie-core/src/parser/tests/fixtures"
 );
 
+const OTHER_PNG: &[u8] = b"\x89PNG\r\n\x1a\n another picture";
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
+
 /// The key prefix the binary's MongoDB store keeps its files under.
 const PREFIX: &str = "binary/mongodb";
 
 const REGION: &str = "us-east-1";
+
+const REPLACED_DATABASE: &str = "archie_test_binary_replaced";
+
+/// A prefix of its own, so its listing holds no other test's objects.
+const REPLACED_PREFIX: &str = "binary/replaced";
+
+const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
+
+/// Runs the binary in `root` with `arguments`, its MongoDB store's files
+/// under `prefix` in the bucket.
+fn archie_on(root: &Path, prefix: &str, arguments: &[&str]) -> Assert {
+    Command::cargo_bin("archie")
+        .unwrap()
+        .current_dir(root)
+        .args(arguments)
+        .env("ARCHIE_MONGODB_URI", uri())
+        .env("ARCHIE_MONGODB_BUCKET", format!("{}/{prefix}", bucket()))
+        .env("ARCHIE_MINIO_ENDPOINT", endpoint())
+        .env("ARCHIE_MINIO_REGION", REGION)
+        .assert()
+}
 
 /// The bucket `just test-stores` makes.
 fn bucket() -> String {
@@ -142,5 +169,56 @@ fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keep
     runtime.block_on(async {
         let client = Client::with_uri_str(uri()).await.unwrap();
         client.database(DATABASE).drop().await.unwrap();
+    });
+}
+
+#[test]
+fn a_second_write_with_a_new_picture_deletes_the_old_object_and_its_record_and_get_reads_the_new_one()
+ {
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let root = folder.path();
+    let store = format!("mongodb:{REPLACED_DATABASE}/files");
+    fs::create_dir_all(root.join("draft/media")).unwrap();
+    fs::write(root.join("draft/report.md"), REPORT).unwrap();
+    for picture in [PNG, OTHER_PNG] {
+        fs::write(root.join("draft/media/logo.png"), picture).unwrap();
+        let write = [
+            "write",
+            "notes/report.md",
+            "-i",
+            "draft/report.md",
+            "--store",
+            &store,
+        ];
+        archie_on(root, REPLACED_PREFIX, &write).success();
+    }
+    let get = [
+        "get",
+        "notes/report.md",
+        "-o",
+        "out/report.md",
+        "--store",
+        &store,
+    ];
+    archie_on(root, REPLACED_PREFIX, &get).success();
+    assert_eq!(
+        fs::read(root.join("out/media/logo.png")).unwrap(),
+        OTHER_PNG
+    );
+    runtime.block_on(async {
+        let prefix = StorePath::new(REPLACED_PREFIX).unwrap();
+        let config = ObjectConfig::new(endpoint(), REGION.to_owned(), bucket(), Some(prefix));
+        let files = ObjectStore::open(&RealSystem::new(), config).unwrap();
+        let objects = files.list(None).await.unwrap();
+        assert_eq!(objects.len(), 1);
+        assert_eq!(files.read(&objects[0]).await.unwrap().bytes, OTHER_PNG);
+        let client = Client::with_uri_str(uri()).await.unwrap();
+        let records: Collection<Document> =
+            client.database(REPLACED_DATABASE).collection("files_files");
+        assert_eq!(records.count_documents(doc! {}).await.unwrap(), 1);
+        let record = records.find_one(doc! {}).await.unwrap().unwrap();
+        assert_eq!(record.get_str("object").unwrap(), objects[0].as_str());
+        client.database(REPLACED_DATABASE).drop().await.unwrap();
     });
 }

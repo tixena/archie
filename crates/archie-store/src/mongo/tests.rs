@@ -1,10 +1,12 @@
 //! The store against the MongoDB and `RustFS` servers `just test-stores`
-//! starts, each test in a database of its own, dropped when the test ends, and
-//! its files under a key prefix of its own.
+//! starts, each test, or each lane of a test that runs every order of its
+//! steps, in a database of its own, dropped when it ends, and its files under a
+//! key prefix of its own.
 
-use alloc::collections::BTreeMap;
-use std::env;
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+use core::mem;
 use std::path::PathBuf;
+use std::{env, thread};
 
 use archie_core::bundle::{BundledDocument, Missing};
 use archie_core::forms::{Form, encode};
@@ -18,8 +20,9 @@ use mongodb::{Client, Collection, IndexModel};
 use os_shim::bucket::MinioBucket;
 use os_shim::mock::MemorySystem;
 use os_shim::real::RealSystem;
+use tokio::runtime::Builder;
 
-use super::{MongoStore, embedded};
+use super::{MongoStore, embedded, object_path};
 use crate::any::AnyStore;
 use crate::document::{get, put, put_bundle};
 use crate::file::{self, FileStore};
@@ -28,6 +31,8 @@ use crate::mongo::record::{
 };
 use crate::object::{ObjectConfig, ObjectStore};
 use crate::{Precondition, Store as _, StoreError, StorePath, Stored};
+
+const COPY_MD: &str = "notes/copy.md";
 
 const FIXTURES: [&str; 21] = [
     include_str!("../../../archie-core/src/parser/tests/fixtures/api_reference.md"),
@@ -57,13 +62,358 @@ const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
 const INTRO: &str = "Intro ![chart](../media/chart.png)\n";
 
+const LOGO: &str = "media/logo.png";
+
+const NEW_MD: &str = "notes/new.md";
+
+const OLD_MD: &str = "notes/old.md";
+
+/// Each lane holds a client and a database of its own, so few lanes run at once.
+const ORDERS_AT_ONCE: usize = 8;
+
+const OTHER_MD: &str = "notes/other.md";
+
 const OTHER_PNG: &[u8] = b"\x89PNG\r\n\x1a\n another picture";
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
 
 const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
 
+const REPORT_MD: &str = "notes/report.md";
+
 const REPORT_WITH_INTRO: &str = "# Report\n\n![[parts/intro]]\n";
+
+static ONE_SAVE: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/new.md",
+            steps: &saving(NEW_MD, PNG),
+        },
+        Actor {
+            name: "the deletion of the logo",
+            steps: &deleting(PNG),
+        },
+    ],
+    documents: &[(NEW_MD, Some(PNG)), (OLD_MD, None)],
+    leftover: &[],
+    start: Start::Unembedded(PNG),
+};
+
+static TWO_SAVES: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/new.md",
+            steps: &saving(NEW_MD, PNG),
+        },
+        Actor {
+            name: "the save of notes/other.md",
+            steps: &saving(OTHER_MD, PNG),
+        },
+        Actor {
+            name: "the deletion of the logo",
+            steps: &deleting(PNG),
+        },
+    ],
+    documents: &[(NEW_MD, Some(PNG)), (OLD_MD, None), (OTHER_MD, Some(PNG))],
+    leftover: &[],
+    start: Start::Unembedded(PNG),
+};
+
+static A_REPLACEMENT: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/report.md",
+            steps: &[
+                Step::Claim(REPORT_MD, OTHER_PNG),
+                Step::Upload(REPORT_MD, OTHER_PNG),
+                Step::Save(REPORT_MD, OTHER_PNG),
+                Step::Release(REPORT_MD, Some(OTHER_PNG)),
+                Step::Mark(None),
+                Step::RemoveObject,
+                Step::RemoveRecord,
+            ],
+        },
+        Actor {
+            name: "the deletion of the old logo",
+            steps: &deleting(PNG),
+        },
+    ],
+    documents: &[(REPORT_MD, Some(OTHER_PNG))],
+    leftover: &[],
+    start: Start::Embedded(PNG),
+};
+
+static A_DOCUMENT_DELETION: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the deletion of notes/report.md",
+            steps: &[
+                Step::RemoveDocument(REPORT_MD),
+                Step::Release(REPORT_MD, None),
+                Step::Mark(None),
+                Step::RemoveObject,
+                Step::RemoveRecord,
+            ],
+        },
+        Actor {
+            name: "the save of notes/copy.md",
+            steps: &saving(COPY_MD, PNG),
+        },
+    ],
+    documents: &[(COPY_MD, Some(PNG))],
+    leftover: &[],
+    start: Start::Embedded(PNG),
+};
+
+static A_SAVE_CUT_AFTER_ITS_CLAIM: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/new.md",
+            steps: &[Step::Claim(NEW_MD, PNG)],
+        },
+        Actor {
+            name: "the deletion of the logo",
+            steps: &deleting(PNG),
+        },
+    ],
+    documents: &[(OLD_MD, None)],
+    leftover: &[(NEW_MD, PNG)],
+    start: Start::Unembedded(PNG),
+};
+
+static A_SAVE_CUT_AFTER_ITS_UPLOAD: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/new.md",
+            steps: &[Step::Claim(NEW_MD, PNG), Step::Upload(NEW_MD, PNG)],
+        },
+        Actor {
+            name: "the deletion of the logo",
+            steps: &deleting(PNG),
+        },
+    ],
+    documents: &[(OLD_MD, None)],
+    leftover: &[(NEW_MD, PNG)],
+    start: Start::Unembedded(PNG),
+};
+
+static TWO_DELETIONS: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "a first deletion of the logo",
+            steps: &deleting(PNG),
+        },
+        Actor {
+            name: "a second deletion of the logo",
+            steps: &deleting(PNG),
+        },
+        Actor {
+            name: "the save of notes/new.md",
+            steps: &saving(NEW_MD, PNG),
+        },
+    ],
+    documents: &[(NEW_MD, Some(PNG)), (OLD_MD, None)],
+    leftover: &[],
+    start: Start::Unembedded(PNG),
+};
+
+/// One actor of a scenario: its name in a failing order's message, and its
+/// steps, in their sequence.
+struct Actor {
+    name: &'static str,
+    steps: &'static [Step],
+}
+
+/// What a store holds: its documents, the records of its objects, and the
+/// objects in its bucket.
+struct Holdings {
+    documents: Vec<StoredDocument>,
+    objects: Vec<StorePath>,
+    records: Vec<StoredObject>,
+}
+
+impl Holdings {
+    async fn of(store: &MongoStore) -> Self {
+        let mut found = store.objects.find(Document::new()).await.unwrap();
+        let mut records = Vec::new();
+        while found.advance().await.unwrap() {
+            let record = found.deserialize_current().unwrap();
+            records.push(bson::deserialize_from_document(record).unwrap());
+        }
+        Self {
+            documents: store.find(Document::new()).await.unwrap(),
+            objects: store.files.list(None).await.unwrap(),
+            records,
+        }
+    }
+}
+
+/// Where one actor is in an order: its next step, the objects its deletion
+/// steps act on, whether its deletion found nothing to mark, and whether its
+/// claim waits for a deletion.
+#[derive(Default)]
+struct Run {
+    held: Vec<String>,
+    next: usize,
+    stopped: bool,
+    waiting: bool,
+}
+
+/// Actors that take their steps in each order: what the store holds before
+/// the first step, each document and the picture it embeds once every actor
+/// finishes, and each claim nothing uses that stays, by its document and
+/// picture.
+struct Scenario {
+    actors: &'static [Actor],
+    documents: &'static [(&'static str, Option<&'static [u8]>)],
+    leftover: &'static [(&'static str, &'static [u8])],
+    start: Start,
+}
+
+/// What a scenario's store holds before the first step: `REPORT_MD`
+/// embedding a picture, or `OLD_MD` that embedded it and stopped, the record
+/// of the picture holding no claim and no deletion of it run.
+#[derive(Clone, Copy)]
+enum Start {
+    Embedded(&'static [u8]),
+    Unembedded(&'static [u8]),
+}
+
+/// One step of an actor, named for the store's function it runs, with the
+/// document and the picture it acts on. `Mark` marks the object of its
+/// picture, or with none each object the actor's release took a claim from;
+/// `RemoveObject` and `RemoveRecord` act on what it marked.
+#[derive(Clone, Copy)]
+enum Step {
+    Claim(&'static str, &'static [u8]),
+    Mark(Option<&'static [u8]>),
+    Release(&'static str, Option<&'static [u8]>),
+    RemoveDocument(&'static str),
+    RemoveObject,
+    RemoveRecord,
+    Save(&'static str, &'static [u8]),
+    Upload(&'static str, &'static [u8]),
+}
+
+impl Step {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Claim(..) => "claim",
+            Self::Mark(_) => "mark",
+            Self::Release(..) => "release",
+            Self::RemoveDocument(_) => "remove_document",
+            Self::RemoveObject => "remove_object",
+            Self::RemoveRecord => "remove_record",
+            Self::Save(..) => "save",
+            Self::Upload(..) => "upload",
+        }
+    }
+}
+
+/// Asserts what must hold once every actor of `scenario` finishes: what each
+/// step must leave, the documents it ends with, a read of each picture they
+/// embed, no record held by a deletion, and each record's claims exactly
+/// those the documents' files make, with the claims nothing uses it leaves.
+async fn assert_finished(store: &MongoStore, scenario: &Scenario, told: &str) {
+    let held = Holdings::of(store).await;
+    assert_readable(&held, told);
+    let ended: BTreeMap<&str, BTreeMap<String, String>> = held
+        .documents
+        .iter()
+        .map(|stored| (stored.path.as_str(), stored.files.clone()))
+        .collect();
+    let expected: BTreeMap<&str, BTreeMap<String, String>> = scenario
+        .documents
+        .iter()
+        .map(|&(document, picture)| (document, logo_of(picture)))
+        .collect();
+    assert_eq!(ended, expected, "{told}: the documents");
+    let mut made: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    for stored in &held.documents {
+        let at = path(&stored.path);
+        for (name, hash) in &stored.files {
+            let file = at.beside(name).unwrap();
+            let claims = made.entry(hash.clone()).or_default();
+            claims.insert((stored.path.clone(), file.as_str().to_owned()));
+        }
+    }
+    for &(document, picture) in scenario.leftover {
+        let file = path(document).beside(LOGO).unwrap();
+        let claims = made.entry(file::sha256(picture)).or_default();
+        claims.insert((document.to_owned(), file.as_str().to_owned()));
+    }
+    let claimed: BTreeMap<String, Vec<(String, String)>> = made
+        .into_iter()
+        .map(|(hash, claims)| (hash, claims.into_iter().collect()))
+        .collect();
+    let recorded: BTreeMap<String, Vec<(String, String)>> = held
+        .records
+        .iter()
+        .map(|record| {
+            let mut claims: Vec<(String, String)> = record
+                .embedded_by
+                .iter()
+                .map(|by| (by.document.clone(), by.path.clone()))
+                .collect();
+            claims.sort_unstable();
+            (record.id.clone(), claims)
+        })
+        .collect();
+    assert_eq!(recorded, claimed, "{told}: the claims each record holds");
+    assert!(
+        held.records.iter().all(|record| !record.deleting),
+        "{told}: a deletion still holds a record"
+    );
+    for &(document, picture) in scenario.documents {
+        if let Some(bytes) = picture {
+            let at = path(document);
+            let read = store.read_embedded(&at, &at.beside(LOGO).unwrap()).await;
+            assert_eq!(read, Ok(bytes.to_vec()), "{told}: the logo of {at}");
+        }
+    }
+}
+
+/// Asserts what each step must leave: each file a document names is in the
+/// bucket, and its record holds the document's claim; each object in the
+/// bucket has a record; and each record that says its object is stored, and
+/// that no deletion holds, has its object in the bucket.
+fn assert_readable(held: &Holdings, told: &str) {
+    for document in &held.documents {
+        let at = path(&document.path);
+        for (name, hash) in &document.files {
+            let object = object_path(hash).unwrap();
+            assert!(
+                held.objects.contains(&object),
+                "{told}: {at} embeds {name}, whose object {object} is gone"
+            );
+            let made = claim(&document.path, at.beside(name).unwrap().as_str());
+            let record = held.records.iter().find(|record| record.id == *hash);
+            assert!(
+                record.is_some_and(|found| found.embedded_by.contains(&made)),
+                "{told}: {at} embeds {name}, and no record of {object} holds its claim"
+            );
+        }
+    }
+    for object in &held.objects {
+        assert!(
+            held.records
+                .iter()
+                .any(|record| record.object == object.as_str()),
+            "{told}: {object} is in the bucket, and no record names it"
+        );
+    }
+    let stored = held
+        .records
+        .iter()
+        .filter(|record| record.stored && !record.deleting);
+    for record in stored {
+        let object = object_path(&record.id).unwrap();
+        assert!(
+            held.objects.contains(&object),
+            "{told}: the record of {object} says it is stored, and the bucket does not hold it"
+        );
+    }
+}
 
 /// Archie's form of `source` once its record has been through `to_record`
 /// and `from_record`, as MongoDB gives it back.
@@ -79,6 +429,25 @@ fn back_from_mongodb(source: &str) -> String {
     };
     let back = from_record(to_record(&stored).unwrap()).unwrap();
     write(&back.document, &options).unwrap()
+}
+
+/// Puts in `store` what `start` says it holds before the first step.
+async fn begin(store: &MongoStore, start: Start) {
+    match start {
+        Start::Embedded(picture) => save(store, REPORT_MD, &report_with(picture)).await,
+        Start::Unembedded(picture) => {
+            save(store, OLD_MD, &report_with(picture)).await;
+            let old = path(OLD_MD);
+            let without = parse("# Report\n").document;
+            let none = BTreeMap::new();
+            store
+                .save(&old, &without, &none, &Precondition::None)
+                .await
+                .unwrap();
+            let released = store.release(&old, &none).await;
+            assert_eq!(released, Ok(vec![file::sha256(picture)]));
+        }
+    }
 }
 
 /// A claim of the document at `document` on the file at `path`.
@@ -119,6 +488,63 @@ async fn copy(
     )
     .await
     .unwrap();
+}
+
+/// The three steps of the deletion of the object of `picture`.
+const fn deleting(picture: &'static [u8]) -> [Step; 3] {
+    [
+        Step::Mark(Some(picture)),
+        Step::RemoveObject,
+        Step::RemoveRecord,
+    ]
+}
+
+/// Deletes every document, record and object of `store`.
+async fn empty(store: &MongoStore) {
+    store.collection.delete_many(Document::new()).await.unwrap();
+    store.objects.delete_many(Document::new()).await.unwrap();
+    for object in store.files.list(None).await.unwrap() {
+        store
+            .files
+            .delete(&object, &Precondition::None)
+            .await
+            .unwrap();
+    }
+}
+
+/// Runs `scenario` in each order of its actors' steps, `ORDERS_AT_ONCE`
+/// orders at a time, each lane a thread with a store of its own emptied
+/// before each of its orders, and gives how many orders ran.
+fn every_order(name: &str, scenario: &Scenario) -> usize {
+    let counts: Vec<usize> = scenario
+        .actors
+        .iter()
+        .map(|actor| actor.steps.len())
+        .collect();
+    let orders = interleavings(&counts);
+    let width = ORDERS_AT_ONCE.min(orders.len());
+    thread::scope(|lanes| {
+        for lane in 0..width {
+            let taken = orders.iter().skip(lane).step_by(width);
+            lanes.spawn(move || {
+                let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+                runtime.block_on(async {
+                    let database = format!("{name}_{lane}");
+                    let store = MongoStore::open(&uri(), &database, "files", files_of(&database))
+                        .await
+                        .unwrap();
+                    for order in taken {
+                        empty(&store).await;
+                        begin(&store, scenario.start).await;
+                        run(&store, scenario, order).await;
+                    }
+                    let client = Client::with_uri_str(uri()).await.unwrap();
+                    client.database(&database).drop().await.unwrap();
+                });
+            });
+        }
+    });
+    orders.len()
 }
 
 /// The bucket `just test-stores` makes, its keys under `mongo/<name>`.
@@ -162,6 +588,44 @@ async fn indexes(collection: &Collection<Document>) -> Vec<(String, Document, bo
     }
     found.sort_unstable_by(|left, right| left.0.cmp(&right.0));
     found
+}
+
+/// Every order of the steps of actors taking `counts[actor]` steps each that
+/// keeps each actor's own steps in sequence, an order being the index of the
+/// actor of each step.
+fn interleavings(counts: &[usize]) -> Vec<Vec<usize>> {
+    let mut orders = Vec::new();
+    let mut pending = vec![(Vec::new(), counts.to_vec())];
+    while let Some((order, left)) = pending.pop() {
+        if left.iter().all(|count| *count == 0) {
+            orders.push(order);
+            continue;
+        }
+        for (actor, count) in left.iter().enumerate() {
+            if *count > 0 {
+                let mut longer = order.clone();
+                longer.push(actor);
+                let mut rest = left.clone();
+                rest[actor] -= 1;
+                pending.push((longer, rest));
+            }
+        }
+    }
+    orders
+}
+
+/// `picture` at `LOGO` beside the document at `document`.
+fn logo_files(document: &str, picture: &[u8]) -> BTreeMap<StorePath, Vec<u8>> {
+    let file = path(document).beside(LOGO).unwrap();
+    BTreeMap::from([(file, picture.to_vec())])
+}
+
+/// The `files` of the record of a document that embeds `picture` at `LOGO`,
+/// or none.
+fn logo_of(picture: Option<&[u8]>) -> BTreeMap<String, String> {
+    picture.map_or_else(BTreeMap::new, |bytes| {
+        BTreeMap::from([(LOGO.to_owned(), file::sha256(bytes))])
+    })
 }
 
 fn names(paths: &[StorePath]) -> Vec<&str> {
@@ -224,6 +688,61 @@ fn report_with(picture: &[u8]) -> BundledDocument {
     BundledDocument::new(parse(REPORT).document, files, Missing::Refuse).unwrap()
 }
 
+/// Runs the actors of `scenario` in `order`, each entry the index of the
+/// actor that takes its next step, and asserts what each step must leave and
+/// what must hold once every actor finishes. A claim that waits runs again
+/// after the deletion's last step, followed by the steps its actor would have
+/// taken meanwhile.
+async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
+    let told = told(scenario, order);
+    let mut runs: Vec<Run> = scenario.actors.iter().map(|_| Run::default()).collect();
+    let mut turns: VecDeque<usize> = order.iter().copied().collect();
+    let mut deferred = Vec::new();
+    while let Some(actor) = turns.pop_front() {
+        let current = &mut runs[actor];
+        if current.waiting {
+            deferred.push(actor);
+            continue;
+        }
+        if current.stopped {
+            continue;
+        }
+        let step = scenario.actors[actor].steps[current.next];
+        if take(store, step, current).await {
+            current.next += 1;
+        } else if matches!(step, Step::Claim(..)) {
+            current.waiting = true;
+        } else {
+            current.stopped = true;
+        }
+        assert_readable(&Holdings::of(store).await, &told);
+        if matches!(step, Step::RemoveRecord) {
+            let waiting = runs
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, other)| other.waiting);
+            for (index, blocked) in waiting {
+                let retried = scenario.actors[index].steps[blocked.next];
+                assert!(
+                    take(store, retried, blocked).await,
+                    "{told}: a claim still waits once the deletion finished"
+                );
+                blocked.waiting = false;
+                blocked.next += 1;
+                assert_readable(&Holdings::of(store).await, &told);
+            }
+            for owed in mem::take(&mut deferred).into_iter().rev() {
+                turns.push_front(owed);
+            }
+        }
+    }
+    assert!(
+        runs.iter().all(|done| !done.waiting),
+        "{told}: a claim still waits after the last step"
+    );
+    assert_finished(store, scenario, &told).await;
+}
+
 /// Puts `bundle` at `at` in `store`, replacing any document there.
 async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) {
     let options = WriteOptions::default();
@@ -232,9 +751,100 @@ async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) {
         .unwrap();
 }
 
+/// The four steps of a save of the document at `document` embedding
+/// `picture` at `LOGO`.
+const fn saving(document: &'static str, picture: &'static [u8]) -> [Step; 4] {
+    [
+        Step::Claim(document, picture),
+        Step::Upload(document, picture),
+        Step::Save(document, picture),
+        Step::Release(document, Some(picture)),
+    ]
+}
+
 /// A mapping of the one key `a`, to `value`.
 fn single(value: Value) -> Mapping {
     Mapping::from([("a".to_owned(), value)])
+}
+
+/// Takes `step` for the actor whose run is `at`: `false` when its claim
+/// waits for a deletion, or its mark finds nothing to mark.
+async fn take(store: &MongoStore, step: Step, at: &mut Run) -> bool {
+    match step {
+        Step::Claim(document, picture) => {
+            let saved = path(document);
+            let files = logo_files(document, picture);
+            for file in embedded(&saved, &parse(REPORT).document, &files).unwrap() {
+                if !store.try_claim(&saved, &file).await.unwrap() {
+                    return false;
+                }
+            }
+        }
+        Step::Mark(picture) => {
+            if let Some(bytes) = picture {
+                at.held = vec![file::sha256(bytes)];
+            }
+            let mut marked = Vec::new();
+            for hash in mem::take(&mut at.held) {
+                if store.mark(&hash).await.unwrap() {
+                    marked.push(hash);
+                }
+            }
+            at.held = marked;
+            return !at.held.is_empty();
+        }
+        Step::Release(document, picture) => {
+            at.held = store
+                .release(&path(document), &logo_of(picture))
+                .await
+                .unwrap();
+        }
+        Step::RemoveDocument(document) => {
+            store
+                .remove_document(&path(document), &Precondition::None)
+                .await
+                .unwrap();
+        }
+        Step::RemoveObject => {
+            for hash in &at.held {
+                store.remove_object(hash).await.unwrap();
+            }
+        }
+        Step::RemoveRecord => {
+            for hash in &at.held {
+                store.remove_record(hash).await.unwrap();
+            }
+        }
+        Step::Save(document, picture) => {
+            let saved = parse(REPORT).document;
+            let files = logo_of(Some(picture));
+            store
+                .save(&path(document), &saved, &files, &Precondition::None)
+                .await
+                .unwrap();
+        }
+        Step::Upload(document, picture) => {
+            let saved = path(document);
+            let files = logo_files(document, picture);
+            for file in embedded(&saved, &parse(REPORT).document, &files).unwrap() {
+                store.upload(&file).await.unwrap();
+            }
+        }
+    }
+    true
+}
+
+/// `order` written as the step each entry gives, for a failing order's
+/// message.
+fn told(scenario: &Scenario, order: &[usize]) -> String {
+    let mut taken = vec![0_usize; scenario.actors.len()];
+    let mut steps = Vec::with_capacity(order.len());
+    for &actor in order {
+        let of = &scenario.actors[actor];
+        steps.push(format!("{} {}", of.name, of.steps[taken[actor]].name()));
+        taken[actor] += 1;
+    }
+    steps.join(", ")
 }
 
 /// The connection string `just test-stores` sets.
@@ -755,17 +1365,15 @@ async fn two_documents_embedding_the_same_bytes_make_one_object_and_one_record_w
 }
 
 #[tokio::test]
-async fn a_save_that_replaces_a_picture_releases_the_old_object_and_keeps_it_in_the_bucket() {
+async fn a_save_that_replaces_a_picture_deletes_the_old_object_and_its_record() {
     in_database("archie_test_replace", async |store| {
         save(&store, "notes/report.md", &report_with(PNG)).await;
         save(&store, "notes/report.md", &report_with(OTHER_PNG)).await;
         let claims = [claim("notes/report.md", "notes/media/logo.png")];
         assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
-        assert_eq!(claims_on(&store, PNG).await, []);
-        for bytes in [PNG, OTHER_PNG] {
-            let object = store.files.read(&object_of(bytes)).await.unwrap();
-            assert_eq!(object.bytes, bytes);
-        }
+        assert_eq!(object_record(&store, PNG).await, None);
+        let objects = store.files.list(None).await.unwrap();
+        assert_eq!(objects, [object_of(OTHER_PNG)]);
         let report = path("notes/report.md");
         let back = get(&store, &report, Missing::Refuse).await.unwrap();
         assert_eq!(back, report_with(OTHER_PNG));
@@ -785,7 +1393,7 @@ async fn each_step_of_a_save_that_replaces_a_picture_leaves_the_file_reading_one
         let picture = &replaced[0];
         let claims = [claim("notes/report.md", "notes/media/logo.png")];
 
-        store.claim(&report, picture).await.unwrap();
+        assert_eq!(store.try_claim(&report, picture).await, Ok(true));
         assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
         let record = object_record(&store, OTHER_PNG).await.unwrap();
         assert!(!record.get_bool("stored").unwrap());
@@ -806,7 +1414,8 @@ async fn each_step_of_a_save_that_replaces_a_picture_leaves_the_file_reading_one
         assert_eq!(claims_on(&store, PNG).await, claims);
         assert_eq!(store.read(&logo).await.unwrap().bytes, OTHER_PNG);
 
-        store.release(&report, &hashes).await.unwrap();
+        let released = store.release(&report, &hashes).await;
+        assert_eq!(released, Ok(vec![file::sha256(PNG)]));
         assert_eq!(claims_on(&store, PNG).await, []);
         assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
         assert_eq!(store.read(&logo).await.unwrap().bytes, OTHER_PNG);
@@ -822,7 +1431,7 @@ async fn a_read_of_a_files_own_path_gives_the_object_the_record_of_its_document_
         let files = BTreeMap::from([(path("notes/media/logo.png"), OTHER_PNG.to_vec())]);
         let unsaved = embedded(&draft, &parse(REPORT).document, &files).unwrap();
         // A claim whose document was never saved names no object.
-        store.claim(&draft, &unsaved[0]).await.unwrap();
+        assert_eq!(store.try_claim(&draft, &unsaved[0]).await, Ok(true));
         let logo = path("notes/media/logo.png");
         let read = store.read(&logo).await.unwrap();
         let expected = Stored {
@@ -922,7 +1531,7 @@ async fn a_plain_write_that_still_embeds_a_file_keeps_it() {
 }
 
 #[tokio::test]
-async fn a_plain_write_that_no_longer_embeds_a_file_releases_it() {
+async fn a_plain_write_that_no_longer_embeds_a_file_releases_it_and_deletes_its_object() {
     in_database("archie_test_plain_write_releases", async |store| {
         let report = path("notes/report.md");
         save(&store, "notes/report.md", &report_with(PNG)).await;
@@ -932,9 +1541,8 @@ async fn a_plain_write_that_no_longer_embeds_a_file_releases_it() {
             .unwrap();
         let documents = store.find(Document::new()).await.unwrap();
         assert_eq!(documents[0].files, BTreeMap::new());
-        assert_eq!(claims_on(&store, PNG).await, []);
-        let object = store.files.read(&object_of(PNG)).await.unwrap();
-        assert_eq!(object.bytes, PNG);
+        assert_eq!(object_record(&store, PNG).await, None);
+        assert_eq!(store.files.list(None).await, Ok(Vec::new()));
     })
     .await;
 }
@@ -978,4 +1586,83 @@ async fn a_plain_write_that_still_embeds_a_note_keeps_the_note_and_the_files_it_
         assert_eq!(claims_on(&store, INTRO.as_bytes()).await, intro);
     })
     .await;
+}
+
+#[tokio::test]
+async fn a_deletion_of_a_document_releases_its_claims_and_deletes_each_object_it_leaves_unembedded()
+{
+    in_database("archie_test_delete_document", async |store| {
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        save(&store, "drafts/report.md", &report_with(PNG)).await;
+        let report = path("notes/report.md");
+        let refused = store.delete(&report, &Precondition::Absent).await;
+        assert_eq!(refused, Err(StoreError::Conflict(report.clone())));
+        let both = [
+            claim("notes/report.md", "notes/media/logo.png"),
+            claim("drafts/report.md", "drafts/media/logo.png"),
+        ];
+        assert_eq!(claims_on(&store, PNG).await, both);
+
+        store.delete(&report, &Precondition::None).await.unwrap();
+        let drafts = [claim("drafts/report.md", "drafts/media/logo.png")];
+        assert_eq!(claims_on(&store, PNG).await, drafts);
+        assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
+
+        let draft = path("drafts/report.md");
+        store.delete(&draft, &Precondition::None).await.unwrap();
+        assert_eq!(object_record(&store, PNG).await, None);
+        assert_eq!(store.files.list(None).await, Ok(Vec::new()));
+        assert_eq!(store.list(None).await, Ok(Vec::new()));
+    })
+    .await;
+}
+
+#[test]
+fn interleavings_give_each_order_that_keeps_each_actors_steps_in_sequence_once() {
+    let mut orders = interleavings(&[2, 1]);
+    orders.sort_unstable();
+    assert_eq!(orders, [[0, 0, 1], [0, 1, 0], [1, 0, 0]]);
+    assert_eq!(interleavings(&[4, 3]).len(), 35);
+    assert_eq!(interleavings(&[4, 4, 3]).len(), 11_550);
+}
+
+#[test]
+fn no_order_of_a_save_and_a_deletion_loses_an_object() {
+    let orders = every_order("archie_test_orders_one_save", &ONE_SAVE);
+    assert_eq!(orders, 35);
+}
+
+#[test]
+fn no_order_of_two_saves_of_different_documents_and_a_deletion_loses_an_object() {
+    let orders = every_order("archie_test_orders_two_saves", &TWO_SAVES);
+    assert_eq!(orders, 11_550);
+}
+
+#[test]
+fn every_order_of_a_save_that_replaces_a_picture_and_a_deletion_of_it_deletes_only_the_old_one() {
+    let orders = every_order("archie_test_orders_replacement", &A_REPLACEMENT);
+    assert_eq!(orders, 120);
+}
+
+#[test]
+fn no_order_of_a_document_deletion_and_a_save_of_its_picture_loses_the_object() {
+    let orders = every_order("archie_test_orders_document", &A_DOCUMENT_DELETION);
+    assert_eq!(orders, 126);
+}
+
+#[test]
+fn no_order_of_a_save_that_stops_after_its_claim_or_its_upload_and_a_deletion_loses_an_object() {
+    let claimed = every_order("archie_test_orders_cut_claim", &A_SAVE_CUT_AFTER_ITS_CLAIM);
+    assert_eq!(claimed, 4);
+    let uploaded = every_order(
+        "archie_test_orders_cut_upload",
+        &A_SAVE_CUT_AFTER_ITS_UPLOAD,
+    );
+    assert_eq!(uploaded, 10);
+}
+
+#[test]
+fn no_order_of_two_deletions_and_a_save_loses_an_object() {
+    let orders = every_order("archie_test_orders_two_deletions", &TWO_DELETIONS);
+    assert_eq!(orders, 4200);
 }

@@ -69,7 +69,7 @@ struct HeldFiles {
 ///
 /// Each file they embed is the object `files/<sha256>` of `files`, named by
 /// one record of `<collection>_files`, which has an index on
-/// `embedded_by.path`.
+/// `embedded_by.path`. An object nothing embeds is deleted, then its record.
 pub struct MongoStore {
     collection: Collection<Document>,
     files: ObjectStore<MinioBucket>,
@@ -90,6 +90,16 @@ impl MongoStore {
             }
             tries += 1;
             time::sleep(CLAIM_WAIT).await;
+        }
+        Ok(())
+    }
+
+    /// Deletes the object whose bytes have the SHA-256 `hash`, then its
+    /// record, when nothing embeds it and no other deletion holds it.
+    async fn delete_object(&self, hash: &str) -> Result<(), StoreError> {
+        if self.mark(hash).await? {
+            self.remove_object(hash).await?;
+            self.remove_record(hash).await?;
         }
         Ok(())
     }
@@ -128,6 +138,20 @@ impl MongoStore {
         let held: HeldFiles =
             bson::deserialize_from_document(record).map_err(|error| failed(path, &error))?;
         Ok(held.files)
+    }
+
+    /// Marks the record of the object whose bytes have the SHA-256 `hash` as
+    /// held by a deletion, only while nothing embeds it and no other deletion
+    /// holds it: `false` when no record was marked.
+    async fn mark(&self, hash: &str) -> Result<bool, StoreError> {
+        let object = object_path(hash)?;
+        let (filter, update) = marking(hash).map_err(|error| failed(&object, &error))?;
+        let marked = self
+            .objects
+            .update_one(filter, update)
+            .await
+            .map_err(|error| failed(&object, &error))?;
+        Ok(marked.matched_count == 1)
     }
 
     /// Connects with `uri`, the connection string, keeps each embedded file
@@ -228,12 +252,13 @@ impl MongoStore {
     }
 
     /// Takes back each claim of the document at `path` that `files`, the
-    /// SHA-256 of each file it embeds by its path in the bundle, does not make.
+    /// SHA-256 of each file it embeds by its path in the bundle, does not make,
+    /// and gives the SHA-256 of each object it took a claim from.
     async fn release(
         &self,
         path: &StorePath,
         files: &BTreeMap<String, String>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<String>, StoreError> {
         let of_document = Claim::MONGO_FIELDS
             .document()
             .eq(path.as_str().to_owned())
@@ -244,11 +269,13 @@ impl MongoStore {
         )
         .await
         .map_err(|error| failed(path, &error))?;
+        let mut released = Vec::new();
         for record in records {
             let of_path = record
                 .embedded_by
                 .iter()
                 .filter(|claim| claim.document == path.as_str());
+            let mut taken = false;
             for claim in of_path {
                 let made = name_in(path, &claim.path).and_then(|name| files.get(name));
                 if made != Some(&record.id) {
@@ -258,9 +285,75 @@ impl MongoStore {
                         .update_one(filter, update)
                         .await
                         .map_err(|error| failed(path, &error))?;
+                    taken = true;
                 }
             }
+            if taken {
+                released.push(record.id);
+            }
         }
+        Ok(released)
+    }
+
+    /// Deletes the record of the document at `path` if `precondition` holds,
+    /// as `Store::delete` says.
+    async fn remove_document(
+        &self,
+        path: &StorePath,
+        precondition: &Precondition,
+    ) -> Result<(), StoreError> {
+        let (filter, unmatched) = match precondition {
+            Precondition::Absent => {
+                let held = self
+                    .collection
+                    .find_one(on_path(path)?)
+                    .projection(doc! { "_id": 1_i32 })
+                    .await
+                    .map_err(|error| failed(path, &error))?;
+                return Err(held.map_or_else(
+                    || StoreError::NotFound(path.clone()),
+                    |_| StoreError::Conflict(path.clone()),
+                ));
+            }
+            Precondition::Matches(expected) => (
+                on_revision(path, expected)?,
+                StoreError::Conflict(path.clone()),
+            ),
+            Precondition::None => (on_path(path)?, StoreError::NotFound(path.clone())),
+        };
+        let deleted = self
+            .collection
+            .delete_one(filter)
+            .await
+            .map_err(|error| failed(path, &error))?;
+        if deleted.deleted_count == 0 {
+            Err(unmatched)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Deletes the object whose bytes have the SHA-256 `hash` from the bucket.
+    async fn remove_object(&self, hash: &str) -> Result<(), StoreError> {
+        self.files
+            .delete(&object_path(hash)?, &Precondition::None)
+            .await
+    }
+
+    /// Deletes the record of the object whose bytes have the SHA-256 `hash`,
+    /// only while a deletion holds it.
+    async fn remove_record(&self, hash: &str) -> Result<(), StoreError> {
+        let object = object_path(hash)?;
+        let paths = StoredObject::MONGO_FIELDS;
+        let held = paths
+            .id()
+            .eq(hash.to_owned())
+            .and_then(|on_id| Ok(on_id.and(paths.deleting().eq(true)?)))
+            .map_err(|error| failed(&object, &error))?;
+        self.objects
+            .delete_one(held.into_document())
+            .await
+            .map_err(|error| failed(&object, &error))?;
         Ok(())
     }
 
@@ -416,14 +509,15 @@ impl MongoStore {
     /// revision: the SHA-256 of the document in archie's form.
     ///
     /// The record keeps each file of the record it replaces that `document`
-    /// still embeds, and each other claim of the document is taken back.
-    /// Nothing is claimed or uploaded.
+    /// still embeds, each other claim of the document is taken back, and each
+    /// object that leaves unembedded is deleted. Nothing is claimed or uploaded.
     ///
     /// # Errors
     ///
     /// `StoreError::Conflict` when `precondition` does not hold, or
     /// `StoreError::Backend` naming the path when the record nests too deep or
-    /// the driver or the bucket fails, or naming a kept note that is not UTF-8.
+    /// the driver or the bucket fails, naming a kept note that is not UTF-8, or
+    /// naming an object whose deletion fails.
     pub async fn write_document(
         &self,
         path: &StorePath,
@@ -432,7 +526,9 @@ impl MongoStore {
     ) -> Result<Revision, StoreError> {
         let kept = self.still_embedded(path, document).await?;
         let revision = self.save(path, document, &kept, precondition).await?;
-        self.release(path, &kept).await?;
+        for hash in self.release(path, &kept).await? {
+            self.delete_object(&hash).await?;
+        }
         Ok(revision)
     }
 }
@@ -445,41 +541,19 @@ impl Store for MongoStore {
     }
 
     /// With `Precondition::Absent`, nothing is deleted: a record at `path` is
-    /// `Conflict`, and none is `NotFound`.
+    /// `Conflict`, and none is `NotFound`. Once the record is deleted, each
+    /// claim of the document is taken back, and each object that leaves
+    /// unembedded is deleted.
     async fn delete(
         &self,
         path: &StorePath,
         precondition: &Precondition,
     ) -> Result<(), StoreError> {
-        let (filter, unmatched) = match precondition {
-            Precondition::Absent => {
-                let held = self
-                    .collection
-                    .find_one(on_path(path)?)
-                    .projection(doc! { "_id": 1_i32 })
-                    .await
-                    .map_err(|error| failed(path, &error))?;
-                return Err(held.map_or_else(
-                    || StoreError::NotFound(path.clone()),
-                    |_| StoreError::Conflict(path.clone()),
-                ));
-            }
-            Precondition::Matches(expected) => (
-                on_revision(path, expected)?,
-                StoreError::Conflict(path.clone()),
-            ),
-            Precondition::None => (on_path(path)?, StoreError::NotFound(path.clone())),
-        };
-        let deleted = self
-            .collection
-            .delete_one(filter)
-            .await
-            .map_err(|error| failed(path, &error))?;
-        if deleted.deleted_count == 0 {
-            Err(unmatched)
-        } else {
-            Ok(())
+        self.remove_document(path, precondition).await?;
+        for hash in self.release(path, &BTreeMap::new()).await? {
+            self.delete_object(&hash).await?;
         }
+        Ok(())
     }
 
     async fn list(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
@@ -565,8 +639,8 @@ impl Store for MongoStore {
 
     /// Claims the object of each file of `files` for the document, uploads
     /// each one its record does not say is stored, saves the document with the
-    /// SHA-256 of each file, then takes back each claim of the document that it
-    /// no longer makes.
+    /// SHA-256 of each file, takes back each claim of the document that it no
+    /// longer makes, then deletes each object that leaves unembedded.
     async fn write_with_embedded(
         &self,
         path: &StorePath,
@@ -587,7 +661,9 @@ impl Store for MongoStore {
             .map(|file| (file.name.to_owned(), file.hash.clone()))
             .collect();
         let revision = self.save(path, &document, &hashes, precondition).await?;
-        self.release(path, &hashes).await?;
+        for hash in self.release(path, &hashes).await? {
+            self.delete_object(&hash).await?;
+        }
         Ok(revision)
     }
 }
@@ -749,6 +825,23 @@ async fn has_index(
         }
     }
     Ok(false)
+}
+
+/// The filter and the update that mark the record of the object whose bytes
+/// have the SHA-256 `hash` as held by a deletion, where nothing embeds it and
+/// no deletion holds it yet.
+fn marking(hash: &str) -> Result<(Document, Document), WriteError> {
+    let paths = StoredObject::MONGO_FIELDS;
+    // Without `deleting`, a second deletion could remove what a later save uploads.
+    let filter = paths
+        .id()
+        .eq(hash.to_owned())?
+        .and(paths.embedded_by().size(0))
+        .and(paths.deleting().ne(true)?);
+    Ok((
+        filter.into_document(),
+        paths.deleting().set(true)?.into_document(),
+    ))
 }
 
 /// The path of `file` from the folder of the document at `document`, as a
