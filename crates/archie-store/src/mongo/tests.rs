@@ -22,7 +22,7 @@ use os_shim::mock::MemorySystem;
 use os_shim::real::RealSystem;
 use tokio::runtime::Builder;
 
-use super::{MongoStore, embedded, object_path};
+use super::{MongoStore, embedded, object_path, stopped_deletion, stored_release_failed};
 use crate::any::AnyStore;
 use crate::document::{get, put, put_bundle};
 use crate::file::{self, FileStore};
@@ -1719,6 +1719,23 @@ async fn finishing_deletions_where_no_deletion_holds_a_record_changes_nothing() 
         assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
     })
     .await;
+}
+
+#[test]
+fn a_release_that_fails_once_the_change_is_stored_says_the_change_is_stored() {
+    let error = StoreError::Backend("server selection timed out".to_owned());
+    let failed = stored_release_failed(&path(REPORT_MD), &error);
+    let told = "notes/report.md: the change to the document is stored, and taking back the claims on the files it no longer embeds failed: server selection timed out";
+    assert_eq!(failed, StoreError::Backend(told.to_owned()));
+}
+
+#[test]
+fn a_deletion_that_stops_once_the_change_is_stored_says_so_and_names_the_command_that_finishes_it()
+{
+    let error = StoreError::Backend("server selection timed out".to_owned());
+    let stopped = stopped_deletion(&path("files/0123"), &error);
+    let told = "files/0123: the change to the document is stored, and the deletion of this object stopped: server selection timed out; `archie asset finish-deletions` finishes it";
+    assert_eq!(stopped, StoreError::Backend(told.to_owned()));
 }
 
 #[test]

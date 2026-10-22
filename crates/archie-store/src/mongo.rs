@@ -97,19 +97,17 @@ impl MongoStore {
     /// Deletes the object whose bytes have the SHA-256 `hash`, then its
     /// record, when nothing embeds it and no other deletion holds it.
     async fn delete_object(&self, hash: &str) -> Result<(), StoreError> {
-        if self.mark(hash).await? {
-            let object = object_path(hash)?;
-            let removed = match self.remove_object(hash).await {
-                Ok(()) => self.remove_record(hash).await,
-                Err(error) => Err(error),
-            };
-            removed.map_err(|error| {
-                StoreError::Backend(format!(
-                    "{object}: the change to the document is stored, and the deletion of this object stopped: {error}; `archie asset finish-deletions` finishes it"
-                ))
-            })?;
-        }
-        Ok(())
+        let object = object_path(hash)?;
+        let deleted = async {
+            if self.mark(hash).await? {
+                self.remove_object(hash).await?;
+                self.remove_record(hash).await?;
+            }
+            Ok(())
+        };
+        deleted
+            .await
+            .map_err(|error: StoreError| stopped_deletion(&object, &error))
     }
 
     /// Every record `filter` matches, read through `from_record`.
@@ -486,6 +484,24 @@ impl MongoStore {
         Ok(kept)
     }
 
+    /// Takes back the claims of the document at `path` that `files` does not
+    /// make, and deletes each object left unembedded, once the document's change
+    /// is stored.
+    async fn tidy(
+        &self,
+        path: &StorePath,
+        files: &BTreeMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let released = self
+            .release(path, files)
+            .await
+            .map_err(|error| stored_release_failed(path, &error))?;
+        for hash in released {
+            self.delete_object(&hash).await?;
+        }
+        Ok(())
+    }
+
     /// One try at claiming the object of `file` for the document at `path`:
     /// its record gains the claim, and is made with the object's metadata
     /// where none is. `false` while a deletion holds the record.
@@ -558,9 +574,7 @@ impl MongoStore {
     ) -> Result<Revision, StoreError> {
         let kept = self.still_embedded(path, document).await?;
         let revision = self.save(path, document, &kept, precondition).await?;
-        for hash in self.release(path, &kept).await? {
-            self.delete_object(&hash).await?;
-        }
+        self.tidy(path, &kept).await?;
         Ok(revision)
     }
 }
@@ -582,10 +596,7 @@ impl Store for MongoStore {
         precondition: &Precondition,
     ) -> Result<(), StoreError> {
         self.remove_document(path, precondition).await?;
-        for hash in self.release(path, &BTreeMap::new()).await? {
-            self.delete_object(&hash).await?;
-        }
-        Ok(())
+        self.tidy(path, &BTreeMap::new()).await
     }
 
     async fn list(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
@@ -693,9 +704,7 @@ impl Store for MongoStore {
             .map(|file| (file.name.to_owned(), file.hash.clone()))
             .collect();
         let revision = self.save(path, &document, &hashes, precondition).await?;
-        for hash in self.release(path, &hashes).await? {
-            self.delete_object(&hash).await?;
-        }
+        self.tidy(path, &hashes).await?;
         Ok(revision)
     }
 }
@@ -926,6 +935,22 @@ fn releasing(hash: &str, claim: &Claim) -> Result<(Document, Document), WriteErr
     Ok((
         filter.into_document(),
         paths.embedded_by().pull(held).into_document(),
+    ))
+}
+
+/// The failure of a deletion of `object` after the change to its document is
+/// stored.
+fn stopped_deletion(object: &StorePath, error: &dyn fmt::Display) -> StoreError {
+    StoreError::Backend(format!(
+        "{object}: the change to the document is stored, and the deletion of this object stopped: {error}; `archie asset finish-deletions` finishes it"
+    ))
+}
+
+/// The failure to take back the claims of the document at `path` after its
+/// change is stored.
+fn stored_release_failed(path: &StorePath, error: &dyn fmt::Display) -> StoreError {
+    StoreError::Backend(format!(
+        "{path}: the change to the document is stored, and taking back the claims on the files it no longer embeds failed: {error}"
     ))
 }
 
