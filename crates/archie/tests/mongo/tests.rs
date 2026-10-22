@@ -3,7 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command as Process, Stdio};
 
-use archie_core::forms::Form;
+use archie_core::bundle::Missing;
+use archie_core::forms::{Form, encode};
 use archie_core::writer::WriteOptions;
 use archie_store::any::AnyStore;
 use archie_store::document::{get, put};
@@ -56,12 +57,12 @@ fn kept_by_mongodb(
             source.as_bytes(),
             &options,
             &Precondition::None,
+            Missing::Keep,
         )
         .await
         .unwrap();
-        get(expected, &path, Form::Markdown, &options)
-            .await
-            .unwrap()
+        let bundle = get(expected, &path, Missing::Keep).await.unwrap();
+        encode(&bundle, Form::Markdown, &options).unwrap()
     })
 }
 

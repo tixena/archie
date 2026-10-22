@@ -4,7 +4,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use archie_core::forms::Form;
+use archie_core::bundle::Missing;
+use archie_core::forms::{Form, encode};
 use archie_core::parser::ast::{Mapping, RawDocument, Value};
 use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
@@ -72,10 +73,19 @@ async fn copy(
     form: Form,
 ) {
     let options = WriteOptions::default();
-    let bytes = get(from, path, form, &options).await.unwrap();
-    put(into, to, form, &bytes, &options, &Precondition::None)
-        .await
-        .unwrap();
+    let bundle = get(from, path, Missing::Keep).await.unwrap();
+    let bytes = encode(&bundle, form, &options).unwrap();
+    put(
+        into,
+        to,
+        form,
+        &bytes,
+        &options,
+        &Precondition::None,
+        Missing::Keep,
+    )
+    .await
+    .unwrap();
 }
 
 /// Runs `scenario` over the collection `files` of the database `name`, then
@@ -523,11 +533,13 @@ async fn each_call_to_any_store_goes_to_the_mongodb_store_it_holds() {
             b"* item\n",
             &options,
             &Precondition::Absent,
+            Missing::Keep,
         )
         .await
         .unwrap();
         assert_eq!(any.read(&path).await.unwrap().revision, revision);
-        let markdown = get(&any, &path, Form::Markdown, &options).await.unwrap();
+        let bundle = get(&any, &path, Missing::Keep).await.unwrap();
+        let markdown = encode(&bundle, Form::Markdown, &options).unwrap();
         assert_eq!(markdown, b"- item\n");
         assert_eq!(names(&any.list(None).await.unwrap()), ["notes/a.md"]);
         any.delete(&path, &Precondition::Matches(revision))

@@ -1,5 +1,6 @@
 //! The store over a file system, through os-shim.
 
+use alloc::collections::BTreeMap;
 use core::fmt::{self, Write as _};
 use core::future;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -10,7 +11,9 @@ use std::process;
 use os_shim::System;
 use sha2::{Digest as _, Sha256};
 
-use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored};
+use crate::{
+    Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored, write_at_paths,
+};
 
 /// The count in a temporary name, shared by every store in the process.
 static WRITES: AtomicU64 = AtomicU64::new(0);
@@ -111,6 +114,21 @@ impl<'system> FileStore<'system> {
         (folder, name)
     }
 
+    /// The bytes of the file at `file`, or `NotFound` when that path holds no
+    /// file, a folder included.
+    fn read_embedded_file(&self, file: &StorePath) -> Result<Vec<u8>, StoreError> {
+        let (folder, name) = self.place(file);
+        let held = self
+            .system
+            .is_file(&folder.join(name))
+            .map_err(|error| backend(file, &error))?;
+        if held {
+            Ok(self.read_file(file)?.bytes)
+        } else {
+            Err(StoreError::NotFound(file.clone()))
+        }
+    }
+
     fn read_file(&self, path: &StorePath) -> Result<Stored, StoreError> {
         let bytes = self
             .bytes(path)?
@@ -191,6 +209,14 @@ impl Store for FileStore<'_> {
         future::ready(self.read_file(path))
     }
 
+    fn read_embedded(
+        &self,
+        _document: &StorePath,
+        file: &StorePath,
+    ) -> impl Future<Output = Result<Vec<u8>, StoreError>> + Send {
+        future::ready(self.read_embedded_file(file))
+    }
+
     fn write(
         &self,
         path: &StorePath,
@@ -198,6 +224,16 @@ impl Store for FileStore<'_> {
         precondition: &Precondition,
     ) -> impl Future<Output = Result<Revision, StoreError>> + Send {
         future::ready(self.write_file(path, bytes, precondition))
+    }
+
+    fn write_with_embedded(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> impl Future<Output = Result<Revision, StoreError>> + Send {
+        write_at_paths(self, path, text, files, precondition)
     }
 }
 

@@ -1,10 +1,12 @@
 //! The store over `MinioBucket` on the `RustFS` server `just test-stores`
 //! starts, each test under a key prefix of its own.
 
+use alloc::collections::BTreeMap;
 use std::env;
 use std::path::PathBuf;
 
-use archie_core::forms::Form;
+use archie_core::bundle::{BundledDocument, Missing};
+use archie_core::forms::{Form, encode};
 use archie_core::parser::ast::RawDocument;
 use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
@@ -45,6 +47,10 @@ const FIXTURES: [&str; 21] = [
 
 const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
+
+const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
+
 /// The configuration `just test-stores` passes, its keys under `prefix`.
 fn config(prefix: &str) -> ObjectConfig {
     ObjectConfig::new(
@@ -65,10 +71,19 @@ async fn copy(
     form: Form,
 ) {
     let options = WriteOptions::default();
-    let bytes = get(from, path, form, &options).await.unwrap();
-    put(into, to, form, &bytes, &options, &Precondition::None)
-        .await
-        .unwrap();
+    let bundle = get(from, path, Missing::Keep).await.unwrap();
+    let bytes = encode(&bundle, form, &options).unwrap();
+    put(
+        into,
+        to,
+        form,
+        &bytes,
+        &options,
+        &Precondition::None,
+        Missing::Keep,
+    )
+    .await
+    .unwrap();
 }
 
 /// A store over the server, its keys read from the environment.
@@ -111,6 +126,38 @@ async fn each_fixture_through_rustfs_and_back_is_archies_form_and_a_second_copy_
             assert_eq!(stored, back.bytes, "{form:?}: {source}");
         }
     }
+}
+
+#[tokio::test]
+async fn on_rustfs_a_put_keeps_each_embedded_file_beside_the_document_and_a_get_gives_it_back() {
+    let store = server("embedded");
+    let options = WriteOptions::default();
+    let files = BTreeMap::from([("media/logo.png".to_owned(), PNG.to_vec())]);
+    let bundle = BundledDocument::new(parse(REPORT).document, files, Missing::Refuse).unwrap();
+    let zip = encode(&bundle, Form::Zip, &options).unwrap();
+    let report = path("notes/report.md");
+    put(
+        &store,
+        &report,
+        Form::Zip,
+        &zip,
+        &options,
+        &Precondition::None,
+        Missing::Refuse,
+    )
+    .await
+    .unwrap();
+    let kept = store.list(None).await.unwrap();
+    assert_eq!(names(&kept), ["notes/media/logo.png", "notes/report.md"]);
+    let text = store.read(&report).await.unwrap().bytes;
+    assert_eq!(text, REPORT.as_bytes());
+    let logo = store
+        .read(&path("notes/media/logo.png"))
+        .await
+        .unwrap()
+        .bytes;
+    assert_eq!(logo, PNG);
+    assert_eq!(get(&store, &report, Missing::Refuse).await.unwrap(), bundle);
 }
 
 #[tokio::test]

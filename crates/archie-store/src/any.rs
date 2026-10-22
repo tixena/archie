@@ -1,5 +1,7 @@
 //! One type for whichever store a caller opened.
 
+use alloc::collections::BTreeMap;
+
 #[cfg(feature = "minio")]
 use os_shim::bucket::MinioBucket;
 
@@ -66,6 +68,20 @@ impl Store for AnyStore<'_> {
         }
     }
 
+    async fn read_embedded(
+        &self,
+        document: &StorePath,
+        file: &StorePath,
+    ) -> Result<Vec<u8>, StoreError> {
+        match self {
+            Self::File(store) => store.read_embedded(document, file).await,
+            #[cfg(feature = "minio")]
+            Self::Minio(store) => store.read_embedded(document, file).await,
+            #[cfg(feature = "mongodb")]
+            Self::Mongo(store) => store.read_embedded(document, file).await,
+        }
+    }
+
     async fn write(
         &self,
         path: &StorePath,
@@ -78,6 +94,34 @@ impl Store for AnyStore<'_> {
             Self::Minio(store) => store.write(path, bytes, precondition).await,
             #[cfg(feature = "mongodb")]
             Self::Mongo(store) => store.write(path, bytes, precondition).await,
+        }
+    }
+
+    async fn write_with_embedded(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> Result<Revision, StoreError> {
+        match self {
+            Self::File(store) => {
+                store
+                    .write_with_embedded(path, text, files, precondition)
+                    .await
+            }
+            #[cfg(feature = "minio")]
+            Self::Minio(store) => {
+                store
+                    .write_with_embedded(path, text, files, precondition)
+                    .await
+            }
+            #[cfg(feature = "mongodb")]
+            Self::Mongo(store) => {
+                store
+                    .write_with_embedded(path, text, files, precondition)
+                    .await
+            }
         }
     }
 }

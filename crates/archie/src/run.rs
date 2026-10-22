@@ -9,7 +9,8 @@ use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use archie_core::forms::Form;
+use archie_core::bundle::Missing;
+use archie_core::forms::{Form, encode};
 use archie_core::writer::WriteOptions;
 use archie_store::any::AnyStore;
 use archie_store::document::{self, DocumentError};
@@ -116,9 +117,11 @@ async fn get(
     let target = output
         .map(|file| store_path(system, file).map(|place| (file, place)))
         .transpose()?;
-    let bytes = document::get(&store, &at, form, options)
+    let bundle = document::get(&store, &at, Missing::Keep)
         .await
         .map_err(|error| Failure::of_document(path, &at, &error))?;
+    let bytes =
+        encode(&bundle, form, options).map_err(|error| Failure::naming(path, None, 1, &error))?;
     if let Some((file, place)) = target {
         let _: Revision = machine(system)
             .write(&place, &bytes, &Precondition::None)
@@ -369,9 +372,17 @@ async fn write(
             .map_err(|error| Failure::stream("standard input", &error))?;
         bytes
     };
-    let _: Revision = document::put(&store, &at, form, &bytes, options, &Precondition::None)
-        .await
-        .map_err(|error| Failure::of_document(path, &at, &error))?;
+    let _: Revision = document::put(
+        &store,
+        &at,
+        form,
+        &bytes,
+        options,
+        &Precondition::None,
+        Missing::Keep,
+    )
+    .await
+    .map_err(|error| Failure::of_document(path, &at, &error))?;
     Ok(())
 }
 

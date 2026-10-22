@@ -2,6 +2,7 @@
 
 pub mod record;
 
+use alloc::collections::BTreeMap;
 use core::fmt;
 
 use archie_core::bundle::Missing;
@@ -15,7 +16,10 @@ use mongodb::options::IndexOptions;
 use mongodb::{Client, Collection, IndexModel};
 
 use crate::mongo::record::{StoredDocument, from_record, revision_of, to_record};
-use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored};
+use crate::{
+    Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored, read_at_path,
+    write_at_paths,
+};
 
 /// The code of a write that breaks a unique index.
 const DUPLICATE_KEY: i32 = 11000;
@@ -259,6 +263,14 @@ impl Store for MongoStore {
         })
     }
 
+    async fn read_embedded(
+        &self,
+        _document: &StorePath,
+        file: &StorePath,
+    ) -> Result<Vec<u8>, StoreError> {
+        read_at_path(self, file).await
+    }
+
     async fn write(
         &self,
         path: &StorePath,
@@ -269,6 +281,16 @@ impl Store for MongoStore {
             decode(bytes, Form::Markdown, Missing::Keep).map_err(|error| failed(path, &error))?;
         self.write_document(path, bundle.document(), precondition)
             .await
+    }
+
+    async fn write_with_embedded(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> Result<Revision, StoreError> {
+        write_at_paths(self, path, text, files, precondition).await
     }
 }
 

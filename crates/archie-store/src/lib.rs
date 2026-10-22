@@ -1,5 +1,7 @@
 //! Where archie keeps documents: the storage interface and its stores.
 
+extern crate alloc;
+
 #[cfg(feature = "mongodb")]
 tixschema::decode_with_foundation!();
 #[cfg(feature = "mongodb")]
@@ -13,6 +15,7 @@ pub mod mongo;
 #[cfg(feature = "minio")]
 pub mod object;
 
+use alloc::collections::BTreeMap;
 use core::fmt;
 
 /// A file's place in a store: parts joined by `/`, none empty, none `.` or
@@ -24,6 +27,19 @@ impl StorePath {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The path of `name`, a path inside a bundle, from the folder of `self`:
+    /// `notes/report.md` and `media/logo.png` give `notes/media/logo.png`.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::InvalidPath` when the path breaks one of the rules above.
+    pub fn beside(&self, name: &str) -> Result<Self, StoreError> {
+        self.0.rsplit_once('/').map_or_else(
+            || Self::new(name),
+            |(folder, _)| Self::new(&format!("{folder}/{name}")),
+        )
     }
 
     /// # Errors
@@ -114,6 +130,19 @@ pub trait Store {
 
     fn read(&self, path: &StorePath) -> impl Future<Output = Result<Stored, StoreError>> + Send;
 
+    /// The bytes of `file`, which the document at `_document` embeds. By
+    /// default, the file at that path.
+    fn read_embedded(
+        &self,
+        _document: &StorePath,
+        file: &StorePath,
+    ) -> impl Future<Output = Result<Vec<u8>, StoreError>> + Send
+    where
+        Self: Sync,
+    {
+        read_at_path(self, file)
+    }
+
     /// Writes `bytes` whole: a reader sees the old file or the new one, never a
     /// part of either.
     fn write(
@@ -122,6 +151,49 @@ pub trait Store {
         bytes: &[u8],
         precondition: &Precondition,
     ) -> impl Future<Output = Result<Revision, StoreError>> + Send;
+
+    /// Writes the document `text` at `path` and each file of `files`, which it
+    /// embeds. By default, each file at its path, with no precondition, then the
+    /// text under `precondition`; no file is deleted.
+    fn write_with_embedded(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> impl Future<Output = Result<Revision, StoreError>> + Send
+    where
+        Self: Sync,
+    {
+        write_at_paths(self, path, text, files, precondition)
+    }
+}
+
+/// What `Store::read_embedded` does by default: the bytes of the file at
+/// `file`.
+pub(crate) async fn read_at_path<S>(store: &S, file: &StorePath) -> Result<Vec<u8>, StoreError>
+where
+    S: Store + Sync + ?Sized,
+{
+    Ok(store.read(file).await?.bytes)
+}
+
+/// What `Store::write_with_embedded` does by default: each file of `files` at
+/// its path, with no precondition, then `text` at `path` under `precondition`.
+pub(crate) async fn write_at_paths<S>(
+    store: &S,
+    path: &StorePath,
+    text: &str,
+    files: &BTreeMap<StorePath, Vec<u8>>,
+    precondition: &Precondition,
+) -> Result<Revision, StoreError>
+where
+    S: Store + Sync + ?Sized,
+{
+    for (file, bytes) in files {
+        store.write(file, bytes, &Precondition::None).await?;
+    }
+    store.write(path, text.as_bytes(), precondition).await
 }
 
 #[cfg(test)]

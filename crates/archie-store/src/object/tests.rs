@@ -5,15 +5,25 @@
 #[cfg(store_tests)]
 mod server;
 
+use alloc::collections::BTreeMap;
 use core::future;
 use std::io;
 
+use archie_core::bundle::{BundledDocument, Missing};
+use archie_core::forms::{Form, encode};
+use archie_core::parser::parse;
+use archie_core::writer::WriteOptions;
 use os_shim::bucket::{Bucket, Condition, MemoryBucket, Object, ObjectError};
 use os_shim::mock::MemorySystem;
 
 use super::{ObjectConfig, ObjectStore};
 use crate::any::AnyStore;
+use crate::document::{get, put};
 use crate::{Precondition, Revision, Store as _, StoreError, StorePath};
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
+
+const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
 
 /// The secret key `open` reads in these tests.
 const SECRET: &str = "archie-unit-secret";
@@ -316,6 +326,42 @@ async fn each_failure_of_the_bucket_is_a_backend_error_naming_the_path() {
         root,
         Err(StoreError::Backend("no answer for ``".to_owned()))
     );
+}
+
+#[tokio::test]
+async fn a_put_keeps_each_embedded_file_as_an_object_beside_the_document_that_a_get_gives_back() {
+    let memory = MemoryBucket::default();
+    let store = in_vault(&memory);
+    let options = WriteOptions::default();
+    let files = BTreeMap::from([("media/logo.png".to_owned(), PNG.to_vec())]);
+    let bundle = BundledDocument::new(parse(REPORT).document, files, Missing::Refuse).unwrap();
+    let zip = encode(&bundle, Form::Zip, &options).unwrap();
+    let report = path("notes/report.md");
+    put(
+        &store,
+        &report,
+        Form::Zip,
+        &zip,
+        &options,
+        &Precondition::None,
+        Missing::Refuse,
+    )
+    .await
+    .unwrap();
+    let keys = memory.list("").await.unwrap();
+    assert_eq!(
+        keys,
+        ["vault/notes/media/logo.png", "vault/notes/report.md"]
+    );
+    let text = memory.get("vault/notes/report.md").await.unwrap().bytes;
+    assert_eq!(text, REPORT.as_bytes());
+    let logo = memory
+        .get("vault/notes/media/logo.png")
+        .await
+        .unwrap()
+        .bytes;
+    assert_eq!(logo, PNG);
+    assert_eq!(get(&store, &report, Missing::Refuse).await.unwrap(), bundle);
 }
 
 #[test]

@@ -1,4 +1,5 @@
-//! Store paths, and the messages of store errors.
+//! Store paths, the path of a name beside one, and the messages of store
+//! errors.
 
 use crate::{StoreError, StorePath};
 
@@ -33,6 +34,31 @@ fn a_path_that_breaks_a_rule_is_invalid() {
     for text in broken {
         let refused = Err(StoreError::InvalidPath(text.to_owned()));
         assert_eq!(StorePath::new(text), refused, "{text:?}");
+    }
+}
+
+#[test]
+fn a_name_beside_a_path_is_its_path_from_the_folder_of_the_path() {
+    let cases = [
+        ("notes/report.md", "media/logo.png", "notes/media/logo.png"),
+        ("report.md", "logo.png", "logo.png"),
+        ("a/b/c.md", "parts/d.md", "a/b/parts/d.md"),
+    ];
+    for (path, name, beside) in cases {
+        let found = StorePath::new(path).unwrap().beside(name).unwrap();
+        assert_eq!(found.as_str(), beside, "{path} {name}");
+    }
+}
+
+#[test]
+fn a_name_beside_a_path_that_breaks_a_rule_is_invalid() {
+    let path = StorePath::new("notes/report.md").unwrap();
+    for (name, beside) in [
+        ("../x.png", "notes/../x.png"),
+        ("a\\b.png", "notes/a\\b.png"),
+    ] {
+        let refused = Err(StoreError::InvalidPath(beside.to_owned()));
+        assert_eq!(path.beside(name), refused, "{name:?}");
     }
 }
 

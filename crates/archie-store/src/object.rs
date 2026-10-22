@@ -1,11 +1,15 @@
 //! Files kept as objects in one bucket, through os-shim's `Bucket`.
 
+use alloc::collections::BTreeMap;
 use std::env::VarError;
 
 use os_shim::System;
 use os_shim::bucket::{Bucket, Condition, MinioBucket, MinioConfig, ObjectError, ObjectErrorKind};
 
-use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored};
+use crate::{
+    Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored, read_at_path,
+    write_at_paths,
+};
 
 /// The longest key S3 takes, in bytes.
 const LONGEST_KEY: usize = 1024;
@@ -112,6 +116,14 @@ impl<B: Bucket> Store for ObjectStore<B> {
         })
     }
 
+    async fn read_embedded(
+        &self,
+        _document: &StorePath,
+        file: &StorePath,
+    ) -> Result<Vec<u8>, StoreError> {
+        read_at_path(self, file).await
+    }
+
     async fn write(
         &self,
         path: &StorePath,
@@ -137,6 +149,16 @@ impl<B: Bucket> Store for ObjectStore<B> {
                 }
             })?;
         Ok(Revision(etag))
+    }
+
+    async fn write_with_embedded(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> Result<Revision, StoreError> {
+        write_at_paths(self, path, text, files, precondition).await
     }
 }
 
