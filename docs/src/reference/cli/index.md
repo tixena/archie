@@ -37,12 +37,12 @@ Eleven environment variables are read:
 | `ANTHROPIC_API_KEY` | Credential for the language-model provider used by `archie inbox`. |
 | `OPENAI_API_KEY` | Credential for the language-model provider used by `archie inbox`. |
 | `NO_COLOR` | Turns colored output off. |
-| `ARCHIE_MONGODB_URI` | The connection string of the MongoDB server, `mongodb://` or `mongodb+srv://`, with the server and its credentials, used by `archie get` and `archie write` with `--store mongodb:`. |
-| `ARCHIE_MONGODB_BUCKET` | The MinIO bucket of a MongoDB store's files, `<bucket>` or `<bucket>/<prefix>`, used by `archie get` and `archie write` with `--store mongodb:`. |
-| `ARCHIE_MINIO_ENDPOINT` | The address of the MinIO server, such as `http://127.0.0.1:9000`, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
-| `ARCHIE_MINIO_REGION` | The region the MinIO server expects, such as `us-east-1`, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
-| `AWS_ACCESS_KEY_ID` | The access key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
-| `AWS_SECRET_ACCESS_KEY` | The secret key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
+| `ARCHIE_MONGODB_URI` | The connection string of the MongoDB server, `mongodb://` or `mongodb+srv://`, with the server and its credentials, used by `archie get` and `archie write` with `--store mongodb:`, and by `archie asset finish-deletions`. |
+| `ARCHIE_MONGODB_BUCKET` | The MinIO bucket of a MongoDB store's files, `<bucket>` or `<bucket>/<prefix>`, used by `archie get` and `archie write` with `--store mongodb:`, and by `archie asset finish-deletions`. |
+| `ARCHIE_MINIO_ENDPOINT` | The address of the MinIO server, such as `http://127.0.0.1:9000`, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`, and by `archie asset finish-deletions`. |
+| `ARCHIE_MINIO_REGION` | The region the MinIO server expects, such as `us-east-1`, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`, and by `archie asset finish-deletions`. |
+| `AWS_ACCESS_KEY_ID` | The access key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`, and by `archie asset finish-deletions`. |
+| `AWS_SECRET_ACCESS_KEY` | The secret key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`, and by `archie asset finish-deletions`. |
 
 ## Output formats
 
@@ -132,10 +132,13 @@ archie also exposes a Model Context Protocol (MCP) server, documented in the
   whether several paths may be given. None of this is open for `archie get` and
   `archie write`: each takes exactly one path, and requires it.
 - Standard input and standard output as an interface for commands other than
-  `archie get` and `archie write`. Their pages specify both: `archie get` writes to
-  standard output, and `archie write` reads from standard input.
+  `archie get`, `archie write` and `archie asset finish-deletions`. Their pages
+  specify them: `archie get` writes to standard output, `archie write` reads from
+  standard input, and `archie asset finish-deletions` writes one object key per
+  line to standard output.
 - Which exit codes apply to commands other than the validation run,
-  `archie get`, and `archie write`. The codes of those two are on their pages.
+  `archie get`, `archie write` and `archie asset finish-deletions`. The codes of
+  those three are on their pages.
 
 See [Design status](../../design-status.md) for the open questions here.
 
