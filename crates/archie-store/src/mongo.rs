@@ -113,6 +113,23 @@ impl MongoStore {
         Ok(found)
     }
 
+    /// The `files` of the record at `path`, read alone: none when no record
+    /// is there.
+    async fn held_files(&self, path: &StorePath) -> Result<BTreeMap<String, String>, StoreError> {
+        let Some(record) = self
+            .collection
+            .find_one(on_path(path)?)
+            .projection(doc! { "_id": 0_i32, "files": 1_i32 })
+            .await
+            .map_err(|error| failed(path, &error))?
+        else {
+            return Ok(BTreeMap::new());
+        };
+        let held: HeldFiles =
+            bson::deserialize_from_document(record).map_err(|error| failed(path, &error))?;
+        Ok(held.files)
+    }
+
     /// Connects with `uri`, the connection string, keeps each embedded file
     /// in `files`, and makes the unique index on `path` and the index on
     /// `embedded_by.path` of `<collection>_files` where they are missing.
@@ -301,6 +318,49 @@ impl MongoStore {
         Ok(revision)
     }
 
+    /// Each entry of the `files` of the record at `path` whose file `document`
+    /// embeds, an embedded note's own embeds included, each note read from its
+    /// object.
+    async fn still_embedded(
+        &self,
+        path: &StorePath,
+        document: &RawDocument,
+    ) -> Result<BTreeMap<String, String>, StoreError> {
+        let held = self.held_files(path).await?;
+        let mut kept = BTreeMap::new();
+        let mut pending = vec![(String::new(), document.clone())];
+        while let Some((folder, text)) = pending.pop() {
+            let named = embedded_paths(&text, &folder).map_err(|error| failed(path, &error))?;
+            for (_, name) in named {
+                if kept.contains_key(&name) {
+                    continue;
+                }
+                let file = match path.beside(&name) {
+                    Ok(file) => file,
+                    // `document::get` reads no file at a path that is not a store path.
+                    Err(StoreError::InvalidPath(_)) => continue,
+                    Err(error) => return Err(error),
+                };
+                let Some(hash) = held.get(&name) else {
+                    continue;
+                };
+                if is_note(&name) {
+                    match self.files.read(&object_path(hash)?).await {
+                        Ok(object) => {
+                            let note =
+                                from_utf8(&object.bytes).map_err(|error| failed(&file, &error))?;
+                            pending.push((parent_of(&name).to_owned(), parse(note).document));
+                        }
+                        Err(StoreError::NotFound(_)) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                kept.insert(name, hash.clone());
+            }
+        }
+        Ok(kept)
+    }
+
     /// One try at claiming the object of `file` for the document at `path`:
     /// its record gains the claim, and is made with the object's metadata
     /// where none is. `false` while a deletion holds the record.
@@ -352,23 +412,28 @@ impl MongoStore {
         Ok(())
     }
 
-    /// Writes `document` at `path` if `precondition` holds, its record naming
-    /// no embedded file, and gives the new revision: the SHA-256 of the
-    /// document in archie's form.
+    /// Writes `document` at `path` if `precondition` holds, and gives the new
+    /// revision: the SHA-256 of the document in archie's form.
+    ///
+    /// The record keeps each file of the record it replaces that `document`
+    /// still embeds, and each other claim of the document is taken back.
+    /// Nothing is claimed or uploaded.
     ///
     /// # Errors
     ///
     /// `StoreError::Conflict` when `precondition` does not hold, or
     /// `StoreError::Backend` naming the path when the record nests too deep or
-    /// the driver fails.
+    /// the driver or the bucket fails, or naming a kept note that is not UTF-8.
     pub async fn write_document(
         &self,
         path: &StorePath,
         document: &RawDocument,
         precondition: &Precondition,
     ) -> Result<Revision, StoreError> {
-        self.save(path, document, &BTreeMap::new(), precondition)
-            .await
+        let kept = self.still_embedded(path, document).await?;
+        let revision = self.save(path, document, &kept, precondition).await?;
+        self.release(path, &kept).await?;
+        Ok(revision)
     }
 }
 
@@ -477,16 +542,8 @@ impl Store for MongoStore {
     ) -> Result<Vec<u8>, StoreError> {
         let missing = || StoreError::NotFound(file.clone());
         let name = name_in(document, file.as_str()).ok_or_else(missing)?;
-        let record = self
-            .collection
-            .find_one(on_path(document)?)
-            .projection(doc! { "_id": 0_i32, "files": 1_i32 })
-            .await
-            .map_err(|error| failed(document, &error))?
-            .ok_or_else(missing)?;
-        let held: HeldFiles =
-            bson::deserialize_from_document(record).map_err(|error| failed(document, &error))?;
-        let hash = held.files.get(name).ok_or_else(missing)?;
+        let held = self.held_files(document).await?;
+        let hash = held.get(name).ok_or_else(missing)?;
         match self.files.read(&object_path(hash)?).await {
             Ok(object) => Ok(object.bytes),
             Err(StoreError::NotFound(_)) => Err(missing()),

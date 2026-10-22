@@ -55,11 +55,15 @@ const FIXTURES: [&str; 21] = [
 
 const FORMS: [Form; 3] = [Form::Json, Form::Markdown, Form::Binary];
 
+const INTRO: &str = "Intro ![chart](../media/chart.png)\n";
+
 const OTHER_PNG: &[u8] = b"\x89PNG\r\n\x1a\n another picture";
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
 
 const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
+
+const REPORT_WITH_INTRO: &str = "# Report\n\n![[parts/intro]]\n";
 
 /// Archie's form of `source` once its record has been through `to_record`
 /// and `from_record`, as MongoDB gives it back.
@@ -892,6 +896,86 @@ async fn a_file_outside_the_folder_of_its_document_fails_the_save_naming_it_and_
         let records = store.objects.count_documents(Document::new()).await;
         assert_eq!(records.unwrap(), 0);
         assert_eq!(store.list(None).await, Ok(Vec::new()));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_plain_write_that_still_embeds_a_file_keeps_it() {
+    in_database("archie_test_plain_write_keeps", async |store| {
+        let report = path("notes/report.md");
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        store
+            .write(&report, REPORT.as_bytes(), &Precondition::None)
+            .await
+            .unwrap();
+        let back = get(&store, &report, Missing::Refuse).await.unwrap();
+        assert_eq!(back, report_with(PNG));
+        let documents = store.find(Document::new()).await.unwrap();
+        let files = BTreeMap::from([("media/logo.png".to_owned(), file::sha256(PNG))]);
+        assert_eq!(documents[0].files, files);
+        let claims = [claim("notes/report.md", "notes/media/logo.png")];
+        assert_eq!(claims_on(&store, PNG).await, claims);
+        assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_plain_write_that_no_longer_embeds_a_file_releases_it() {
+    in_database("archie_test_plain_write_releases", async |store| {
+        let report = path("notes/report.md");
+        save(&store, "notes/report.md", &report_with(PNG)).await;
+        store
+            .write(&report, b"# Report\n", &Precondition::None)
+            .await
+            .unwrap();
+        let documents = store.find(Document::new()).await.unwrap();
+        assert_eq!(documents[0].files, BTreeMap::new());
+        assert_eq!(claims_on(&store, PNG).await, []);
+        let object = store.files.read(&object_of(PNG)).await.unwrap();
+        assert_eq!(object.bytes, PNG);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_plain_write_of_a_new_document_names_no_file() {
+    in_database("archie_test_plain_write_new", async |store| {
+        let report = path("notes/report.md");
+        store
+            .write(&report, REPORT.as_bytes(), &Precondition::Absent)
+            .await
+            .unwrap();
+        let documents = store.find(Document::new()).await.unwrap();
+        assert_eq!(documents[0].files, BTreeMap::new());
+        let records = store.objects.count_documents(Document::new()).await;
+        assert_eq!(records.unwrap(), 0);
+        assert_eq!(store.files.list(None).await, Ok(Vec::new()));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_plain_write_that_still_embeds_a_note_keeps_the_note_and_the_files_it_embeds() {
+    in_database("archie_test_plain_write_note", async |store| {
+        let report = path("notes/report.md");
+        let files = BTreeMap::from([
+            ("media/chart.png".to_owned(), PNG.to_vec()),
+            ("parts/intro.md".to_owned(), INTRO.as_bytes().to_vec()),
+        ]);
+        let document = parse(REPORT_WITH_INTRO).document;
+        let bundle = BundledDocument::new(document, files, Missing::Refuse).unwrap();
+        save(&store, "notes/report.md", &bundle).await;
+        store
+            .write(&report, REPORT_WITH_INTRO.as_bytes(), &Precondition::None)
+            .await
+            .unwrap();
+        assert_eq!(get(&store, &report, Missing::Refuse).await.unwrap(), bundle);
+        let chart = [claim("notes/report.md", "notes/media/chart.png")];
+        assert_eq!(claims_on(&store, PNG).await, chart);
+        let intro = [claim("notes/report.md", "notes/parts/intro.md")];
+        assert_eq!(claims_on(&store, INTRO.as_bytes()).await, intro);
     })
     .await;
 }
