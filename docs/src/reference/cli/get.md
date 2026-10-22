@@ -1,13 +1,13 @@
 # archie get
 
-`archie get` reads the document at a path and writes it to standard output, or to
-a named file, in one of three forms: markdown, JavaScript Object Notation (JSON),
-or binary.
+`archie get` reads the document at a path, with every file it embeds, and writes
+it to standard output, or to a named file, in one of four forms: markdown,
+JavaScript Object Notation (JSON), binary, or zip.
 
 ## Synopsis
 
 ```console
-$ archie get <PATH> [-f, --format <FORMAT>] [--frontmatter <SYNTAX>] [-o, --output <FILE>] [-s, --store <STORE>]
+$ archie get <PATH> [--allow-missing] [--embed] [-f, --format <FORMAT>] [--frontmatter <SYNTAX>] [-o, --output <FILE>] [-s, --store <STORE>]
 ```
 
 The path is required.
@@ -17,8 +17,10 @@ The path is required.
 | Part | What it takes |
 |---|---|
 | `<PATH>` | The document to read. With no `--store`, a file of the machine, relative to the current folder or absolute. `.` and `..` are resolved from the text of the path, without following links, so `../notes/a.md` names the file a shell would name. With a `--store`, a path of that store, such as `notes/task.md`, used as written. |
-| `-f`, `--format <FORMAT>` | The form the document is written in: `markdown`, the default, `json`, or `binary`. |
-| `--frontmatter <SYNTAX>` | The syntax the frontmatter is written in, in the markdown form: `yaml`, the default, or `toml`. |
+| `--allow-missing` | Gives the document though a file it embeds is missing, or its embed leaves the document's folder, each such embed kept as written. |
+| `--embed` | Writes markdown to `--output` as one file, every embedded file inside it as a data URI. It needs `--output` and the markdown form. |
+| `-f`, `--format <FORMAT>` | The form the document is written in: `markdown`, the default, `json`, `binary`, or `zip`. |
+| `--frontmatter <SYNTAX>` | The syntax the frontmatter is written in, in the markdown and zip forms: `yaml`, the default, or `toml`. |
 | `-o`, `--output <FILE>` | A file of the machine to write the document to, in place of standard output. It is never a path in a store. |
 | `-s`, `--store <STORE>` | The store the document is in: `minio:<bucket>`, `minio:<bucket>/<prefix>`, or `mongodb:<database>/<collection>`. The file system when it is left out. |
 
@@ -29,12 +31,39 @@ version.
 
 | Form | What `archie get` writes |
 |---|---|
-| `markdown` | archie's form of the document: the text archie writes for the tree it read, with the frontmatter in the syntax `--frontmatter` names. |
-| `json` | The tree as one JSON value, followed by a newline. |
-| `binary` | The tree in archie's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 3. |
+| `markdown` to standard output | archie's form of the document: the text archie writes for the tree it read, with the frontmatter in the syntax `--frontmatter` names. Each file the document embeds goes into its embed as a data URI that carries the file's path as `name`: `![Logo](data:image/png;name=media/logo.png;base64,…)`. |
+| `markdown` to `--output FILE` | archie's form of the document in `FILE`, with no data URI, and each file it embeds at its path from `FILE`'s folder: `out/report.md` and `out/media/logo.png`. |
+| `markdown` to `--output FILE`, with `--embed` | `FILE` alone, its text as for standard output. |
+| `json` | The tree as one JSON value, followed by a newline, each file the document embeds written into its embed as a data URI, as for markdown to standard output. |
+| `binary` | The tree and each file the document embeds in archie's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 4. |
+| `zip` | A zip of `index.md`, archie's form of the document, and each file it embeds at its path from the document's folder. |
 
-[`archie write`](write.md) reads the same three forms, so a document that leaves
-archie in a form comes back in it.
+Standard output has no folder for the files, so markdown to standard output always
+carries them as data URIs. `--embed` with any form other than markdown exits with
+code 2.
+
+[`archie write`](write.md) reads the same four forms, so a document that leaves
+archie in a form comes back in it, with its files.
+
+## Embedded files
+
+A document embeds a file with `![alt](target)` or `![[target]]` whose target is a
+path from the document's folder, such as `![Logo](media/logo.png)`. A note it
+embeds, such as `![[sub/note]]`, travels with the files that note embeds, found
+from the note's folder. A link, `[text](target)`, carries no file.
+
+A file the document embeds that is not in the store fails the command with code 1,
+naming the embed as written:
+
+```console
+$ archie get notes/a.md
+archie: notes/a.md: index.md names media/none.png, and the bundle does not hold it
+```
+
+An embed whose target leaves the document's folder, such as `![Logo](../logo.png)`,
+fails the same way: `index.md names ../logo.png, which leaves the bundle's folder`.
+`--allow-missing` gives the document in both cases, each such embed kept as
+written and no file carried for it.
 
 ## Output
 
@@ -45,6 +74,9 @@ Nothing is written to standard output or to the `--output` file until the bytes
 are ready, so a failed `archie get` leaves no partial output. The `--output` file
 is written whole: a temporary file beside it, then a rename over it. A folder on
 its path that does not exist is created, and a file already there is replaced.
+With markdown to `--output` and no `--embed`, each file the document embeds is
+written first, the same way, and the `--output` file last; no other file is
+touched.
 
 An error is one line on standard error: `archie: `, the path as the command line
 gave it, and what failed.
@@ -126,8 +158,8 @@ A `--store` value of any other shape is a usage error, code 2.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. |
-| 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
+| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. Without `--allow-missing`, a file the document embeds that is missing, or an embed that leaves the document's folder. |
+| 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, `--embed` without `--output` or with a form other than markdown, or a path that cannot name a file, such as `/`. |
 | 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` for `--store mongodb:` or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
 | 4 | The store failed: a file system error, such as a folder that is not writable or a path that is a folder, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to write standard output is code 4 too. |
 | 6 | No file at the path. |
@@ -153,6 +185,61 @@ $ archie get notes/task.md --format json --output task.json
 $ archie write again.md -f json -i task.json
 ```
 
+A document that embeds `media/logo.png`, in each form. To standard output, the
+picture is a data URI in the text:
+
+```console
+$ archie get notes/report.md
+# Report
+
+![Logo](data:image/png;name=media/logo.png;base64,iVBORw0KGgo…)
+```
+
+To a file, the picture is a file beside it, unless `--embed` asks for one file:
+
+```console
+$ archie get notes/report.md -o out/report.md
+$ ls out out/media
+out:
+media  report.md
+
+out/media:
+logo.png
+$ archie get notes/report.md -o one/report.md --embed
+$ ls one
+report.md
+```
+
+In the binary form and in a zip, the picture is inside the bytes:
+
+```console
+$ archie get notes/report.md -f binary > report.bin
+$ archie get notes/report.md -f zip -o report.zip
+$ unzip -Z1 report.zip
+media/
+index.md
+media/logo.png
+```
+
+`--embed` writes markdown only:
+
+```console
+$ archie get notes/report.md -f zip -o report.zip --embed; echo "exit $?"
+archie: --embed writes markdown; it needs -f markdown
+exit 2
+```
+
+A document whose picture is gone, refused and then given with its embed as
+written:
+
+```console
+$ archie get notes/a.md; echo "exit $?"
+archie: notes/a.md: index.md names media/none.png, and the bundle does not hold it
+exit 1
+$ archie get notes/a.md --allow-missing
+![Logo](media/none.png)
+```
+
 A missing file:
 
 ```console
@@ -172,7 +259,7 @@ command.
 
 ## Related
 
-- [archie write](write.md) — storing a document given in one of the three forms.
+- [archie write](write.md) — storing a document given in one of the four forms.
 - [archie ls](ls.md) — listing what can be retrieved.
 - [archie query](query.md) — selecting documents by an expression.
 - [Documents and schemas](../../concepts/documents-and-schemas.md) — the document

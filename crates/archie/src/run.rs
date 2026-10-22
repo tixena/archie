@@ -22,12 +22,21 @@ use archie_store::object::{ObjectConfig, ObjectStore};
 use archie_store::{Precondition, Revision, Store as _, StoreError, StorePath};
 use os_shim::System;
 
-use crate::cli::{Cli, Command, StoreArg, SyntaxArg};
+use crate::cli::{Cli, Command, FormatArg, StoreArg, SyntaxArg};
 
 /// Why a command stopped: the line after `archie: `, and the exit code.
 struct Failure {
     code: u8,
     message: String,
+}
+
+/// What `--format`, `--frontmatter` and `--allow-missing` ask for: the form,
+/// the options the document is written with, and what an embed with no file
+/// does.
+struct Settings {
+    form: Form,
+    missing: Missing,
+    options: WriteOptions,
 }
 
 impl Failure {
@@ -95,6 +104,23 @@ impl Failure {
     }
 }
 
+impl Settings {
+    fn new(format: FormatArg, frontmatter: SyntaxArg, allow_missing: bool) -> Self {
+        let mut options = WriteOptions::default();
+        options.frontmatter = frontmatter.into();
+        let missing = if allow_missing {
+            Missing::Keep
+        } else {
+            Missing::Refuse
+        };
+        Self {
+            form: format.into(),
+            missing,
+            options,
+        }
+    }
+}
+
 /// `path` as the command line wrote it, as a path of a store `--store` names.
 #[cfg(any(feature = "minio", feature = "mongodb"))]
 fn as_written(path: &Path) -> Result<StorePath, Failure> {
@@ -102,26 +128,48 @@ fn as_written(path: &Path) -> Result<StorePath, Failure> {
     StorePath::new(text).map_err(|error| Failure::of_store(path, None, &error))
 }
 
-/// Writes the document at `path` in `form` to `stdout`, or to the file
-/// `output`, whole.
+/// Writes the document at `path` to `stdout`, or to the file `output`, whole.
+/// Markdown to `output` is that file and each file it embeds beside it, unless
+/// `embed` asks for the one file.
 async fn get(
     system: &dyn System,
     named: Option<&StoreArg>,
     path: &Path,
-    form: Form,
-    options: &WriteOptions,
+    settings: &Settings,
     output: Option<&Path>,
+    embed: bool,
     stdout: &mut (dyn Write + Send),
 ) -> Result<(), Failure> {
+    if embed && settings.form != Form::Markdown {
+        return Err(Failure {
+            code: 2,
+            message: "--embed writes markdown; it needs -f markdown".to_owned(),
+        });
+    }
     let (store, at) = open(system, named, path).await?;
     let target = output
         .map(|file| store_path(system, file).map(|place| (file, place)))
         .transpose()?;
-    let bundle = document::get(&store, &at, Missing::Keep)
+    let bundle = document::get(&store, &at, settings.missing)
         .await
         .map_err(|error| Failure::of_document(path, &at, &error))?;
-    let bytes =
-        encode(&bundle, form, options).map_err(|error| Failure::naming(path, None, 1, &error))?;
+    if let Some((file, place)) = &target
+        && settings.form == Form::Markdown
+        && !embed
+    {
+        let _: Revision = document::put_bundle(
+            &machine(system),
+            place,
+            &bundle,
+            &settings.options,
+            &Precondition::None,
+        )
+        .await
+        .map_err(|error| Failure::of_document(file, place, &error))?;
+        return Ok(());
+    }
+    let bytes = encode(&bundle, settings.form, &settings.options)
+        .map_err(|error| Failure::naming(path, None, 1, &error))?;
     if let Some((file, place)) = target {
         let _: Revision = machine(system)
             .write(&place, &bytes, &Precondition::None)
@@ -237,12 +285,6 @@ fn open<'system>(
     future::ready(opened)
 }
 
-fn options(syntax: SyntaxArg) -> WriteOptions {
-    let mut options = WriteOptions::default();
-    options.frontmatter = syntax.into();
-    options
-}
-
 /// Runs `cli` over `system` and the three streams, and gives the exit code.
 pub async fn run(
     cli: &Cli,
@@ -254,39 +296,39 @@ pub async fn run(
     let done = match &cli.command {
         Command::Get {
             path,
+            allow_missing,
+            embed,
             format,
             frontmatter,
             output,
             store,
         } => {
-            let form = (*format).into();
-            let options = options(*frontmatter);
+            let settings = Settings::new(*format, *frontmatter, *allow_missing);
             get(
                 system,
                 store.as_ref(),
                 path,
-                form,
-                &options,
+                &settings,
                 output.as_deref(),
+                *embed,
                 stdout,
             )
             .await
         }
         Command::Write {
             path,
+            allow_missing,
             format,
             frontmatter,
             input,
             store,
         } => {
-            let form = (*format).into();
-            let options = options(*frontmatter);
+            let settings = Settings::new(*format, *frontmatter, *allow_missing);
             write(
                 system,
                 store.as_ref(),
                 path,
-                form,
-                &options,
+                &settings,
                 input.as_deref(),
                 stdin,
             )
@@ -346,43 +388,53 @@ fn variable(system: &dyn System, name: &str, holds: &str) -> Result<String, Fail
     })
 }
 
-/// Stores at `path` the document in `form` read from `stdin`, or from the
-/// file `input`, replacing any file there.
+/// Stores at `path` the document read from `stdin`, or from the file `input`,
+/// replacing any file there. Markdown from `input` brings each file it embeds
+/// from beside it.
 async fn write(
     system: &dyn System,
     named: Option<&StoreArg>,
     path: &Path,
-    form: Form,
-    options: &WriteOptions,
+    settings: &Settings,
     input: Option<&Path>,
     stdin: &mut (dyn Read + Send),
 ) -> Result<(), Failure> {
     let (store, at) = open(system, named, path).await?;
-    let bytes = if let Some(file) = input {
+    let stored = if let Some(file) = input
+        && settings.form == Form::Markdown
+    {
         let source = store_path(system, file)?;
-        machine(system)
-            .read(&source)
+        let bundle = document::get(&machine(system), &source, settings.missing)
             .await
-            .map_err(|error| Failure::of_store(file, Some(&source), &error))?
-            .bytes
+            .map_err(|error| Failure::of_document(file, &source, &error))?;
+        document::put_bundle(&store, &at, &bundle, &settings.options, &Precondition::None).await
     } else {
-        let mut bytes = Vec::new();
-        stdin
-            .read_to_end(&mut bytes)
-            .map_err(|error| Failure::stream("standard input", &error))?;
-        bytes
+        let bytes = if let Some(file) = input {
+            let source = store_path(system, file)?;
+            machine(system)
+                .read(&source)
+                .await
+                .map_err(|error| Failure::of_store(file, Some(&source), &error))?
+                .bytes
+        } else {
+            let mut bytes = Vec::new();
+            stdin
+                .read_to_end(&mut bytes)
+                .map_err(|error| Failure::stream("standard input", &error))?;
+            bytes
+        };
+        document::put(
+            &store,
+            &at,
+            settings.form,
+            &bytes,
+            &settings.options,
+            &Precondition::None,
+            settings.missing,
+        )
+        .await
     };
-    let _: Revision = document::put(
-        &store,
-        &at,
-        form,
-        &bytes,
-        options,
-        &Precondition::None,
-        Missing::Keep,
-    )
-    .await
-    .map_err(|error| Failure::of_document(path, &at, &error))?;
+    let _: Revision = stored.map_err(|error| Failure::of_document(path, &at, &error))?;
     Ok(())
 }
 

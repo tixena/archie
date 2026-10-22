@@ -51,17 +51,17 @@ fn fixtures() -> Vec<(String, String)> {
 }
 
 /// Runs `archie get name` in `root` piped into `archie write name --store
-/// store`, and asserts both runs succeeded.
+/// store`, both with `--allow-missing`, and asserts both runs succeeded.
 fn pipe(root: &Path, name: &str, store: &str) {
     let mut get = Process::new(cargo_bin("archie"))
         .current_dir(root)
-        .args(["get", name])
+        .args(["get", name, "--allow-missing"])
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
     let written = Process::new(cargo_bin("archie"))
         .current_dir(root)
-        .args(["write", name, "--store", store])
+        .args(["write", name, "--store", store, "--allow-missing"])
         .env("ARCHIE_MINIO_ENDPOINT", endpoint())
         .env("ARCHIE_MINIO_REGION", REGION)
         .stdin(get.stdout.take().unwrap())
@@ -79,6 +79,7 @@ fn each_fixture_piped_into_rustfs_and_back_to_the_file_system_is_archies_form() 
     let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let root = folder.path();
     let store = format!("minio:{}/{PREFIX}", bucket());
+    // `obsidian_note.md` embeds a picture this folder does not hold.
     for (name, source) in fixtures() {
         let archie_form = write(&parse(&source).document, &WriteOptions::default()).unwrap();
         fs::write(root.join(&name), &source).unwrap();
@@ -89,7 +90,7 @@ fn each_fixture_piped_into_rustfs_and_back_to_the_file_system_is_archies_form() 
         let got = Command::cargo_bin("archie")
             .unwrap()
             .current_dir(root)
-            .args(["get", &name, "--store", &store])
+            .args(["get", &name, "--store", &store, "--allow-missing"])
             .env("ARCHIE_MINIO_ENDPOINT", endpoint())
             .env("ARCHIE_MINIO_REGION", REGION)
             .assert()
@@ -99,7 +100,7 @@ fn each_fixture_piped_into_rustfs_and_back_to_the_file_system_is_archies_form() 
         Command::cargo_bin("archie")
             .unwrap()
             .current_dir(root)
-            .args(["write", &back])
+            .args(["write", &back, "--allow-missing"])
             .write_stdin(got.get_output().stdout.clone())
             .assert()
             .success();

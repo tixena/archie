@@ -1,17 +1,18 @@
 # archie write
 
-`archie write` stores a whole document at a path, read from standard input or from
-a named file in one of three forms: markdown, JavaScript Object Notation (JSON),
-or binary. A second form of the command, which writes into the part
-of one document that a path expression addresses, is not yet specified; it is
-described under [Writing into a part of a document](#writing-into-a-part-of-a-document).
+`archie write` stores a whole document at a path, with every file it embeds, read
+from standard input or from a named file in one of four forms: markdown,
+JavaScript Object Notation (JSON), binary, or zip. A second form of the command,
+which writes into the part of one document that a path expression addresses, is
+not yet specified; it is described under
+[Writing into a part of a document](#writing-into-a-part-of-a-document).
 
 ## Writing a whole document
 
 ### Synopsis
 
 ```console
-$ archie write <PATH> [-f, --format <FORMAT>] [--frontmatter <SYNTAX>] [-i, --input <FILE>] [-s, --store <STORE>]
+$ archie write <PATH> [--allow-missing] [-f, --format <FORMAT>] [--frontmatter <SYNTAX>] [-i, --input <FILE>] [-s, --store <STORE>]
 ```
 
 The path is required.
@@ -21,7 +22,8 @@ The path is required.
 | Part | What it takes |
 |---|---|
 | `<PATH>` | Where the document is stored. With no `--store`, a file of the machine, relative to the current folder or absolute. `.` and `..` are resolved from the text of the path, without following links, so `../notes/a.md` names the file a shell would name. With a `--store`, a path of that store, such as `notes/task.md`, used as written. |
-| `-f`, `--format <FORMAT>` | The form the document is read in: `markdown`, the default, `json`, or `binary`. |
+| `--allow-missing` | Stores the document though a file it embeds is missing, or its embed leaves the document's folder, each such embed kept as written. |
+| `-f`, `--format <FORMAT>` | The form the document is read in: `markdown`, the default, `json`, `binary`, or `zip`. |
 | `--frontmatter <SYNTAX>` | The syntax the stored frontmatter is written in: `yaml`, the default, or `toml`. |
 | `-i`, `--input <FILE>` | A file of the machine to read the document from, in place of standard input. It is never a path in a store. |
 | `-s`, `--store <STORE>` | The store the document goes to: `minio:<bucket>`, `minio:<bucket>/<prefix>`, or `mongodb:<database>/<collection>`. The file system when it is left out. |
@@ -33,23 +35,53 @@ the version.
 
 | Form | What `archie write` reads |
 |---|---|
-| `markdown` | Markdown text, with YAML or TOML frontmatter. |
-| `json` | The tree as one JSON value, as `archie get --format json` writes it. |
-| `binary` | The tree in archie's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 3. It is read in place, as `archie get --format binary` writes it. |
+| `markdown` from standard input | Markdown text, with YAML or TOML frontmatter. Each embed written as a data URI, as `archie get` writes markdown to standard output, becomes a file. |
+| `markdown` from `--input FILE` | `FILE`, and each file it embeds, read at its path from `FILE`'s folder. A data URI in `FILE` becomes a file too. |
+| `json` | The tree as one JSON value, as `archie get --format json` writes it. Each data URI becomes a file. |
+| `binary` | The tree and each file it embeds in archie's binary layout, after a header of eight bytes: `archie`, a zero byte, and the version of the model's types, 4. The tree is read in place, as `archie get --format binary` writes it. |
+| `zip` | A zip of `index.md` and each file it embeds at its path, as `archie get --format zip` writes it, or a zip whose one top folder holds them. |
 
 Whatever the form, the file stored at the path is archie's form of the document:
 the markdown archie writes for the tree it read, with the frontmatter in the syntax
-`--frontmatter` names.
+`--frontmatter` names. Each file it embeds is stored beside it, at its path from
+the document's folder: `media/logo.png`, embedded by `notes/report.md`, is stored
+at `notes/media/logo.png`, and the stored text names it as `media/logo.png`, with
+no data URI. A data URI's file goes to the path its `name` gives; one with no
+`name` goes to `media/`, under the first 16 hexadecimal digits of the SHA-256 of
+its bytes and an extension from its media type, such as
+`media/4c4b6a3be1314ab8.png`.
+
+### Embedded files
+
+A document embeds a file with `![alt](target)` or `![[target]]` whose target is a
+path from the document's folder, such as `![Logo](media/logo.png)`. A note it
+embeds, such as `![[sub/note]]`, travels with the files that note embeds, found
+from the note's folder. A link, `[text](target)`, carries no file.
+
+A file the document embeds that the bytes do not hold, or that is not beside the
+`--input` file, fails the command with code 1 and stores nothing:
+
+```console
+$ printf '![Logo](media/none.png)\n' | archie write notes/a.md
+archie: notes/a.md: index.md names media/none.png, and the bundle does not hold it
+```
+
+An embed whose target leaves the document's folder, such as `![Logo](../logo.png)`,
+fails the same way: `index.md names ../logo.png, which leaves the bundle's folder`.
+`--allow-missing` stores the document in both cases, each such embed kept as
+written and no file stored for it.
 
 ### Behavior
 
-`archie write` reads all of standard input, or all of the `--input` file, and then
-stores the document those bytes hold. A file already at the path is replaced, as a
-copy replaces its target. A folder on the path that does not exist is created.
+`archie write` reads all of standard input, or all of the `--input` file and the
+files it embeds, and then stores the document those bytes hold. A file already at
+the path is replaced, as a copy replaces its target. A folder on the path that does
+not exist is created.
 
 The file is written whole: a temporary file beside it, then a rename over it, so a
-reader sees the old file or the new one. Bytes that do not hold a document in the
-form store nothing.
+reader sees the old file or the new one. Each file the document embeds is written
+first, the same way, and the document last; no other file is touched. Bytes that
+do not hold a document in the form store nothing.
 
 `archie write` writes nothing to standard output. An error is one line on standard
 error: `archie: `, the path as the command line gave it, and what failed.
@@ -127,7 +159,7 @@ A `--store` value of any other shape is a usage error, code 2.
 | Code | Meaning |
 |---|---|
 | 0 | Success. |
-| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. |
+| 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. Without `--allow-missing`, a file the document embeds that is missing, or an embed that leaves the document's folder. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
 | 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` for `--store mongodb:` or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
 | 4 | The store failed: a file system error, such as a folder that is not writable, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to read standard input is code 4 too. |
@@ -154,6 +186,35 @@ The same copy through a JSON file:
 ```console
 $ archie get notes/task.md --format json --output task.json
 $ archie write again.md -f json -i task.json
+```
+
+A document that embeds `media/logo.png`, stored from a file with its picture
+beside it, from markdown whose picture is a data URI, and from a zip:
+
+```console
+$ ls draft draft/media
+draft:
+media  report.md
+
+draft/media:
+logo.png
+$ archie write notes/report.md -i draft/report.md
+$ archie get notes/report.md | archie write copy/report.md
+$ ls copy/media
+logo.png
+$ archie get notes/report.md -f zip -o report.zip
+$ archie write zipped/report.md -f zip -i report.zip
+```
+
+A document whose picture is missing, refused and then stored with its embed as
+written:
+
+```console
+$ printf '![Logo](media/none.png)\n' | archie write notes/a.md; echo "exit $?"
+archie: notes/a.md: index.md names media/none.png, and the bundle does not hold it
+exit 1
+$ printf '![Logo](media/none.png)\n' | archie write notes/a.md --allow-missing; echo "exit $?"
+exit 0
 ```
 
 ## Writing into a part of a document
@@ -226,7 +287,7 @@ command.
 
 ## Related
 
-- [archie get](get.md) — the document at a path, in one of the three forms.
+- [archie get](get.md) — the document at a path, in one of the four forms.
 - [Query grammar](../query-grammar.md) — the path expression in full.
 - [archie query](query.md) — the language that also drives modification.
 - [Change objects](../change-objects.md) — the transactional model every write

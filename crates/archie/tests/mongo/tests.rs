@@ -67,17 +67,17 @@ fn kept_by_mongodb(
 }
 
 /// Runs `archie get name` in `root` piped into `archie write name --store
-/// store`, and asserts both runs succeeded.
+/// store`, both with `--allow-missing`, and asserts both runs succeeded.
 fn pipe(root: &Path, name: &str, store: &str) {
     let mut get = Process::new(cargo_bin("archie"))
         .current_dir(root)
-        .args(["get", name])
+        .args(["get", name, "--allow-missing"])
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
     let written = Process::new(cargo_bin("archie"))
         .current_dir(root)
-        .args(["write", name, "--store", store])
+        .args(["write", name, "--store", store, "--allow-missing"])
         .env("ARCHIE_MONGODB_URI", uri())
         .stdin(get.stdout.take().unwrap())
         .status()
@@ -99,6 +99,7 @@ fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keep
     let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let root = folder.path();
     let store = format!("mongodb:{DATABASE}/files");
+    // `obsidian_note.md` embeds a picture this folder does not hold.
     for (name, source) in fixtures() {
         fs::write(root.join(&name), &source).unwrap();
         pipe(root, &name, &store);
@@ -106,7 +107,7 @@ fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keep
         Command::cargo_bin("archie")
             .unwrap()
             .current_dir(root)
-            .args(["get", &name, "--store", &store])
+            .args(["get", &name, "--store", &store, "--allow-missing"])
             .env("ARCHIE_MONGODB_URI", uri())
             .assert()
             .success()

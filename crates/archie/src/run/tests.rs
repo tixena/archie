@@ -1,9 +1,12 @@
 //! `run` over `MemorySystem`, with byte buffers for the standard streams.
 
 use core::iter;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use archie_core::bundle::Missing;
+use archie_core::forms::{Form, decode};
 use archie_core::parser::ast::{FrontmatterFormat, RawDocument};
 use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
@@ -39,7 +42,7 @@ const FIXTURES: [&str; 21] = [
     include_str!("../../../archie-core/src/parser/tests/fixtures/zola_page.md"),
 ];
 
-const FORMS: [&str; 3] = ["markdown", "json", "binary"];
+const FORMS: [&str; 4] = ["markdown", "json", "binary", "zip"];
 
 const JEKYLL_POST: &str = FIXTURES[10];
 
@@ -52,6 +55,10 @@ const MINIO_VARIABLES: [(&str, &str); 4] = [
     ("AWS_ACCESS_KEY_ID", "archie-unit-access"),
     ("AWS_SECRET_ACCESS_KEY", "archie-unit-secret"),
 ];
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
+
+const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
 
 /// A server no process listens on, which the driver tries once and gives up
 /// on at once: no server selection to wait for, no retry.
@@ -97,6 +104,17 @@ fn archies_form_through_json(source: &str) -> String {
     write(&kept, &WriteOptions::default()).unwrap()
 }
 
+/// The bytes of the file at `path` in `system`.
+fn bytes_of(system: &MemorySystem, path: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    system
+        .open(Path::new(path))
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    bytes
+}
+
 /// Asserts `ran` failed with `code` and one line on standard error that
 /// opens with `line`, and wrote nothing to standard output.
 fn failed(ran: &Ran, code: u8, line: &str) {
@@ -130,6 +148,27 @@ fn read(system: &MemorySystem, path: &str) -> String {
     system.read_to_string(Path::new(path)).unwrap()
 }
 
+/// A system whose current folder is `/vault`, holding `notes/report.md`, which
+/// embeds `media/logo.png`, and that picture beside it.
+fn report() -> MemorySystem {
+    MemorySystem::new()
+        .with_file("/vault/notes/report.md", REPORT.as_bytes())
+        .unwrap()
+        .with_file("/vault/notes/media/logo.png", PNG)
+        .unwrap()
+        .with_current_dir("/vault")
+        .unwrap()
+}
+
+/// Asserts `system` holds `REPORT` at `path` and `PNG` beside it at
+/// `media/logo.png`.
+fn reported(system: &MemorySystem, path: &str) {
+    assert_eq!(read(system, path), REPORT, "{path}");
+    let folder = Path::new(path).parent().unwrap();
+    let logo = folder.join("media/logo.png");
+    assert_eq!(bytes_of(system, logo.to_str().unwrap()), PNG, "{path}");
+}
+
 /// A system whose current folder is `/vault`, holding `a.md` with `source`.
 fn vault(source: &str) -> MemorySystem {
     MemorySystem::new()
@@ -144,7 +183,10 @@ fn each_fixture_copied_in_each_form_is_archies_form_and_a_second_copy_changes_no
     for (index, source) in FIXTURES.iter().enumerate() {
         let archie_form = archies_form(source, FrontmatterFormat::Yaml);
         let json_form = archies_form_through_json(source);
-        let system = vault(source);
+        // The picture `obsidian_note.md` embeds.
+        let system = vault(source)
+            .with_file("/vault/tree-sketch.png", PNG)
+            .unwrap();
         for form in FORMS {
             let expected = if form == "json" {
                 &json_form
@@ -483,4 +525,229 @@ fn a_write_replaces_the_file_at_the_path() {
     let ran = archie(&system, &["write", "a.md"], b"# New\n");
     assert_eq!(ran.code, ExitCode::SUCCESS, "{}", ran.stderr);
     assert_eq!(read(&system, "/vault/a.md"), "# New\n");
+}
+
+#[test]
+fn a_markdown_input_brings_each_file_it_embeds_and_a_markdown_output_writes_each_beside_it() {
+    let system = MemorySystem::new()
+        .with_file("/vault/draft/report.md", REPORT.as_bytes())
+        .unwrap()
+        .with_file("/vault/draft/media/logo.png", PNG)
+        .unwrap()
+        .with_current_dir("/vault")
+        .unwrap();
+    let written = archie(
+        &system,
+        &["write", "notes/report.md", "-i", "draft/report.md"],
+        b"",
+    );
+    assert_eq!(written.code, ExitCode::SUCCESS, "{}", written.stderr);
+    reported(&system, "/vault/notes/report.md");
+    let got = archie(
+        &system,
+        &["get", "notes/report.md", "-o", "out/report.md"],
+        b"",
+    );
+    assert_eq!(got.code, ExitCode::SUCCESS, "{}", got.stderr);
+    assert_eq!(got.stdout, b"");
+    assert_eq!(got.stderr, "");
+    reported(&system, "/vault/out/report.md");
+}
+
+#[test]
+fn an_embedded_output_is_one_file_holding_each_embed_as_a_named_data_uri() {
+    let system = report();
+    let got = archie(
+        &system,
+        &["get", "notes/report.md", "-o", "out/one.md", "--embed"],
+        b"",
+    );
+    assert_eq!(got.code, ExitCode::SUCCESS, "{}", got.stderr);
+    assert_eq!(got.stdout, b"");
+    let one = read(&system, "/vault/out/one.md");
+    assert!(
+        one.contains("![Logo](data:image/png;name=media/logo.png;base64,"),
+        "{one}"
+    );
+    let folder = system.read_dir(Path::new("/vault/out")).unwrap();
+    assert_eq!(folder, [PathBuf::from("/vault/out/one.md")]);
+    let streamed = archie(&system, &["get", "notes/report.md"], b"");
+    assert_eq!(streamed.stdout, one.as_bytes());
+}
+
+#[test]
+fn each_form_through_standard_output_carries_each_file_to_the_copy() {
+    let system = report();
+    for form in FORMS {
+        let got = archie(&system, &["get", "notes/report.md", "-f", form], b"");
+        assert_eq!(got.code, ExitCode::SUCCESS, "{form}: {}", got.stderr);
+        let copy = format!("{form}/report.md");
+        let written = archie(&system, &["write", &copy, "-f", form], &got.stdout);
+        assert_eq!(
+            written.code,
+            ExitCode::SUCCESS,
+            "{form}: {}",
+            written.stderr
+        );
+        reported(&system, &format!("/vault/{copy}"));
+    }
+    let markdown = archie(&system, &["get", "notes/report.md"], b"");
+    let text = String::from_utf8(markdown.stdout).unwrap();
+    assert!(
+        text.contains("![Logo](data:image/png;name=media/logo.png;base64,"),
+        "{text}"
+    );
+}
+
+#[test]
+fn binary_json_and_zip_to_an_output_are_bytes_a_write_from_that_input_reads_with_each_file() {
+    let system = report();
+    for form in ["binary", "json", "zip"] {
+        let output = format!("out/report.{form}");
+        let got = archie(
+            &system,
+            &["get", "notes/report.md", "-f", form, "-o", &output],
+            b"",
+        );
+        assert_eq!(got.code, ExitCode::SUCCESS, "{form}: {}", got.stderr);
+        assert_eq!(got.stdout, b"");
+        let copy = format!("{form}/report.md");
+        let written = archie(&system, &["write", &copy, "-f", form, "-i", &output], b"");
+        assert_eq!(
+            written.code,
+            ExitCode::SUCCESS,
+            "{form}: {}",
+            written.stderr
+        );
+        reported(&system, &format!("/vault/{copy}"));
+    }
+    assert!(!system.exists(Path::new("/vault/out/media")).unwrap());
+    for form in ["binary", "json"] {
+        let streamed = archie(&system, &["get", "notes/report.md", "-f", form], b"");
+        let output = format!("/vault/out/report.{form}");
+        assert_eq!(bytes_of(&system, &output), streamed.stdout, "{form}");
+    }
+}
+
+#[test]
+fn a_zip_holds_index_md_and_each_file_at_its_path() {
+    let system = report();
+    let got = archie(
+        &system,
+        &["get", "notes/report.md", "-f", "zip", "-o", "r.zip"],
+        b"",
+    );
+    assert_eq!(got.code, ExitCode::SUCCESS, "{}", got.stderr);
+    let zip = bytes_of(&system, "/vault/r.zip");
+    let bundle = decode(&zip, Form::Zip, Missing::Refuse).unwrap();
+    assert_eq!(bundle.files(), ["media/logo.png"]);
+    assert_eq!(bundle.file("media/logo.png").unwrap(), PNG);
+    let written = archie(
+        &system,
+        &["write", "z/report.md", "-f", "zip", "-i", "r.zip"],
+        b"",
+    );
+    assert_eq!(written.code, ExitCode::SUCCESS, "{}", written.stderr);
+    reported(&system, "/vault/z/report.md");
+}
+
+#[test]
+fn a_missing_embedded_file_fails_get_and_write_with_code_1_and_allow_missing_keeps_its_embed() {
+    let line =
+        "archie: notes/a.md: index.md names media/none.png, and the bundle does not hold it\n";
+    let text = b"![Logo](media/none.png)\n";
+    let system = vault("# A\n");
+    let refused = archie(&system, &["write", "notes/a.md"], text);
+    failed(&refused, 1, line);
+    assert!(!system.exists(Path::new("/vault/notes/a.md")).unwrap());
+    let stored = archie(&system, &["write", "notes/a.md", "--allow-missing"], text);
+    assert_eq!(stored.code, ExitCode::SUCCESS, "{}", stored.stderr);
+    assert_eq!(read(&system, "/vault/notes/a.md").as_bytes(), text);
+    for arguments in [
+        ["get", "notes/a.md"].as_slice(),
+        ["get", "notes/a.md", "-f", "zip"].as_slice(),
+        ["get", "notes/a.md", "-o", "out/a.md"].as_slice(),
+    ] {
+        failed(&archie(&system, arguments, b""), 1, line);
+    }
+    assert!(!system.exists(Path::new("/vault/out")).unwrap());
+    let given = archie(&system, &["get", "notes/a.md", "--allow-missing"], b"");
+    assert_eq!(given.code, ExitCode::SUCCESS, "{}", given.stderr);
+    assert_eq!(given.stdout, text);
+    let output = ["get", "notes/a.md", "-o", "out/a.md", "--allow-missing"];
+    let beside = archie(&system, &output, b"");
+    assert_eq!(beside.code, ExitCode::SUCCESS, "{}", beside.stderr);
+    let folder = system.read_dir(Path::new("/vault/out")).unwrap();
+    assert_eq!(folder, [PathBuf::from("/vault/out/a.md")]);
+    assert_eq!(read(&system, "/vault/out/a.md").as_bytes(), text);
+}
+
+#[test]
+fn a_markdown_input_whose_embedded_file_is_missing_fails_naming_the_input_unless_allowed() {
+    let system = vault("![Logo](media/none.png)\n");
+    let refused = archie(&system, &["write", "b.md", "-i", "a.md"], b"");
+    failed(
+        &refused,
+        1,
+        "archie: a.md: index.md names media/none.png, and the bundle does not hold it\n",
+    );
+    assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+    let stored = archie(
+        &system,
+        &["write", "b.md", "-i", "a.md", "--allow-missing"],
+        b"",
+    );
+    assert_eq!(stored.code, ExitCode::SUCCESS, "{}", stored.stderr);
+    assert_eq!(read(&system, "/vault/b.md"), "![Logo](media/none.png)\n");
+}
+
+#[test]
+fn an_embed_that_leaves_the_folder_fails_with_code_1_and_allow_missing_keeps_it() {
+    let text = b"![Logo](../logo.png)\n";
+    let system = vault("# A\n").with_file("/vault/logo.png", PNG).unwrap();
+    let refused = archie(&system, &["write", "notes/a.md"], text);
+    failed(
+        &refused,
+        1,
+        "archie: notes/a.md: index.md names ../logo.png, which leaves the bundle's folder\n",
+    );
+    let stored = archie(&system, &["write", "notes/a.md", "--allow-missing"], text);
+    assert_eq!(stored.code, ExitCode::SUCCESS, "{}", stored.stderr);
+    assert_eq!(read(&system, "/vault/notes/a.md").as_bytes(), text);
+    let got = archie(&system, &["get", "notes/a.md"], b"");
+    failed(
+        &got,
+        1,
+        "archie: notes/a.md: index.md names ../logo.png, which leaves the bundle's folder\n",
+    );
+    let given = archie(&system, &["get", "notes/a.md", "--allow-missing"], b"");
+    assert_eq!(given.code, ExitCode::SUCCESS, "{}", given.stderr);
+    assert_eq!(given.stdout, text);
+}
+
+#[test]
+fn embed_with_a_form_other_than_markdown_exits_2_and_writes_nothing() {
+    let system = report();
+    for form in ["binary", "json", "zip"] {
+        let output = format!("r.{form}");
+        let ran = archie(
+            &system,
+            &[
+                "get",
+                "notes/report.md",
+                "-f",
+                form,
+                "-o",
+                &output,
+                "--embed",
+            ],
+            b"",
+        );
+        failed(
+            &ran,
+            2,
+            "archie: --embed writes markdown; it needs -f markdown\n",
+        );
+        assert!(!system.exists(&Path::new("/vault").join(&output)).unwrap());
+    }
 }

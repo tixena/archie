@@ -6,6 +6,8 @@ use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command as Process, Stdio};
 
+use archie_core::bundle::Missing;
+use archie_core::forms::{Form, decode};
 use archie_core::parser::ast::{FrontmatterFormat, RawDocument};
 use archie_core::parser::{from_json, parse, to_json};
 use archie_core::writer::{WriteOptions, write};
@@ -21,7 +23,7 @@ const FIXTURES: &str = concat!(
     "/../archie-core/src/parser/tests/fixtures"
 );
 
-const FORMS: [&str; 3] = ["markdown", "json", "binary"];
+const FORMS: [&str; 4] = ["markdown", "json", "binary", "zip"];
 
 /// The four variables a `MinIO` store reads: a server no process listens on,
 /// whose connection is refused at once, and keys no output may show.
@@ -32,6 +34,10 @@ const MINIO_VARIABLES: [(&str, &str); 4] = [
     ("AWS_ACCESS_KEY_ID", "archie-binary-access"),
     ("AWS_SECRET_ACCESS_KEY", "archie-binary-secret"),
 ];
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
+
+const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
 
 /// A server no process listens on, which the driver tries once and gives up
 /// on at once: no server selection to wait for, no retry.
@@ -148,6 +154,27 @@ fn read_only(folder: &Path) {
     fs::set_permissions(folder, permissions).unwrap();
 }
 
+/// Writes `REPORT` at `path` under `root`, and `PNG` beside it at
+/// `media/logo.png`.
+fn report(root: &Path, path: &str) {
+    let folder = root.join(path).parent().unwrap().to_path_buf();
+    fs::create_dir_all(folder.join("media")).unwrap();
+    fs::write(root.join(path), REPORT).unwrap();
+    fs::write(folder.join("media/logo.png"), PNG).unwrap();
+}
+
+/// Asserts `root` holds `REPORT` at `path` and `PNG` beside it at
+/// `media/logo.png`.
+fn reported(root: &Path, path: &str) {
+    assert_eq!(
+        fs::read_to_string(root.join(path)).unwrap(),
+        REPORT,
+        "{path}"
+    );
+    let logo = root.join(path).parent().unwrap().join("media/logo.png");
+    assert_eq!(fs::read(logo).unwrap(), PNG, "{path}");
+}
+
 fn stdout(ran: &Assert) -> Vec<u8> {
     ran.get_output().stdout.clone()
 }
@@ -156,6 +183,8 @@ fn stdout(ran: &Assert) -> Vec<u8> {
 fn the_copy_of_each_fixture_in_each_form_is_archies_form_and_a_second_copy_changes_nothing() {
     let folder = folder();
     let root = folder.path();
+    // The picture `obsidian_note.md` embeds.
+    fs::write(root.join("tree-sketch.png"), PNG).unwrap();
     for (name, source) in fixtures() {
         fs::write(root.join(&name), &source).unwrap();
         let archie_form = archies_form(&source, FrontmatterFormat::Yaml);
@@ -502,4 +531,160 @@ fn help_and_version_exit_0() {
     archie(root, &["--help"], b"")
         .success()
         .stdout(starts_with("Markdown documents as a typed tree\n"));
+}
+
+#[test]
+fn a_markdown_input_brings_each_file_it_embeds_and_a_markdown_output_writes_each_beside_it() {
+    let folder = folder();
+    let root = folder.path();
+    report(root, "draft/report.md");
+    archie(
+        root,
+        &["write", "notes/report.md", "-i", "draft/report.md"],
+        b"",
+    )
+    .success()
+    .stdout(is_empty())
+    .stderr(is_empty());
+    reported(root, "notes/report.md");
+    archie(
+        root,
+        &["get", "notes/report.md", "-o", "out/report.md"],
+        b"",
+    )
+    .success()
+    .stdout(is_empty())
+    .stderr(is_empty());
+    reported(root, "out/report.md");
+    assert_eq!(names(&root.join("out")), ["media", "report.md"]);
+}
+
+#[test]
+fn an_embedded_output_is_one_file_holding_each_embed_as_a_named_data_uri() {
+    let folder = folder();
+    let root = folder.path();
+    report(root, "notes/report.md");
+    archie(
+        root,
+        &["get", "notes/report.md", "-o", "out/one.md", "--embed"],
+        b"",
+    )
+    .success()
+    .stdout(is_empty());
+    assert_eq!(names(&root.join("out")), ["one.md"]);
+    let one = fs::read_to_string(root.join("out/one.md")).unwrap();
+    assert!(
+        one.contains("![Logo](data:image/png;name=media/logo.png;base64,"),
+        "{one}"
+    );
+    archie(root, &["get", "notes/report.md"], b"")
+        .success()
+        .stdout(eq(one.as_bytes()));
+}
+
+#[test]
+fn a_pipe_between_two_runs_carries_each_file_to_the_copy_in_each_form() {
+    let folder = folder();
+    let root = folder.path();
+    report(root, "notes/report.md");
+    for form in FORMS {
+        let copy = format!("{form}/report.md");
+        let mut get = Process::new(cargo_bin("archie"))
+            .current_dir(root)
+            .args(["get", "notes/report.md", "-f", form])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pipe = get.stdout.take().unwrap();
+        let written = Process::new(cargo_bin("archie"))
+            .current_dir(root)
+            .args(["write", &copy, "-f", form])
+            .stdin(pipe)
+            .status()
+            .unwrap();
+        assert!(get.wait().unwrap().success(), "{form}");
+        assert!(written.success(), "{form}");
+        reported(root, &copy);
+    }
+}
+
+#[test]
+fn a_zip_output_holds_index_md_and_each_file_and_reads_back_as_input() {
+    let folder = folder();
+    let root = folder.path();
+    report(root, "notes/report.md");
+    archie(
+        root,
+        &["get", "notes/report.md", "-f", "zip", "-o", "r.zip"],
+        b"",
+    )
+    .success()
+    .stdout(is_empty());
+    let bundle = decode(
+        &fs::read(root.join("r.zip")).unwrap(),
+        Form::Zip,
+        Missing::Refuse,
+    )
+    .unwrap();
+    assert_eq!(bundle.files(), ["media/logo.png"]);
+    archie(
+        root,
+        &["write", "z/report.md", "-f", "zip", "-i", "r.zip"],
+        b"",
+    )
+    .success();
+    reported(root, "z/report.md");
+}
+
+#[test]
+fn a_missing_embedded_file_fails_with_code_1_and_allow_missing_stores_and_gives_it() {
+    let folder = folder();
+    let root = folder.path();
+    let line =
+        "archie: notes/a.md: index.md names media/none.png, and the bundle does not hold it\n";
+    let text = b"![Logo](media/none.png)\n";
+    archie(root, &["write", "notes/a.md"], text)
+        .code(1_i32)
+        .stdout(is_empty())
+        .stderr(eq(line));
+    assert_eq!(names(root), Vec::<String>::new());
+    archie(root, &["write", "notes/a.md", "--allow-missing"], text).success();
+    assert_eq!(fs::read(root.join("notes/a.md")).unwrap(), text);
+    archie(root, &["get", "notes/a.md"], b"")
+        .code(1_i32)
+        .stdout(is_empty())
+        .stderr(eq(line));
+    archie(root, &["get", "notes/a.md", "--allow-missing"], b"")
+        .success()
+        .stdout(eq(text.as_slice()));
+}
+
+#[test]
+fn embed_without_an_output_and_embed_with_another_form_exit_2_and_write_nothing() {
+    let folder = folder();
+    let root = folder.path();
+    report(root, "notes/report.md");
+    let parsed = archie(root, &["get", "notes/report.md", "--embed"], b"");
+    let usage = String::from_utf8(parsed.get_output().stderr.clone()).unwrap();
+    parsed.code(2_i32).stdout(is_empty());
+    assert!(usage.contains("--output <FILE>"), "{usage}");
+    archie(
+        root,
+        &[
+            "get",
+            "notes/report.md",
+            "-f",
+            "zip",
+            "-o",
+            "r.zip",
+            "--embed",
+        ],
+        b"",
+    )
+    .code(2_i32)
+    .stdout(is_empty())
+    .stderr(eq(
+        "archie: --embed writes markdown; it needs -f markdown\n",
+    ));
+    assert_eq!(names(root), ["notes"]);
 }

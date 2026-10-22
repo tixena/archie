@@ -54,7 +54,24 @@ the inheritance chain from [`archie trace`](trace.md), the interactive proposal
 from [`archie inbox`](inbox.md), and the export document from
 [`archie export`](export.md) — each shown on its own page. [`archie get`](get.md)
 and [`archie write`](write.md) take `--format` with forms of their own instead:
-`markdown`, the default, `json`, or `binary`.
+`markdown`, the default, `json`, `binary`, or `zip`.
+
+Each of those forms carries every file the document embeds, such as the picture
+of `![Logo](media/logo.png)`. Markdown to or from a stream, and JSON, carry each
+file inside its embed as a data URI; markdown to or from a file carries each file
+beside it, at its path from the file's folder, unless `archie get --embed` asks for
+the one file with every data URI in it; binary and zip carry the files inside
+their bytes. Both commands refuse, with code 1, a document whose embedded file is
+missing or whose embed leaves the document's folder, and `--allow-missing` keeps
+such an embed as written:
+
+```console
+$ archie get notes/report.md -o out/report.md
+$ archie get notes/report.md -o one.md --embed
+$ archie get notes/report.md -f zip -o report.zip
+$ archie write copy/report.md -i out/report.md
+$ printf '![Logo](media/none.png)\n' | archie write notes/a.md --allow-missing
+```
 
 ## Exit codes
 
@@ -78,10 +95,10 @@ The table is written for the validation run; see
 | Command | What it does |
 |---|---|
 | [`archie ls`](ls.md) | Lists the contents of a corpus. |
-| [`archie get`](get.md) | Writes one markdown document to standard output or a file, in markdown, JSON or binary. |
+| [`archie get`](get.md) | Writes one markdown document, with every file it embeds, to standard output or a file, in markdown, JSON, binary or zip. |
 | [`archie query`](query.md) | Selects documents by an expression over their frontmatter, in a language that also drives modification. |
 | [`archie search`](search.md) | Matches a pattern against document bodies and frontmatter. |
-| [`archie write`](write.md) | Stores one whole markdown document read from standard input or a file. |
+| [`archie write`](write.md) | Stores one whole markdown document, with every file it embeds, read from standard input or a file. |
 | [`archie rm`](rm.md) | Removes a file or a folder. |
 | [`archie link`](link.md) | Wraps mentions of a resource in links to that resource. |
 | [`archie check`](check.md) | Validates a corpus, or one path within it. |

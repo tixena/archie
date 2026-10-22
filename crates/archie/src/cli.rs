@@ -19,10 +19,17 @@ pub enum Command {
     /// Writes the document at PATH to standard output, or to --output.
     Get {
         path: PathBuf,
+        /// Gives the document though a file it embeds is missing or leaves its folder, its embed
+        /// kept as written.
+        #[arg(long)]
+        allow_missing: bool,
+        /// Writes markdown to --output as one file, every embedded file inside it as a data URI.
+        #[arg(long, requires = "output")]
+        embed: bool,
         /// The form the document is written in.
         #[arg(short, long, value_enum, default_value_t = FormatArg::Markdown)]
         format: FormatArg,
-        /// The syntax of the frontmatter, in the markdown form.
+        /// The syntax of the frontmatter, in the markdown and zip forms.
         #[arg(long, value_enum, value_name = "SYNTAX", default_value_t = SyntaxArg::Yaml)]
         frontmatter: SyntaxArg,
         /// The file the document is written to, in place of standard output.
@@ -35,6 +42,10 @@ pub enum Command {
     /// Stores at PATH the document read from standard input, or from --input.
     Write {
         path: PathBuf,
+        /// Stores the document though a file it embeds is missing or leaves its folder, its embed
+        /// kept as written.
+        #[arg(long)]
+        allow_missing: bool,
         /// The form the document is read in.
         #[arg(short, long, value_enum, default_value_t = FormatArg::Markdown)]
         format: FormatArg,
@@ -55,6 +66,7 @@ pub enum FormatArg {
     Binary,
     Json,
     Markdown,
+    Zip,
 }
 
 impl From<FormatArg> for Form {
@@ -63,6 +75,7 @@ impl From<FormatArg> for Form {
             FormatArg::Binary => Self::Binary,
             FormatArg::Json => Self::Json,
             FormatArg::Markdown => Self::Markdown,
+            FormatArg::Zip => Self::Zip,
         }
     }
 }
