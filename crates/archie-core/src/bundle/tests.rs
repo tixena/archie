@@ -462,6 +462,87 @@ fn a_name_whose_path_holds_other_bytes_gives_the_hashed_name() {
 }
 
 #[test]
+fn a_data_uri_never_overwrites_a_file_at_its_hashed_path_that_holds_other_bytes() {
+    let source = "![a](media/4c4b6a3be1314ab8.png)\n\n![b](data:image/png;base64,iVBORw0KGgo=)\n";
+    let given = files(&[("media/4c4b6a3be1314ab8.png", b"other".as_slice())]);
+    let bundle = BundledDocument::new(parse(source).document, given, Missing::Refuse).unwrap();
+    assert_eq!(
+        bundle.files(),
+        ["media/4c4b6a3be1314ab8-1.png", "media/4c4b6a3be1314ab8.png"]
+    );
+    assert_eq!(
+        bundle.file("media/4c4b6a3be1314ab8.png"),
+        Some(b"other".as_slice())
+    );
+    assert_eq!(
+        bundle.file("media/4c4b6a3be1314ab8-1.png"),
+        Some(b"\x89PNG\r\n\x1a\n".as_slice())
+    );
+    assert_eq!(
+        embeds(bundle.document())[1].target,
+        "media/4c4b6a3be1314ab8-1.png"
+    );
+}
+
+#[test]
+fn a_data_uri_whose_hashed_path_and_first_numbered_path_hold_other_bytes_goes_at_the_second() {
+    let source = "![a](media/4c4b6a3be1314ab8.png)\n\n![b](media/4c4b6a3be1314ab8-1.png)\n\n\
+                  ![c](data:image/png;base64,iVBORw0KGgo=)\n";
+    let given = files(&[
+        ("media/4c4b6a3be1314ab8.png", b"other".as_slice()),
+        ("media/4c4b6a3be1314ab8-1.png", b"another".as_slice()),
+    ]);
+    let bundle = BundledDocument::new(parse(source).document, given, Missing::Refuse).unwrap();
+    assert_eq!(
+        bundle.files(),
+        [
+            "media/4c4b6a3be1314ab8-1.png",
+            "media/4c4b6a3be1314ab8-2.png",
+            "media/4c4b6a3be1314ab8.png"
+        ]
+    );
+    assert_eq!(
+        bundle.file("media/4c4b6a3be1314ab8-1.png"),
+        Some(b"another".as_slice())
+    );
+    assert_eq!(
+        bundle.file("media/4c4b6a3be1314ab8-2.png"),
+        Some(b"\x89PNG\r\n\x1a\n".as_slice())
+    );
+    assert_eq!(
+        embeds(bundle.document())[2].target,
+        "media/4c4b6a3be1314ab8-2.png"
+    );
+}
+
+#[test]
+fn a_data_uri_shares_its_hashed_path_with_a_file_that_holds_the_same_bytes() {
+    let source = "![a](media/4c4b6a3be1314ab8.png)\n\n![b](data:image/png;base64,iVBORw0KGgo=)\n";
+    let given = files(&[(
+        "media/4c4b6a3be1314ab8.png",
+        b"\x89PNG\r\n\x1a\n".as_slice(),
+    )]);
+    let bundle = BundledDocument::new(parse(source).document, given, Missing::Refuse).unwrap();
+    assert_eq!(bundle.files(), ["media/4c4b6a3be1314ab8.png"]);
+    assert_eq!(
+        embeds(bundle.document())[1].target,
+        "media/4c4b6a3be1314ab8.png"
+    );
+}
+
+#[test]
+fn a_data_uri_given_a_numbered_path_reads_back_from_the_embedded_text_with_the_same_files() {
+    let source = "![a](media/4c4b6a3be1314ab8.png)\n\n![b](data:image/png;base64,iVBORw0KGgo=)\n";
+    let given = files(&[("media/4c4b6a3be1314ab8.png", b"other".as_slice())]);
+    let bundle = BundledDocument::new(parse(source).document, given, Missing::Refuse).unwrap();
+    let back = read_back(&embedded_text(&bundle));
+    assert_eq!(back.files(), bundle.files());
+    for file in bundle.files() {
+        assert_eq!(back.file(file), bundle.file(file), "{file}");
+    }
+}
+
+#[test]
 fn a_data_uri_whose_base64_does_not_decode_fails_even_when_missing_files_are_kept() {
     let target = "data:image/png;base64,iVBOR!";
     for missing in [Missing::Refuse, Missing::Keep] {

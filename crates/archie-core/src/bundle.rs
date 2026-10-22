@@ -685,7 +685,8 @@ fn data_uris_to_files(
 
 /// The data URI `image` targets, in the text at `folder`, made a file of `files`, and its target
 /// that file's path from `folder`: the data URI's `name` when `named_path` keeps it and that path
-/// holds no other bytes, else `media/` and the first 16 hex digits of the SHA-256 of its bytes.
+/// holds no other bytes, else the first name `hashed_name` gives, numbered from zero, whose path
+/// holds no other bytes.
 fn data_uri_to_file(
     image: &mut Image,
     folder: &str,
@@ -705,11 +706,15 @@ fn data_uri_to_file(
         None => None,
     };
     let (target, path) = kept.unwrap_or_else(|| {
-        let hashed = hashed_name(&bytes, &media);
-        (
-            target_of(image.form, &hashed, fragment),
-            beside(folder, &hashed),
-        )
+        let mut number = 0_usize;
+        loop {
+            let hashed = hashed_name(&bytes, &media, number);
+            let path = beside(folder, &hashed);
+            if files.get(&path).is_none_or(|held| *held == bytes) {
+                break (target_of(image.form, &hashed, fragment), path);
+            }
+            number += 1;
+        }
     });
     image.target = target;
     files.insert(path, bytes);
@@ -822,12 +827,15 @@ fn extension_of(media: &str) -> &'static str {
     }
 }
 
-/// `media/`, the first 16 hex digits of the SHA-256 of `bytes`, and the extension of a file of
-/// `media` type.
-fn hashed_name(bytes: &[u8], media: &str) -> String {
+/// `media/`, the first 16 hex digits of the SHA-256 of `bytes`, `-<number>` when `number` is not
+/// zero, and the extension of a file of `media` type.
+fn hashed_name(bytes: &[u8], media: &str, number: usize) -> String {
     let mut name = String::from("media/");
     for byte in Sha256::digest(bytes).iter().take(8) {
         let _: fmt::Result = write!(name, "{byte:02x}");
+    }
+    if number != 0 {
+        let _: fmt::Result = write!(name, "-{number}");
     }
     name.push('.');
     name.push_str(extension_of(media));
