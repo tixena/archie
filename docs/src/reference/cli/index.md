@@ -28,7 +28,7 @@ sources take precedence in this order, highest first:
 3. The `archie.toml` file.
 4. Built-in defaults.
 
-Ten environment variables are read:
+Eleven environment variables are read:
 
 | Variable | Effect |
 |---|---|
@@ -38,10 +38,11 @@ Ten environment variables are read:
 | `OPENAI_API_KEY` | Credential for the language-model provider used by `archie inbox`. |
 | `NO_COLOR` | Turns colored output off. |
 | `ARCHIE_MONGODB_URI` | The connection string of the MongoDB server, `mongodb://` or `mongodb+srv://`, with the server and its credentials, used by `archie get` and `archie write` with `--store mongodb:`. |
-| `ARCHIE_MINIO_ENDPOINT` | The address of the MinIO server, such as `http://127.0.0.1:9000`, used by `archie get` and `archie write` with `--store minio:`. |
-| `ARCHIE_MINIO_REGION` | The region the MinIO server expects, such as `us-east-1`, used by `archie get` and `archie write` with `--store minio:`. |
-| `AWS_ACCESS_KEY_ID` | The access key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:`. |
-| `AWS_SECRET_ACCESS_KEY` | The secret key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:`. |
+| `ARCHIE_MONGODB_BUCKET` | The MinIO bucket of a MongoDB store's files, `<bucket>` or `<bucket>/<prefix>`, used by `archie get` and `archie write` with `--store mongodb:`. |
+| `ARCHIE_MINIO_ENDPOINT` | The address of the MinIO server, such as `http://127.0.0.1:9000`, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
+| `ARCHIE_MINIO_REGION` | The region the MinIO server expects, such as `us-east-1`, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
+| `AWS_ACCESS_KEY_ID` | The access key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
+| `AWS_SECRET_ACCESS_KEY` | The secret key every MinIO request is signed with, used by `archie get` and `archie write` with `--store minio:` or `--store mongodb:`. |
 
 ## Output formats
 

@@ -124,21 +124,32 @@ exit 3
 With `--store mongodb:<database>/<collection>`, the store is the collection
 `<collection>` of the database `<database>`, on the MongoDB server that the
 environment variable `ARCHIE_MONGODB_URI` names. The command line holds names
-only, never an address or a credential.
+only, never an address or a credential. The collection keeps each document, and
+the MinIO bucket that `ARCHIE_MONGODB_BUCKET` names keeps each file a document
+embeds as the object `files/<sha256>`, where `<sha256>` is the SHA-256 of the
+file's bytes in hexadecimal. A prefix goes before the key: with `notes/mongodb`,
+the file is the object `mongodb/files/<sha256>` of the bucket `notes`. One record
+of the collection `<collection>_files` names each object.
 
 | Variable | What it holds |
 |---|---|
 | `ARCHIE_MONGODB_URI` | The connection string of the MongoDB server, `mongodb://` or `mongodb+srv://`, with the server and its credentials. |
+| `ARCHIE_MONGODB_BUCKET` | The MinIO bucket of the store's files, `<bucket>` or `<bucket>/<prefix>`. |
+| `ARCHIE_MINIO_ENDPOINT`, `ARCHIE_MINIO_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | The MinIO server and its keys, as for `--store minio:`. |
 
-A missing `ARCHIE_MONGODB_URI` exits with code 3, and a server that cannot be
+A missing variable exits with code 3, on one line that names it. An
+`ARCHIE_MONGODB_BUCKET` that is not `<bucket>` or `<bucket>/<prefix>`, or whose
+prefix is not a store path, exits with code 3 too. A server that cannot be
 reached exits with code 4.
 
 ```console
-$ export ARCHIE_MONGODB_URI=mongodb://127.0.0.1:27017
+$ export ARCHIE_MONGODB_URI=mongodb://127.0.0.1:27017 ARCHIE_MONGODB_BUCKET=notes/mongodb
+$ export ARCHIE_MINIO_ENDPOINT=http://127.0.0.1:9000 ARCHIE_MINIO_REGION=us-east-1
+$ export AWS_ACCESS_KEY_ID=archie AWS_SECRET_ACCESS_KEY=archie-secret
 $ archie get notes/task.md | archie write notes/task.md --store mongodb:notes/files
 $ archie get notes/task.md --store mongodb:notes/files
-$ unset ARCHIE_MONGODB_URI; archie get notes/task.md -s mongodb:notes/files; echo "exit $?"
-archie: ARCHIE_MONGODB_URI is not set: it holds the MongoDB connection string
+$ unset ARCHIE_MONGODB_BUCKET; archie get notes/task.md -s mongodb:notes/files; echo "exit $?"
+archie: ARCHIE_MONGODB_BUCKET is not set: it holds the MinIO bucket of a MongoDB store's files
 exit 3
 ```
 
@@ -160,7 +171,7 @@ A `--store` value of any other shape is a usage error, code 2.
 | 0 | Success. |
 | 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. Without `--allow-missing`, a file the document embeds that is missing, or an embed that leaves the document's folder. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, `--embed` without `--output` or with a form other than markdown, or a path that cannot name a file, such as `/`. |
-| 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` for `--store mongodb:` or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
+| 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` or `ARCHIE_MONGODB_BUCKET` for `--store mongodb:`, or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
 | 4 | The store failed: a file system error, such as a folder that is not writable or a path that is a folder, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to write standard output is code 4 too. |
 | 6 | No file at the path. |
 
