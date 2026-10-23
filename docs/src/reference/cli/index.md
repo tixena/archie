@@ -95,8 +95,9 @@ The table is written for the validation run; see
 [Exit codes](../exit-codes.md).
 
 `archie get` and `archie write` exit with their own codes, 0 to 4 and 6, given on
-[their pages](get.md#exit-codes), and `archie asset` with its own, 0 and 2 to 4,
-given on [its page](asset.md#exit-codes).
+[their pages](get.md#exit-codes), `archie asset` with its own, 0 and 2 to 4,
+given on [its page](asset.md#exit-codes), and `archie fix` with its own, 0 and 2 to 4,
+given on [its page](fix.md#exit-codes).
 
 ## The commands
 
@@ -112,7 +113,7 @@ given on [its page](asset.md#exit-codes).
 | [`archie link`](link.md) | Wraps mentions of a resource in links to that resource. |
 | [`archie check`](check.md) | Validates a corpus, or one path within it. |
 | [`archie init`](init.md) | Sets up a corpus: the configuration file and any missing folder index files. |
-| [`archie fix`](fix.md) | Repairs the findings that need no human decision. |
+| [`archie fix`](fix.md) | Repairs the findings that need no human decision, and removes the locks saves left behind. |
 | [`archie inbox`](inbox.md) | Classifies unfiled captures with a language model and proposes where each one goes. |
 | [`archie trace`](trace.md) | Prints the chain of inherited properties for one file. |
 | [`archie export`](export.md) | Serializes a corpus for another program to read. |
@@ -137,13 +138,14 @@ archie also exposes a Model Context Protocol (MCP) server, documented in the
   whether several paths may be given. None of this is open for `archie get` and
   `archie write`: each takes exactly one path, and requires it.
 - Standard input and standard output as an interface for commands other than
-  `archie get`, `archie write` and `archie asset finish-deletions`. Their pages
-  specify them: `archie get` writes to standard output, `archie write` reads from
-  standard input, and `archie asset finish-deletions` writes one object key per
-  line to standard output.
+  `archie get`, `archie write`, `archie asset finish-deletions` and `archie fix`.
+  Their pages specify them: `archie get` writes to standard output, `archie write`
+  reads from standard input, `archie asset finish-deletions` writes one object key
+  per line to standard output, and `archie fix` writes the path of each lock it
+  removed, one per line.
 - Which exit codes apply to commands other than the validation run,
-  `archie get`, `archie write` and `archie asset finish-deletions`. The codes of
-  those three are on their pages.
+  `archie get`, `archie write`, `archie asset finish-deletions` and `archie fix`.
+  The codes of those four are on their pages.
 
 See [Design status](../../design-status.md) for the open questions here.
 

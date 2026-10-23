@@ -67,19 +67,8 @@ impl<'system> FileStore<'system> {
     }
 
     fn list_files(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
-        let mut folder = self.root.clone();
-        folder.extend(prefix.map_or("", StorePath::as_str).split_terminator('/'));
-        let entries = self
-            .system
-            .walk_dir(&folder, self.follow_links, self.hidden)
-            .map_err(|error| StoreError::Backend(format!("{}: {error}", folder.display())))?;
-        let mut paths = entries
-            .iter()
-            .filter(|entry| entry.is_file)
-            .map(|entry| self.store_path(&entry.path))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut paths = self.walk_files(prefix)?;
         paths.retain(|path| !path.as_str().ends_with(lock::SUFFIX));
-        paths.sort_unstable();
         Ok(paths)
     }
 
@@ -191,6 +180,23 @@ impl<'system> FileStore<'system> {
         Ok(Stored { bytes, revision })
     }
 
+    /// Removes each expired lock under `under` (the whole store when `None`),
+    /// each one only while it is still the lock found, and gives the path of
+    /// each lock it removed, sorted.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::Backend` when the store cannot be listed or a lock cannot
+    /// be read or removed.
+    pub async fn remove_expired_locks(
+        &self,
+        under: Option<&StorePath>,
+    ) -> Result<Vec<StorePath>, StoreError> {
+        let mut locks = self.walk_files(under)?;
+        locks.retain(|path| path.as_str().ends_with(lock::SUFFIX));
+        lock::remove_expired(self, &locks, self.lock).await
+    }
+
     /// The store path of `file`, a file `walk_dir` found under the root.
     fn store_path(&self, file: &Path) -> Result<StorePath, StoreError> {
         let relative = file
@@ -209,6 +215,23 @@ impl<'system> FileStore<'system> {
     fn temporary(folder: &Path, name: &str) -> PathBuf {
         let count = WRITES.fetch_add(1, Ordering::Relaxed);
         folder.join(format!(".{name}.archie-write-{}-{count}", process::id()))
+    }
+
+    /// The path of each file under `prefix`, locks included, sorted.
+    fn walk_files(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
+        let mut folder = self.root.clone();
+        folder.extend(prefix.map_or("", StorePath::as_str).split_terminator('/'));
+        let entries = self
+            .system
+            .walk_dir(&folder, self.follow_links, self.hidden)
+            .map_err(|error| StoreError::Backend(format!("{}: {error}", folder.display())))?;
+        let mut paths = entries
+            .iter()
+            .filter(|entry| entry.is_file)
+            .map(|entry| self.store_path(&entry.path))
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.sort_unstable();
+        Ok(paths)
     }
 
     fn write_file(

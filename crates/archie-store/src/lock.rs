@@ -109,6 +109,28 @@ pub(crate) fn expired(found: &Found, now: SystemTime, settings: LockSettings) ->
         .is_ok_and(|age| age > settings.expires)
 }
 
+/// Removes each lock of `locks` that has expired, each only while it is still
+/// the lock found, and gives the paths of those it removed.
+pub(crate) async fn remove_expired<L>(
+    store: &L,
+    locks: &[StorePath],
+    settings: LockSettings,
+) -> Result<Vec<StorePath>, StoreError>
+where
+    L: Locks + Sync,
+{
+    let mut removed = Vec::new();
+    for lock in locks {
+        let Some(found) = store.find(lock).await? else {
+            continue;
+        };
+        if expired(&found, store.system().now(), settings) && store.remove_if(lock, &found).await? {
+            removed.push(lock.clone());
+        }
+    }
+    Ok(removed)
+}
+
 /// Gives back `held` once the save is done: removes it only while it still
 /// holds this save's GUID, and leaves it otherwise. A failure is folded into
 /// the save's result as a `StoreError::Backend` that says whether the

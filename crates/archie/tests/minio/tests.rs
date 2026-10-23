@@ -1,12 +1,14 @@
+use core::time::Duration;
 use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::{Command as Process, Stdio};
+use std::time::SystemTime;
 
 use archie_core::parser::parse;
 use archie_core::writer::{WriteOptions, write};
 use archie_store::object::{ObjectConfig, ObjectStore};
-use archie_store::{Store as _, StorePath};
+use archie_store::{Precondition, Store as _, StoreError, StorePath};
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin;
 use os_shim::real::RealSystem;
@@ -135,4 +137,52 @@ fn a_request_signed_with_a_wrong_secret_key_exits_4_without_showing_it() {
         assert!(!stderr.contains(secret), "{stderr}");
         assert_eq!(stderr.lines().count(), 1, "{stderr}");
     }
+}
+
+#[test]
+fn fix_removes_the_expired_lock_object_under_a_path_and_leaves_the_fresh_one_and_other_objects() {
+    let runtime = Builder::new_current_thread().enable_all().build().unwrap();
+    let config = ObjectConfig::new(endpoint(), REGION.to_owned(), bucket(), None);
+    let whole_bucket = ObjectStore::open(&MACHINE, config).unwrap();
+    let ahead = SystemTime::now() + Duration::from_secs(3600);
+    let seconds = ahead
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let objects = [
+        ("old.md.archie-lock", "another 1000".to_owned()),
+        ("new.md.archie-lock", format!("another {seconds}")),
+        ("Cargo.lock", "old".to_owned()),
+    ];
+    for (name, bytes) in &objects {
+        let key = StorePath::new(&format!("binary/fix/notes/{name}")).unwrap();
+        runtime
+            .block_on(whole_bucket.write(&key, bytes.as_bytes(), &Precondition::None))
+            .unwrap();
+    }
+    let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let store = format!("minio:{}/binary/fix", bucket());
+    Command::cargo_bin("archie")
+        .unwrap()
+        .current_dir(folder.path())
+        .args(["fix", "notes", "--store", &store])
+        .env("ARCHIE_MINIO_ENDPOINT", endpoint())
+        .env("ARCHIE_MINIO_REGION", REGION)
+        .assert()
+        .success()
+        .stdout(eq("notes/old.md.archie-lock\n"))
+        .stderr(is_empty());
+    let read = |name: &str| {
+        let key = StorePath::new(&format!("binary/fix/notes/{name}")).unwrap();
+        runtime.block_on(whole_bucket.read(&key))
+    };
+    assert!(matches!(
+        read("old.md.archie-lock"),
+        Err(StoreError::NotFound(_))
+    ));
+    assert_eq!(
+        read("new.md.archie-lock").unwrap().bytes,
+        objects[1].1.as_bytes()
+    );
+    assert_eq!(read("Cargo.lock").unwrap().bytes, b"old");
 }

@@ -71,6 +71,16 @@ impl Failure {
         }
     }
 
+    /// `fix` given `arg`, a store that keeps no locks.
+    fn keeps_no_locks(arg: &StoreArg) -> Self {
+        Self {
+            code: 2,
+            message: format!(
+                "{arg} keeps no locks: fix takes the file system or --store minio:<bucket>"
+            ),
+        }
+    }
+
     /// `error` on one line naming `path` as the command line gave it, in place
     /// of the store path `at` that the error's message opens with.
     fn naming(path: &Path, at: Option<&StorePath>, code: u8, error: &dyn Display) -> Self {
@@ -158,6 +168,100 @@ impl Settings {
 fn as_written(path: &Path) -> Result<StorePath, Failure> {
     let text = path.to_str().ok_or_else(|| Failure::not_utf8(path))?;
     StorePath::new(text).map_err(|error| Failure::of_store(path, None, &error))
+}
+
+/// Removes each expired lock under `path` in the store `named` names, and
+/// writes the path of each one it removed to `stdout`, one per line.
+async fn fix(
+    system: &dyn System,
+    named: Option<&StoreArg>,
+    path: Option<&Path>,
+    lock: LockSettings,
+    stdout: &mut (dyn Write + Send),
+) -> Result<(), Failure> {
+    let removed = match named {
+        None => fix_files(system, path, lock).await?,
+        Some(arg) => match arg {
+            #[cfg(feature = "minio")]
+            StoreArg::Minio { bucket, prefix } => {
+                fix_objects(system, arg, bucket, prefix.as_deref(), path, lock).await?
+            }
+            #[cfg(not(feature = "minio"))]
+            StoreArg::Minio {
+                bucket: _,
+                prefix: _,
+            } => return Err(Failure::unbuilt(arg, "MinIO")),
+            StoreArg::Mongodb {
+                collection: _,
+                database: _,
+            } => return Err(Failure::keeps_no_locks(arg)),
+        },
+    };
+    for line in removed {
+        writeln!(stdout, "{line}").map_err(|error| Failure::stream("standard output", &error))?;
+    }
+    stdout
+        .flush()
+        .map_err(|error| Failure::stream("standard output", &error))
+}
+
+/// `fix` over the file system: the lock paths below the folder `path` (the
+/// current folder when `None`), after `path` as the command line gave it.
+async fn fix_files(
+    system: &dyn System,
+    path: Option<&Path>,
+    lock: LockSettings,
+) -> Result<Vec<String>, Failure> {
+    let given = path.unwrap_or_else(|| Path::new("."));
+    let is_folder = system
+        .is_dir(&system_path(system, given)?)
+        .map_err(|error| Failure::naming(given, None, 4, &error))?;
+    if !is_folder {
+        return Err(Failure::naming(given, None, 2, &"not a folder"));
+    }
+    let under = store_path(system, given)?;
+    let removed = machine(system, lock)
+        .remove_expired_locks(Some(&under))
+        .await
+        .map_err(|error| Failure::of_store(given, Some(&under), &error))?;
+    Ok(removed
+        .iter()
+        .map(|found| {
+            let below = found
+                .as_str()
+                .strip_prefix(under.as_str())
+                .and_then(|rest| rest.strip_prefix('/'))
+                .unwrap_or(found.as_str());
+            path.map_or_else(
+                || below.to_owned(),
+                |folder| folder.join(below).display().to_string(),
+            )
+        })
+        .collect())
+}
+
+/// `fix` over the `MinIO` store `arg` names: the store paths of the locks
+/// under `path`, the whole prefix when `None`.
+#[cfg(feature = "minio")]
+async fn fix_objects(
+    system: &dyn System,
+    arg: &StoreArg,
+    bucket: &str,
+    prefix: Option<&str>,
+    path: Option<&Path>,
+    lock: LockSettings,
+) -> Result<Vec<String>, Failure> {
+    let under = prefix
+        .map(StorePath::new)
+        .transpose()
+        .map_err(|error| Failure::store(arg, &error))?;
+    let store = objects(system, bucket, under, lock)?;
+    let folder = path.map(as_written).transpose()?;
+    let removed = store
+        .remove_expired_locks(folder.as_ref())
+        .await
+        .map_err(|error| Failure::store(arg, &error))?;
+    Ok(removed.iter().map(ToString::to_string).collect())
 }
 
 /// Finishes each deletion of an embedded file that stopped halfway in the
@@ -448,6 +552,9 @@ pub async fn run(
         Command::Asset {
             command: AssetCommand::FinishDeletions { store },
         } => finish_deletions(store),
+        Command::Fix { path, store } => {
+            fix(system, store.as_ref(), path.as_deref(), lock, stdout).await
+        }
         Command::Get {
             path,
             allow_missing,

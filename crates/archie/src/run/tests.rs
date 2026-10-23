@@ -1108,3 +1108,198 @@ fn the_other_tables_of_the_configuration_file_are_left_alone() {
     let ran = archie(&system, &["get", "a.md"], b"");
     assert_eq!(ran.code, ExitCode::SUCCESS, "{}", ran.stderr);
 }
+
+/// A system whose current folder is `/vault`, holding each of `files` as it
+/// was `ago` before `START`, and a clock at `START`.
+fn aged(ago: u64, files: &[(&str, &str)]) -> MemorySystem {
+    let system = files.iter().fold(
+        MemorySystem::new()
+            .with_now(started() - Duration::from_secs(ago))
+            .unwrap()
+            .with_current_dir("/vault")
+            .unwrap(),
+        |with, (path, text)| with.with_file(path, text.as_bytes()).unwrap(),
+    );
+    system.advance(Duration::from_secs(ago)).unwrap();
+    system
+}
+
+/// Asserts `ran` succeeded and wrote exactly `lines` to standard output.
+fn wrote_lines(ran: &Ran, lines: &str) {
+    assert_eq!(ran.code, ExitCode::SUCCESS, "{}", ran.stderr);
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), lines);
+    assert_eq!(ran.stderr, "");
+}
+
+#[test]
+fn fix_removes_an_expired_lock_and_writes_its_path_as_the_folder_was_named() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix", "notes"], b"");
+    wrote_lines(&ran, "notes/report.md.archie-lock\n");
+    assert!(!system.exists(Path::new(LOCK)).unwrap());
+    let again = archie(&system, &["fix", "notes"], b"");
+    wrote_lines(&again, "");
+}
+
+#[test]
+fn fix_writes_an_absolute_folder_as_given() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix", "/vault/notes"], b"");
+    wrote_lines(&ran, "/vault/notes/report.md.archie-lock\n");
+}
+
+#[test]
+fn fix_leaves_a_lock_that_has_not_expired() {
+    let system = locked(0, &[]);
+    let ran = archie(&system, &["fix", "notes"], b"");
+    wrote_lines(&ran, "");
+    assert!(system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[test]
+fn fix_writes_the_locks_of_nested_folders_sorted() {
+    let system = aged(
+        6,
+        &[
+            ("/vault/notes/report.md.archie-lock", "another"),
+            ("/vault/notes/parts/b.md.archie-lock", "another"),
+            ("/vault/notes/a.md.archie-lock", "another"),
+        ],
+    );
+    let ran = archie(&system, &["fix", "notes"], b"");
+    wrote_lines(
+        &ran,
+        "notes/a.md.archie-lock\nnotes/parts/b.md.archie-lock\nnotes/report.md.archie-lock\n",
+    );
+}
+
+#[test]
+fn fix_with_no_path_works_on_the_current_folder_and_writes_paths_below_it() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix"], b"");
+    wrote_lines(&ran, "notes/report.md.archie-lock\n");
+    let nested = locked(6, &[]).with_current_dir("/vault/notes").unwrap();
+    let from_notes = archie(&nested, &["fix"], b"");
+    wrote_lines(&from_notes, "report.md.archie-lock\n");
+}
+
+#[test]
+fn fix_leaves_the_lock_files_of_other_tools() {
+    let system = aged(
+        60,
+        &[
+            ("/vault/Cargo.lock", "old"),
+            ("/vault/notes/yarn.lock", "old"),
+        ],
+    );
+    let ran = archie(&system, &["fix"], b"");
+    wrote_lines(&ran, "");
+    assert_eq!(bytes_of(&system, "/vault/Cargo.lock"), b"old");
+    assert_eq!(bytes_of(&system, "/vault/notes/yarn.lock"), b"old");
+}
+
+#[test]
+fn fix_of_a_file_exits_2_naming_the_path() {
+    let system = locked(6, &[("/vault/notes/report.md", REPORT)]);
+    let ran = archie(&system, &["fix", "notes/report.md"], b"");
+    failed(&ran, 2, "archie: notes/report.md: not a folder\n");
+    assert!(system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[test]
+fn fix_of_a_folder_that_is_not_there_exits_2_naming_the_path() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix", "missing"], b"");
+    failed(&ran, 2, "archie: missing: not a folder\n");
+}
+
+#[test]
+fn fix_of_a_mongodb_store_exits_2_naming_the_store() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix", "--store", "mongodb:notes/docs"], b"");
+    failed(
+        &ran,
+        2,
+        "archie: mongodb:notes/docs keeps no locks: fix takes the file system or --store minio:<bucket>\n",
+    );
+    assert!(system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[test]
+fn expires_seconds_decides_which_locks_fix_removes() {
+    let system = locked(
+        10,
+        &[("/vault/archie.toml", "[lock]\nexpires_seconds = 60\n")],
+    );
+    let ran = archie(&system, &["fix", "notes"], b"");
+    wrote_lines(&ran, "");
+    assert!(system.exists(Path::new(LOCK)).unwrap());
+    system.advance(Duration::from_secs(60)).unwrap();
+    let later = archie(&system, &["fix", "notes"], b"");
+    wrote_lines(&later, "notes/report.md.archie-lock\n");
+}
+
+#[test]
+fn fix_with_a_bad_configuration_file_exits_3_before_touching_a_lock() {
+    let system = locked(
+        6,
+        &[("/vault/archie.toml", "[lock]\nexpires_seconds = 0\n")],
+    );
+    let ran = archie(&system, &["fix", "notes"], b"");
+    failed(&ran, 3, "archie: archie.toml: ");
+    assert!(system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[cfg(not(feature = "minio"))]
+#[test]
+fn fix_of_a_minio_store_exits_3_in_a_build_without_it() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix", "-s", "minio:notes/drafts"], b"");
+    failed(
+        &ran,
+        3,
+        "archie: minio:notes/drafts: this archie is built without the MinIO store\n",
+    );
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn fix_of_a_minio_server_that_cannot_be_reached_exits_4_naming_the_store_and_no_key() {
+    let system = minio_variables(locked(6, &[]), None);
+    let ran = archie(&system, &["fix", "-s", "minio:notes"], b"");
+    failed(&ran, 4, "archie: minio:notes: ");
+    hides_the_keys(&ran);
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn fix_of_a_minio_store_with_a_variable_left_out_exits_3_naming_it() {
+    let system = minio_variables(locked(6, &[]), Some("ARCHIE_MINIO_ENDPOINT"));
+    let ran = archie(&system, &["fix", "-s", "minio:notes"], b"");
+    failed(
+        &ran,
+        3,
+        "archie: ARCHIE_MINIO_ENDPOINT is not set: it holds the MinIO server's address\n",
+    );
+}
+
+#[cfg(feature = "minio")]
+#[test]
+fn fix_of_a_minio_path_that_is_not_a_store_path_exits_2_before_any_request() {
+    let system = minio_variables(locked(6, &[]), None);
+    let ran = archie(&system, &["fix", "./notes", "-s", "minio:notes"], b"");
+    failed(&ran, 2, "archie: ./notes: `./notes` is not a store path\n");
+}
+
+#[test]
+fn a_standard_output_that_fails_exits_4_after_fix_removed_a_lock() {
+    let system = locked(6, &[]);
+    let cli = Cli::try_parse_from(["archie", "fix", "notes"]).unwrap();
+    let mut full: &mut [u8] = &mut [];
+    let mut stderr = Vec::new();
+    let runtime = Builder::new_current_thread().build().unwrap();
+    let code = runtime.block_on(run(&cli, &system, &mut &b""[..], &mut full, &mut stderr));
+    assert_eq!(code, ExitCode::from(4));
+    let line = String::from_utf8(stderr).unwrap();
+    assert!(line.starts_with("archie: standard output: "), "{line}");
+}

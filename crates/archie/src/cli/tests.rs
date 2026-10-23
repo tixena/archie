@@ -134,11 +134,38 @@ fn each_of_the_four_forms_parses_on_get_and_write_and_names_its_form() {
                     path: _,
                     store: _,
                 } => Some(format),
-                Command::Asset { command: _ } => None,
+                Command::Asset { command: _ } | Command::Fix { path: _, store: _ } => None,
             };
             assert_eq!(format.map(Form::from), Some(form), "{command} {text}");
         }
     }
+}
+
+#[test]
+fn fix_takes_an_optional_path_and_an_optional_store() {
+    let bare = Cli::try_parse_from(["archie", "fix"]).unwrap();
+    assert!(
+        matches!(
+            &bare.command,
+            Command::Fix {
+                path: None,
+                store: None
+            }
+        ),
+        "{bare:?}"
+    );
+    let named =
+        Cli::try_parse_from(["archie", "fix", "notes", "-s", "minio:archie/vault"]).unwrap();
+    assert!(
+        matches!(
+            &named.command,
+            Command::Fix {
+                path: Some(path),
+                store: Some(StoreArg::Minio { bucket, prefix: Some(prefix) }),
+            } if path.as_os_str() == "notes" && bucket == "archie" && prefix == "vault"
+        ),
+        "{named:?}"
+    );
 }
 
 #[test]

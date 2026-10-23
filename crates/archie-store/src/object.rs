@@ -29,6 +29,30 @@ pub struct ObjectStore<'system, B> {
 }
 
 impl<'system, B: Bucket> ObjectStore<'system, B> {
+    /// The path of each object under `prefix`, locks included, sorted.
+    async fn all_paths(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
+        let root = self
+            .prefix
+            .as_ref()
+            .map_or_else(String::new, |store| format!("{store}/"));
+        let listed = prefix.map_or_else(|| root.clone(), |folder| format!("{root}{folder}/"));
+        let keys = self.bucket.list(&listed).await.map_err(|error| {
+            StoreError::Backend(
+                prefix.map_or_else(|| error.to_string(), |folder| format!("{folder}: {error}")),
+            )
+        })?;
+        let mut paths = keys
+            .iter()
+            .filter(|key| !key.ends_with('/'))
+            .map(|key| {
+                key.strip_prefix(&root)
+                    .map_or_else(|| Err(StoreError::InvalidPath(key.clone())), StorePath::new)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        paths.sort_unstable();
+        Ok(paths)
+    }
+
     /// The key of the object that holds the file at `path`.
     fn key(&self, path: &StorePath) -> String {
         self.prefix.as_ref().map_or_else(
@@ -53,6 +77,23 @@ impl<'system, B: Bucket> ObjectStore<'system, B> {
             prefix,
             system,
         }
+    }
+
+    /// Removes each expired lock under `under` (the whole store when `None`),
+    /// each one only while it is still the lock found, and gives the path of
+    /// each lock it removed, sorted.
+    ///
+    /// # Errors
+    ///
+    /// `StoreError::Backend` when the store cannot be listed or a lock cannot
+    /// be read or removed.
+    pub async fn remove_expired_locks(
+        &self,
+        under: Option<&StorePath>,
+    ) -> Result<Vec<StorePath>, StoreError> {
+        let mut locks = self.all_paths(under).await?;
+        locks.retain(|path| path.as_str().ends_with(lock::SUFFIX));
+        lock::remove_expired(self, &locks, self.lock).await
     }
 
     /// `lock::write_with_embedded`, as the file store saves, once the key of
@@ -185,25 +226,8 @@ impl<B: Bucket> Store for ObjectStore<'_, B> {
     }
 
     async fn list(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
-        let root = self
-            .prefix
-            .as_ref()
-            .map_or_else(String::new, |store| format!("{store}/"));
-        let listed = prefix.map_or_else(|| root.clone(), |folder| format!("{root}{folder}/"));
-        let keys = self.bucket.list(&listed).await.map_err(|error| {
-            StoreError::Backend(
-                prefix.map_or_else(|| error.to_string(), |folder| format!("{folder}: {error}")),
-            )
-        })?;
-        let mut paths = keys
-            .iter()
-            .filter(|key| !key.ends_with('/') && !key.ends_with(lock::SUFFIX))
-            .map(|key| {
-                key.strip_prefix(&root)
-                    .map_or_else(|| Err(StoreError::InvalidPath(key.clone())), StorePath::new)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        paths.sort_unstable();
+        let mut paths = self.all_paths(prefix).await?;
+        paths.retain(|path| !path.as_str().ends_with(lock::SUFFIX));
         Ok(paths)
     }
 

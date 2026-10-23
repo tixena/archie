@@ -17,7 +17,9 @@ use os_shim::mock::MemorySystem;
 use os_shim::{System, WriteMode};
 use uuid::Uuid;
 
-use super::{Found, Held, LockSettings, Locks, SUFFIX, check, expired, finish, lock_of, take};
+use super::{
+    Found, Held, LockSettings, Locks, SUFFIX, check, expired, finish, lock_of, remove_expired, take,
+};
 use crate::file::FileStore;
 #[cfg(feature = "minio")]
 use crate::object::ObjectStore;
@@ -47,6 +49,33 @@ const B_PNG: &[u8] = b"\x89PNG\r\n\x1a\n the picture of save B";
 const START: u64 = 1_792_700_000;
 
 const TEXT: &str = "# Report\n\n![Logo](media/logo.png)\n";
+
+/// What `FileStore` and `ObjectStore` both do for `archie fix`.
+trait Repairs {
+    fn remove_expired(
+        &self,
+        under: Option<&StorePath>,
+    ) -> impl Future<Output = Result<Vec<StorePath>, StoreError>> + Send;
+}
+
+impl Repairs for FileStore<'_> {
+    fn remove_expired(
+        &self,
+        under: Option<&StorePath>,
+    ) -> impl Future<Output = Result<Vec<StorePath>, StoreError>> + Send {
+        self.remove_expired_locks(under)
+    }
+}
+
+#[cfg(feature = "minio")]
+impl Repairs for ObjectStore<'_, MemoryBucket> {
+    fn remove_expired(
+        &self,
+        under: Option<&StorePath>,
+    ) -> impl Future<Output = Result<Vec<StorePath>, StoreError>> + Send {
+        self.remove_expired_locks(under)
+    }
+}
 
 /// A store whose answers on a lock are scripted, one queue for each
 /// operation, and which records each call.
@@ -710,4 +739,122 @@ async fn the_sample_waits_on_a_lock_file_then_removes_it_once_it_has_expired() {
         .await
         .unwrap();
     assert!(!system.exists(lock).unwrap());
+}
+
+async fn make_lock<S>(store: &S, file: &str)
+where
+    S: Locks + Sync,
+{
+    assert!(
+        store
+            .create(&lock_of(&path(file)).unwrap(), "another")
+            .await
+            .unwrap()
+    );
+}
+
+async fn removes_what_expired<S>(store: &S, system: &MemorySystem)
+where
+    S: Store + Locks + Repairs + Sync,
+{
+    make_lock(store, "notes/parts/b.md").await;
+    make_lock(store, "notes/report.md").await;
+    store
+        .write(&path("notes/Cargo.lock"), b"old", &Precondition::None)
+        .await
+        .unwrap();
+    system.advance(Duration::from_secs(6)).unwrap();
+    make_lock(store, "notes/fresh.md").await;
+    let removed = store.remove_expired(None).await.unwrap();
+    assert_eq!(
+        names(&removed),
+        [
+            "notes/parts/b.md.archie-lock",
+            "notes/report.md.archie-lock"
+        ]
+    );
+    assert_eq!(holder_of(store).await, None);
+    let fresh = lock_of(&path("notes/fresh.md")).unwrap();
+    assert!(store.find(&fresh).await.unwrap().is_some());
+    assert_eq!(
+        store.read(&path("notes/Cargo.lock")).await.unwrap().bytes,
+        b"old"
+    );
+    assert_eq!(
+        store.remove_expired(None).await.unwrap(),
+        Vec::<StorePath>::new()
+    );
+}
+
+#[tokio::test]
+async fn removing_expired_locks_removes_each_one_that_expired_and_leaves_the_rest() {
+    on_each_store!(removes_what_expired);
+}
+
+async fn removes_under_a_folder<S>(store: &S, system: &MemorySystem)
+where
+    S: Store + Locks + Repairs + Sync,
+{
+    make_lock(store, "notes/report.md").await;
+    make_lock(store, "notes/parts/b.md").await;
+    make_lock(store, "other/c.md").await;
+    system.advance(Duration::from_secs(6)).unwrap();
+    let removed = store.remove_expired(Some(&path("notes"))).await.unwrap();
+    assert_eq!(
+        names(&removed),
+        [
+            "notes/parts/b.md.archie-lock",
+            "notes/report.md.archie-lock"
+        ]
+    );
+    let other = lock_of(&path("other/c.md")).unwrap();
+    assert!(store.find(&other).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn removing_expired_locks_under_a_folder_leaves_the_locks_outside_it() {
+    on_each_store!(removes_under_a_folder);
+}
+
+#[tokio::test]
+async fn an_expired_lock_replaced_after_it_was_found_is_left_and_not_reported() {
+    let old = Ok(Some(lock_by("other", Duration::from_secs(6))));
+    let script = Script::new(Vec::new(), vec![old], vec![Ok(false)]);
+    let removed = remove_expired(&script, &[report()], LockSettings::default())
+        .await
+        .unwrap();
+    assert_eq!(removed, Vec::<StorePath>::new());
+    assert_eq!(script.calls(), ["find", "remove_if other"]);
+}
+
+#[tokio::test]
+async fn a_lock_gone_before_it_was_found_is_skipped() {
+    let script = Script::new(Vec::new(), vec![Ok(None)], Vec::new());
+    let removed = remove_expired(&script, &[report()], LockSettings::default())
+        .await
+        .unwrap();
+    assert_eq!(removed, Vec::<StorePath>::new());
+    assert_eq!(script.calls(), ["find"]);
+}
+
+#[tokio::test]
+async fn expires_decides_which_locks_have_expired() {
+    let ten_seconds = || Ok(Some(lock_by("other", Duration::from_secs(10))));
+    let script = Script::new(Vec::new(), vec![ten_seconds()], Vec::new());
+    let minute = LockSettings::new(Duration::from_secs(60), Duration::from_secs(2));
+    let removed = remove_expired(&script, &[report()], minute).await.unwrap();
+    assert_eq!(removed, Vec::<StorePath>::new());
+    assert_eq!(script.calls(), ["find"]);
+    let expiring = Script::new(Vec::new(), vec![ten_seconds()], vec![Ok(true)]);
+    let expired_at_five = remove_expired(&expiring, &[report()], LockSettings::default())
+        .await
+        .unwrap();
+    assert_eq!(expired_at_five, [report()]);
+}
+
+#[tokio::test]
+async fn a_failure_of_the_store_stops_the_removal() {
+    let script = Script::new(Vec::new(), vec![Err(down())], Vec::new());
+    let removed = remove_expired(&script, &[report()], LockSettings::default()).await;
+    assert_eq!(removed, Err(down()));
 }

@@ -7,20 +7,28 @@ without being told what content to write.
 ## Synopsis
 
 ```console
-$ archie fix [PATH]
+$ archie fix [PATH] [--store <STORE>]
 ```
 
-`[PATH]` is the path to repair; it is optional.
+`[PATH]` is the path to repair; it is optional. The repair of expired locks is
+built, with `--store`; every other repair and option on this page is not built.
 
 ## Options
 
 | Option | Effect |
 |---|---|
-| `--dry-run` | Show what would be repaired without changing any file. |
-| `--rule <RULE>` | Repair only the findings of the named rule or rules. |
-| `--interactive` | Ask before each repair. |
+| `-s`, `--store <STORE>` | The store `PATH` is in, in place of the file system: `minio:<bucket>` or `minio:<bucket>/<prefix>`. |
+| `--dry-run` | Show what would be repaired without changing any file. Not built. |
+| `--rule <RULE>` | Repair only the findings of the named rule or rules. Not built. |
+| `--interactive` | Ask before each repair. Not built. |
 
 ## What it repairs
+
+Built:
+
+- Remove each lock that a save left behind and that has expired.
+
+Not built:
 
 - Add a missing `created` date, taken from the file's modification time.
 - Add missing properties that a parent folder's index file declares as inherited.
@@ -30,12 +38,81 @@ $ archie fix [PATH]
 Three findings need a person to decide and are never repaired: a missing `type`
 property, an invalid `type` value, and the classification of an inbox file.
 
+## Expired locks
+
+A save holds the file `<file>.archie-lock` beside a document while it writes, or
+the object `<key>.archie-lock` in a MinIO bucket. A save that stops before it gives
+the lock back, such as an archie that is killed, leaves it behind. The next save of
+that document removes it once it has expired, but the lock of a document nobody
+saves again stays.
+
+`archie fix` removes each lock under `PATH` that is older than `expires_seconds`
+of the `[lock]` table of [`archie.toml`](../config.md), and only while it is still
+the lock it found: a lock that another save replaced in the meantime stays. A lock
+that has not expired stays. A file whose name ends in `.lock` but not in
+`.archie-lock`, such as `Cargo.lock`, is never touched.
+
+`PATH` is a folder, the current folder when it is left out. With a MinIO store it
+is a path of the store as `archie write --store minio:` takes it, and the whole
+prefix when it is left out.
+
+| `--store` | What it does |
+|---|---|
+| none | Repairs the file system below `PATH`. A `PATH` that is not a folder exits with code 2. |
+| `minio:<bucket>[/<prefix>]` | Repairs the objects of the bucket under `PATH`. |
+| `mongodb:<database>/<collection>` | Exits with code 2: a MongoDB store keeps no locks. |
+
+### Output
+
+The path of each lock it removed, one per line on standard output, sorted. Nothing
+when no lock had expired.
+
+- On the file system, the lock's path below the folder searched, after `PATH` as
+  the command line gave it, or alone when `PATH` was left out.
+- In a MinIO store, the lock's path in the store, as `archie write --store minio:`
+  names files.
+
+```console
+$ ls notes
+report.md  report.md.archie-lock  media
+$ archie fix notes
+notes/report.md.archie-lock
+$ echo $?
+0
+$ archie fix notes
+$ archie fix --store minio:archie/vault
+notes/report.md.archie-lock
+$ archie fix --store mongodb:notes/docs
+archie: mongodb:notes/docs keeps no locks: fix takes the file system or --store minio:<bucket>
+$ echo $?
+2
+```
+
+An error is one line on standard error: `archie: `, the path or the store as the
+command line gave it, and what failed.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Success: each lock that had expired is removed. |
+| 2 | The command line is wrong: a `PATH` that is not a folder, a `--store mongodb:` value, or a `--store` value of any other shape. |
+| 3 | The configuration is wrong: `archie.toml`, a variable the MinIO store reads, or a MinIO store that is not built into this archie. |
+| 4 | The store failed: a MinIO server that cannot be reached or refuses the keys, or a file system error. A failure to write standard output is code 4 too. |
+
 ## Behavior
 
 Files are never modified without an explicit repair. [`archie check`](check.md)
 reports; only this command writes.
 
 ## Examples
+
+```console
+$ archie fix notes
+$ archie fix --store minio:archie/vault
+```
+
+Not built:
 
 ```console
 $ archie fix --dry-run
@@ -54,8 +131,9 @@ $ archie fix src/work/ --rule inheritance
   [structural operations](structural-operations.md) do.
 - Which repairs follow from a schema once the
   [shape language](../shape-language.md) is defined.
-- Output, and the exit codes for a run that repaired everything, one that
-  repaired some findings and left others, and a repair that failed.
+- Output, and the exit codes for the repairs that are not built: a run that
+  repaired everything, one that repaired some findings and left others, and a
+  repair that failed.
 
 See [Design status](../../design-status.md) for the open questions here.
 

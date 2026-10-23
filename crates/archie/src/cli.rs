@@ -36,6 +36,14 @@ pub enum Command {
         #[command(subcommand)]
         command: AssetCommand,
     },
+    /// Repairs what needs no decision: removes each lock a save left behind that has expired.
+    Fix {
+        /// The folder to repair, the current folder when it is left out.
+        path: Option<PathBuf>,
+        /// The store PATH is in, in place of the file system.
+        #[arg(short, long)]
+        store: Option<StoreArg>,
+    },
     /// Writes the document at PATH to standard output, or to --output.
     Get {
         path: PathBuf,
