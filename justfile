@@ -29,7 +29,8 @@ test-stores:
     set -euo pipefail
     cargo clippy -p archie-store -p archie --all-targets --all-features --config 'build.rustflags=["--cfg", "store_tests"]' -- -D warnings
     name="archie-test-mongo-$$"
-    docker run -d --rm --name "$name" -p 127.0.0.1::27017 mongo:latest >/dev/null
+    # MongoDB's recommended open-files limit; the store tests keep more WiredTiger files open than Docker's default 1024.
+    docker run -d --rm --ulimit nofile=64000:64000 --name "$name" -p 127.0.0.1::27017 mongo:latest >/dev/null
     trap 'docker stop "$name" >/dev/null' EXIT
     rustfs="archie-test-rustfs-$$"
     docker run -d --rm --name "$rustfs" -p 127.0.0.1::9000 \
