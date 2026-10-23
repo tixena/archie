@@ -131,7 +131,9 @@ takes the lock before the first file the document embeds and gives it back after
 the document. A second write of the same document that finds the lock waits 2
 seconds, then exits with code 4 when the lock is still held, having written
 nothing. A lock older than 5 seconds has expired, and the next write of the
-document removes it.
+document removes it. The two durations, 5 and 2 seconds, are the defaults of
+`expires_seconds` and `wait_seconds` in the `[lock]` table of
+[`archie.toml`](../config.md).
 
 ```console
 $ archie write notes/report.md -i draft/report.md; echo "exit $?"

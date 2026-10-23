@@ -23,6 +23,10 @@ pub enum AssetCommand {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
+    /// The configuration file, in place of `ARCHIE_CONFIG` and of `archie.toml` in the current
+    /// folder.
+    #[arg(short = 'c', long, global = true, value_name = "FILE")]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Debug, clap::Subcommand)]

@@ -3,18 +3,21 @@
 use core::fmt::Display;
 #[cfg(not(feature = "mongodb"))]
 use core::future::{self, Ready};
-#[cfg(any(feature = "minio", feature = "mongodb"))]
+use core::time::Duration;
 use std::env::VarError;
-use std::io::{self, Read, Write};
+use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use archie_core::bundle::Missing;
 use archie_core::forms::{Form, encode};
+use archie_core::parser::ast::{Mapping, Value};
+use archie_core::parser::read_toml;
 use archie_core::writer::WriteOptions;
 use archie_store::any::AnyStore;
 use archie_store::document::{self, DocumentError};
 use archie_store::file::FileStore;
+use archie_store::lock::LockSettings;
 #[cfg(feature = "mongodb")]
 use archie_store::mongo::{MongoStore, object_path};
 #[cfg(any(feature = "minio", feature = "mongodb"))]
@@ -28,6 +31,10 @@ use os_shim::bucket::MinioBucket;
 use crate::cli::bucket_and_prefix;
 use crate::cli::{AssetCommand, Cli, Command, FormatArg, StoreArg, SyntaxArg};
 
+/// The configuration file archie reads in the current folder when none is
+/// named.
+const CONFIG_FILE: &str = "archie.toml";
+
 /// Why a command stopped: the line after `archie: `, and the exit code.
 struct Failure {
     code: u8,
@@ -36,17 +43,22 @@ struct Failure {
 
 /// What `--format`, `--frontmatter` and `--allow-missing` ask for: the form,
 /// the options the document is written with, and what an embed with no file
-/// does.
+/// does; and the lock the configuration file sets.
 struct Settings {
     form: Form,
+    lock: LockSettings,
     missing: Missing,
     options: WriteOptions,
 }
 
 impl Failure {
-    #[cfg(any(feature = "minio", feature = "mongodb"))]
     const fn configuration(message: String) -> Self {
         Self { code: 3, message }
+    }
+
+    /// `what` went wrong with the configuration file `file`.
+    fn in_file(file: &Path, what: &dyn Display) -> Self {
+        Self::configuration(format!("{}: {what}", file.display()))
     }
 
     /// `asset finish-deletions` given `arg`, a store that keeps no deletions.
@@ -119,7 +131,12 @@ impl Failure {
 }
 
 impl Settings {
-    fn new(format: FormatArg, frontmatter: SyntaxArg, allow_missing: bool) -> Self {
+    fn new(
+        format: FormatArg,
+        frontmatter: SyntaxArg,
+        allow_missing: bool,
+        lock: LockSettings,
+    ) -> Self {
         let mut options = WriteOptions::default();
         options.frontmatter = frontmatter.into();
         let missing = if allow_missing {
@@ -129,6 +146,7 @@ impl Settings {
         };
         Self {
             form: format.into(),
+            lock,
             missing,
             options,
         }
@@ -211,7 +229,7 @@ async fn get(
             message: "--embed writes markdown; it needs -f markdown".to_owned(),
         });
     }
-    let (store, at) = open(system, named, path).await?;
+    let (store, at) = open(system, named, path, settings.lock).await?;
     let target = output
         .map(|file| store_path(system, file).map(|place| (file, place)))
         .transpose()?;
@@ -223,7 +241,7 @@ async fn get(
         && !embed
     {
         let _: Revision = document::put_bundle(
-            &machine(system),
+            &machine(system, settings.lock),
             place,
             &bundle,
             &settings.options,
@@ -236,7 +254,7 @@ async fn get(
     let bytes = encode(&bundle, settings.form, &settings.options)
         .map_err(|error| Failure::naming(path, None, 1, &error))?;
     if let Some((file, place)) = target {
-        let _: Revision = machine(system)
+        let _: Revision = machine(system, settings.lock)
             .write(&place, &bytes, &Precondition::None)
             .await
             .map_err(|error| Failure::of_store(file, Some(&place), &error))?;
@@ -249,8 +267,8 @@ async fn get(
 }
 
 /// The files of the machine, as a store whose root is `/`.
-fn machine(system: &dyn System) -> FileStore<'_> {
-    FileStore::new(PathBuf::from("/"), system)
+fn machine(system: &dyn System, lock: LockSettings) -> FileStore<'_> {
+    FileStore::new(PathBuf::from("/"), system).locking(lock)
 }
 
 /// The `MinIO` store `arg` names, `bucket` under `prefix` on the server the
@@ -262,12 +280,13 @@ fn minio<'system>(
     bucket: &str,
     prefix: Option<&str>,
     path: &Path,
+    lock: LockSettings,
 ) -> Result<(AnyStore<'system>, StorePath), Failure> {
     let under = prefix
         .map(StorePath::new)
         .transpose()
         .map_err(|error| Failure::store(arg, &error))?;
-    let store = objects(system, bucket, under)?;
+    let store = objects(system, bucket, under, lock)?;
     let at = as_written(path)?;
     Ok((AnyStore::Minio(store), at))
 }
@@ -312,7 +331,7 @@ fn mongodb_files(system: &dyn System) -> Result<ObjectStore<'_, MinioBucket>, Fa
         .map(StorePath::new)
         .transpose()
         .map_err(|error| Failure::configuration(format!("{name}: {error}")))?;
-    objects(system, bucket, under)
+    objects(system, bucket, under, LockSettings::default())
 }
 
 /// The bucket `bucket`, its keys under `prefix`, on the `MinIO` server the
@@ -322,6 +341,7 @@ fn objects<'system>(
     system: &'system dyn System,
     bucket: &str,
     prefix: Option<StorePath>,
+    lock: LockSettings,
 ) -> Result<ObjectStore<'system, MinioBucket>, Failure> {
     let endpoint = variable(
         system,
@@ -335,7 +355,9 @@ fn objects<'system>(
     )?;
     let config = ObjectConfig::new(endpoint, region, bucket.to_owned(), prefix);
     // `open` fails only on a key missing from the environment.
-    ObjectStore::open(system, config).map_err(|error| Failure::configuration(error.to_string()))
+    ObjectStore::open(system, config)
+        .map(|store| store.locking(lock))
+        .map_err(|error| Failure::configuration(error.to_string()))
 }
 
 /// The store `named` names, the file system's when it is `None`, and `path`
@@ -345,13 +367,19 @@ async fn open<'system>(
     system: &'system dyn System,
     named: Option<&StoreArg>,
     path: &Path,
+    lock: LockSettings,
 ) -> Result<(AnyStore<'system>, StorePath), Failure> {
     let Some(arg) = named else {
-        return Ok((AnyStore::File(machine(system)), store_path(system, path)?));
+        return Ok((
+            AnyStore::File(machine(system, lock)),
+            store_path(system, path)?,
+        ));
     };
     match arg {
         #[cfg(feature = "minio")]
-        StoreArg::Minio { bucket, prefix } => minio(system, arg, bucket, prefix.as_deref(), path),
+        StoreArg::Minio { bucket, prefix } => {
+            minio(system, arg, bucket, prefix.as_deref(), path, lock)
+        }
         #[cfg(not(feature = "minio"))]
         StoreArg::Minio {
             bucket: _,
@@ -375,14 +403,17 @@ fn open<'system>(
     system: &'system dyn System,
     named: Option<&StoreArg>,
     path: &Path,
+    lock: LockSettings,
 ) -> Ready<Result<(AnyStore<'system>, StorePath), Failure>> {
     let Some(arg) = named else {
         let at = store_path(system, path);
-        return future::ready(at.map(|place| (AnyStore::File(machine(system)), place)));
+        return future::ready(at.map(|place| (AnyStore::File(machine(system, lock)), place)));
     };
     let opened = match arg {
         #[cfg(feature = "minio")]
-        StoreArg::Minio { bucket, prefix } => minio(system, arg, bucket, prefix.as_deref(), path),
+        StoreArg::Minio { bucket, prefix } => {
+            minio(system, arg, bucket, prefix.as_deref(), path, lock)
+        }
         #[cfg(not(feature = "minio"))]
         StoreArg::Minio {
             bucket: _,
@@ -404,6 +435,10 @@ pub async fn run(
     stdout: &mut (dyn Write + Send),
     stderr: &mut (dyn Write + Send),
 ) -> ExitCode {
+    let lock = match lock_settings(system, cli.config.as_deref()) {
+        Ok(lock) => lock,
+        Err(failure) => return report(stderr, &failure),
+    };
     let done = match &cli.command {
         #[cfg(feature = "mongodb")]
         Command::Asset {
@@ -422,7 +457,7 @@ pub async fn run(
             output,
             store,
         } => {
-            let settings = Settings::new(*format, *frontmatter, *allow_missing);
+            let settings = Settings::new(*format, *frontmatter, *allow_missing, lock);
             get(
                 system,
                 store.as_ref(),
@@ -442,7 +477,7 @@ pub async fn run(
             input,
             store,
         } => {
-            let settings = Settings::new(*format, *frontmatter, *allow_missing);
+            let settings = Settings::new(*format, *frontmatter, *allow_missing, lock);
             write(
                 system,
                 store.as_ref(),
@@ -454,13 +489,91 @@ pub async fn run(
             .await
         }
     };
-    match done {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(failure) => {
-            let _: io::Result<()> = writeln!(stderr, "archie: {}", failure.message);
-            ExitCode::from(failure.code)
+    done.map_or_else(|failure| report(stderr, &failure), |()| ExitCode::SUCCESS)
+}
+
+/// Writes `failure` to `stderr` as one line, and gives its exit code.
+fn report(stderr: &mut (dyn Write + Send), failure: &Failure) -> ExitCode {
+    let _: io::Result<()> = writeln!(stderr, "archie: {}", failure.message);
+    ExitCode::from(failure.code)
+}
+
+/// The lock's settings in the `[lock]` table of the configuration file:
+/// `named` (from `--config`), else the file `ARCHIE_CONFIG` names, else
+/// `archie.toml` in the current folder; the defaults where that last file is
+/// missing or has no `[lock]`.
+fn lock_settings(system: &dyn System, named: Option<&Path>) -> Result<LockSettings, Failure> {
+    let from_variable = match (named, system.env_var("ARCHIE_CONFIG")) {
+        (Some(_), _) | (None, Err(VarError::NotPresent)) => None,
+        (None, Ok(file)) => Some(PathBuf::from(file)),
+        (None, Err(VarError::NotUnicode(_))) => {
+            return Err(Failure::configuration(
+                "ARCHIE_CONFIG is not UTF-8: it holds the configuration file".to_owned(),
+            ));
+        }
+    };
+    let asked = named.map(Path::to_path_buf).or(from_variable);
+    let file = asked.clone().unwrap_or_else(|| PathBuf::from(CONFIG_FILE));
+    let source = match system.read_to_string(&system_path(system, &file)?) {
+        Ok(source) => source,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return if asked.is_some() {
+                Err(Failure::in_file(
+                    &file,
+                    &"the configuration file does not exist",
+                ))
+            } else {
+                Ok(LockSettings::default())
+            };
+        }
+        Err(error) => return Err(Failure::in_file(&file, &error)),
+    };
+    let tables =
+        read_toml(&source, 0..source.len()).map_err(|error| Failure::in_file(&file, &error))?;
+    match tables.get("lock") {
+        None => Ok(LockSettings::default()),
+        Some(Value::Mapping(lock)) => lock_table(&file, lock),
+        Some(_) => Err(Failure::in_file(&file, &"lock is not a table")),
+    }
+}
+
+/// The settings the `[lock]` table `lock` of the configuration file `file`
+/// gives: the defaults for a key left out.
+fn lock_table(file: &Path, lock: &Mapping) -> Result<LockSettings, Failure> {
+    let mut settings = LockSettings::default();
+    for (key, value) in lock {
+        let seconds = match (key.as_str(), value) {
+            ("expires_seconds" | "wait_seconds", Value::Integer(whole)) if *whole > 0 => {
+                Duration::from_secs(whole.unsigned_abs())
+            }
+            ("expires_seconds" | "wait_seconds", _) => {
+                return Err(Failure::in_file(
+                    file,
+                    &format!("{key} in [lock] is not a whole number of seconds above zero"),
+                ));
+            }
+            _ => {
+                return Err(Failure::in_file(
+                    file,
+                    &format!("[lock] has no key {key}; it takes expires_seconds and wait_seconds"),
+                ));
+            }
+        };
+        if key == "expires_seconds" {
+            settings.expires = seconds;
+        } else {
+            settings.wait = seconds;
         }
     }
+    Ok(settings)
+}
+
+/// `file` against the current folder.
+fn system_path(system: &dyn System, file: &Path) -> Result<PathBuf, Failure> {
+    system
+        .current_dir()
+        .map(|folder| folder.join(file))
+        .map_err(|error| Failure::stream("the current folder", &error))
 }
 
 /// The exit code of a store's error.
@@ -518,19 +631,19 @@ async fn write(
     input: Option<&Path>,
     stdin: &mut (dyn Read + Send),
 ) -> Result<(), Failure> {
-    let (store, at) = open(system, named, path).await?;
+    let (store, at) = open(system, named, path, settings.lock).await?;
     let stored = if let Some(file) = input
         && settings.form == Form::Markdown
     {
         let source = store_path(system, file)?;
-        let bundle = document::get(&machine(system), &source, settings.missing)
+        let bundle = document::get(&machine(system, settings.lock), &source, settings.missing)
             .await
             .map_err(|error| Failure::of_document(file, &source, &error))?;
         document::put_bundle(&store, &at, &bundle, &settings.options, &Precondition::None).await
     } else {
         let bytes = if let Some(file) = input {
             let source = store_path(system, file)?;
-            machine(system)
+            machine(system, settings.lock)
                 .read(&source)
                 .await
                 .map_err(|error| Failure::of_store(file, Some(&source), &error))?

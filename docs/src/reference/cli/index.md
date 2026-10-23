@@ -12,7 +12,7 @@ These four options belong to the program rather than to any one command.
 
 | Option | Effect |
 |---|---|
-| `-c`, `--config <FILE>` | Path to the configuration file. Default: `archie.toml`. |
+| `-c`, `--config <FILE>` | Path to the configuration file. Default: `archie.toml`. Accepted before and after the command name. |
 | `-v`, `--verbose` | Increase verbosity. |
 | `-q`, `--quiet` | Suppress non-error output. |
 | `--version` | Print the version. |
@@ -27,6 +27,12 @@ sources take precedence in this order, highest first:
 2. Environment variables.
 3. The `archie.toml` file.
 4. Built-in defaults.
+
+`--config` wins over `ARCHIE_CONFIG`, which wins over the `archie.toml` in the
+current folder. Every command reads the file when it starts. A file that `--config`
+or `ARCHIE_CONFIG` names and that does not exist, or a file that does not read,
+exits with code 3 and one line; a missing `archie.toml` that nothing named is not
+an error.
 
 Eleven environment variables are read:
 
@@ -122,11 +128,10 @@ archie also exposes a Model Context Protocol (MCP) server, documented in the
 
 - What `--verbose` adds, whether repeating it increases verbosity further, and
   what happens when `--verbose` and `--quiet` are given together.
-- Whether the global options are accepted before the command name, after it, or
-  in both positions.
+- Whether `--verbose` and `--quiet` are accepted before the command name, after
+  it, or in both positions.
 - Which language-model provider credential, `ANTHROPIC_API_KEY` or
-  `OPENAI_API_KEY`, is consulted when both are set, and how
-  `ARCHIE_CONFIG` and `--config` interact beyond the precedence order above.
+  `OPENAI_API_KEY`, is consulted when both are set.
 - Whether a path argument defaults to the configured corpus root for commands
   other than `check`, `fix`, `inbox`, and `export`; whether it may be a glob; and
   whether several paths may be given. None of this is open for `archie get` and

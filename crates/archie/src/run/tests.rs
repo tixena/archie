@@ -1,9 +1,11 @@
 //! `run` over `MemorySystem`, with byte buffers for the standard streams.
 
 use core::iter;
+use core::time::Duration;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::SystemTime;
 
 use archie_core::bundle::Missing;
 use archie_core::forms::{Form, decode};
@@ -46,6 +48,8 @@ const FORMS: [&str; 4] = ["markdown", "json", "binary", "zip"];
 
 const JEKYLL_POST: &str = FIXTURES[10];
 
+const LOCK: &str = "/vault/notes/report.md.archie-lock";
+
 /// The four variables a `MinIO` store reads: a server no process listens on,
 /// whose connection is refused at once, and keys no output may show.
 #[cfg(any(feature = "minio", feature = "mongodb"))]
@@ -59,6 +63,10 @@ const MINIO_VARIABLES: [(&str, &str); 4] = [
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
 
 const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
+
+const SAVE: [&str; 4] = ["write", "notes/report.md", "-i", "draft/report.md"];
+
+const START: u64 = 1_792_700_000;
 
 /// A server no process listens on, which the driver tries once and gives up
 /// on at once: no server selection to wait for, no retry.
@@ -133,6 +141,26 @@ fn hides_the_keys(ran: &Ran) {
     }
 }
 
+/// `report()` on a clock at `START`, with `files` besides, and a lock of
+/// another save beside `notes/report.md` taken `ago` before `START`'s moment.
+fn locked(ago: u64, files: &[(&str, &str)]) -> MemorySystem {
+    let system = MemorySystem::new()
+        .with_now(started() - Duration::from_secs(ago))
+        .unwrap()
+        .with_file(LOCK, b"another")
+        .unwrap()
+        .with_file("/vault/draft/report.md", REPORT.as_bytes())
+        .unwrap()
+        .with_file("/vault/draft/media/logo.png", PNG)
+        .unwrap()
+        .with_current_dir("/vault")
+        .unwrap();
+    system.advance(Duration::from_secs(ago)).unwrap();
+    files.iter().fold(system, |with, (path, text)| {
+        with.with_file(path, text.as_bytes()).unwrap()
+    })
+}
+
 /// `system` with each of `MINIO_VARIABLES` but the one named `left_out`.
 #[cfg(any(feature = "minio", feature = "mongodb"))]
 fn minio_variables(system: MemorySystem, left_out: Option<&str>) -> MemorySystem {
@@ -158,6 +186,14 @@ fn mongodb_variables(system: MemorySystem, left_out: Option<&str>) -> MemorySyst
 
 fn read(system: &MemorySystem, path: &str) -> String {
     system.read_to_string(Path::new(path)).unwrap()
+}
+
+fn since_start(system: &MemorySystem) -> Duration {
+    system.now().duration_since(started()).unwrap()
+}
+
+fn started() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(START)
 }
 
 /// A system whose current folder is `/vault`, holding `notes/report.md`, which
@@ -879,4 +915,196 @@ fn embed_with_a_form_other_than_markdown_exits_2_and_writes_nothing() {
         );
         assert!(!system.exists(&Path::new("/vault").join(&output)).unwrap());
     }
+}
+
+#[test]
+fn with_no_configuration_file_a_save_waits_2_seconds_on_a_lock_that_has_not_expired() {
+    let system = locked(0, &[]);
+    let ran = archie(&system, &SAVE, b"");
+    failed(&ran, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(2));
+}
+
+#[test]
+fn a_configuration_file_with_no_lock_table_gives_the_defaults() {
+    let system = locked(0, &[("/vault/archie.toml", "[vault]\nroot = \".\"\n")]);
+    let ran = archie(&system, &SAVE, b"");
+    failed(&ran, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(2));
+}
+
+#[test]
+fn wait_seconds_sets_how_long_a_save_waits_on_a_lock_that_has_not_expired() {
+    let system = locked(
+        0,
+        &[(
+            "/vault/archie.toml",
+            "[lock]\nexpires_seconds = 60\nwait_seconds = 7\n",
+        )],
+    );
+    let ran = archie(&system, &SAVE, b"");
+    failed(&ran, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(7));
+}
+
+#[test]
+fn expires_seconds_sets_when_a_lock_of_another_save_may_be_removed() {
+    let config = ("/vault/archie.toml", "[lock]\nexpires_seconds = 1\n");
+    let system = locked(2, &[config]);
+    let ran = archie(&system, &SAVE, b"");
+    assert_eq!(ran.code, ExitCode::SUCCESS, "{}", ran.stderr);
+    assert!(!system.exists(Path::new(LOCK)).unwrap());
+    reported(&system, "/vault/notes/report.md");
+    assert_eq!(since_start(&system), Duration::ZERO);
+}
+
+#[test]
+fn a_lock_of_another_save_inside_the_default_expiry_is_kept_by_a_longer_expiry_than_its_age() {
+    let config = ("/vault/archie.toml", "[lock]\nexpires_seconds = 10\n");
+    let system = locked(6, &[config]);
+    let ran = archie(&system, &SAVE, b"");
+    failed(&ran, 4, "archie: notes/report.md: ");
+    assert!(system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[test]
+fn config_is_accepted_before_and_after_the_command_name() {
+    let system = locked(
+        0,
+        &[(
+            "/vault/other.toml",
+            "[lock]\nexpires_seconds = 60\nwait_seconds = 3\n",
+        )],
+    );
+    let after = archie(
+        &system,
+        &[&SAVE[..], &["--config", "other.toml"]].concat(),
+        b"",
+    );
+    failed(&after, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(3));
+    let before = archie(&system, &[&["-c", "other.toml"][..], &SAVE].concat(), b"");
+    failed(&before, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(6));
+}
+
+#[test]
+fn a_configuration_file_that_config_names_and_is_missing_exits_3_before_the_command_runs() {
+    let system = vault("# A\n");
+    let ran = archie(&system, &["get", "a.md", "--config", "other.toml"], b"");
+    failed(
+        &ran,
+        3,
+        "archie: other.toml: the configuration file does not exist\n",
+    );
+    let written = archie(&system, &["-c", "other.toml", "write", "b.md"], b"# B\n");
+    failed(
+        &written,
+        3,
+        "archie: other.toml: the configuration file does not exist\n",
+    );
+    assert!(!system.exists(Path::new("/vault/b.md")).unwrap());
+}
+
+#[test]
+fn archie_config_names_the_file_and_a_missing_one_exits_3() {
+    let system = locked(0, &[("/vault/b.toml", "[lock]\nwait_seconds = 4\n")])
+        .with_env("ARCHIE_CONFIG", "b.toml")
+        .unwrap();
+    let ran = archie(&system, &SAVE, b"");
+    failed(&ran, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(4));
+    let missing = vault("# A\n")
+        .with_env("ARCHIE_CONFIG", "gone.toml")
+        .unwrap();
+    let got = archie(&missing, &["get", "a.md"], b"");
+    failed(
+        &got,
+        3,
+        "archie: gone.toml: the configuration file does not exist\n",
+    );
+}
+
+#[test]
+fn config_wins_over_archie_config() {
+    let files = [
+        (
+            "/vault/a.toml",
+            "[lock]\nexpires_seconds = 60\nwait_seconds = 3\n",
+        ),
+        ("/vault/b.toml", "[lock]\nwait_seconds = 9\n"),
+    ];
+    let system = locked(0, &files)
+        .with_env("ARCHIE_CONFIG", "b.toml")
+        .unwrap();
+    let ran = archie(&system, &[&SAVE[..], &["--config", "a.toml"]].concat(), b"");
+    failed(&ran, 4, "archie: notes/report.md: ");
+    assert_eq!(since_start(&system), Duration::from_secs(3));
+}
+
+#[test]
+fn a_value_that_is_not_a_whole_number_above_zero_exits_3_naming_the_key() {
+    for (key, value) in [
+        ("expires_seconds", "0"),
+        ("expires_seconds", "-1"),
+        ("wait_seconds", "\"5\""),
+        ("wait_seconds", "2.5"),
+        ("wait_seconds", "true"),
+    ] {
+        let config = format!("[lock]\n{key} = {value}\n");
+        let system = vault("# A\n")
+            .with_file("/vault/archie.toml", config.as_bytes())
+            .unwrap();
+        let ran = archie(&system, &["get", "a.md"], b"");
+        let line = format!(
+            "archie: archie.toml: {key} in [lock] is not a whole number of seconds above zero\n"
+        );
+        failed(&ran, 3, &line);
+    }
+}
+
+#[test]
+fn a_key_of_the_lock_table_other_than_the_two_exits_3_naming_it() {
+    let system = vault("# A\n")
+        .with_file("/vault/archie.toml", b"[lock]\nexpire_seconds = 5\n")
+        .unwrap();
+    let ran = archie(&system, &["get", "a.md"], b"");
+    failed(
+        &ran,
+        3,
+        "archie: archie.toml: [lock] has no key expire_seconds; it takes expires_seconds and wait_seconds\n",
+    );
+}
+
+#[test]
+fn a_lock_that_is_not_a_table_exits_3() {
+    let system = vault("# A\n")
+        .with_file("/vault/archie.toml", b"lock = 5\n")
+        .unwrap();
+    let ran = archie(&system, &["get", "a.md"], b"");
+    failed(&ran, 3, "archie: archie.toml: lock is not a table\n");
+}
+
+#[test]
+fn a_configuration_file_the_reader_cannot_read_exits_3_with_the_readers_error() {
+    let system = vault("# A\n")
+        .with_file("/vault/archie.toml", b"[lock\n")
+        .unwrap();
+    let ran = archie(&system, &["get", "a.md"], b"");
+    failed(&ran, 3, "archie: archie.toml: ");
+    let bad = vault("# A\n")
+        .with_file("/vault/archie.toml", &[0xff, 0xfe])
+        .unwrap();
+    let unread = archie(&bad, &["get", "a.md"], b"");
+    failed(&unread, 3, "archie: archie.toml: ");
+}
+
+#[test]
+fn the_other_tables_of_the_configuration_file_are_left_alone() {
+    let config = "[vault]\nroot = \".\"\n\n[rules]\nstrict = true\n\n[lock]\nexpires_seconds = 5 # five\n\n[ai]\nmodel = \"x\"\n";
+    let system = vault("# A\n")
+        .with_file("/vault/archie.toml", config.as_bytes())
+        .unwrap();
+    let ran = archie(&system, &["get", "a.md"], b"");
+    assert_eq!(ran.code, ExitCode::SUCCESS, "{}", ran.stderr);
 }

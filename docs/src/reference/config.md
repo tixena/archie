@@ -62,6 +62,10 @@ allow_raw = true            # Inbox files can have no frontmatter
 [assets]
 extensions = ["png", "jpg", "jpeg", "gif", "svg", "pdf", "mp3", "opus", "mp4"]
 
+[lock]
+expires_seconds = 5         # how long a save's lock on a document lasts after it is taken
+wait_seconds = 2            # how long a save waits on another save's lock before it is rejected
+
 [ai]
 provider = "anthropic"      # or "openai"
 model = "claude-sonnet-4-20250514"
@@ -127,6 +131,15 @@ there to have no frontmatter. See [archie inbox](cli/inbox.md).
 
 **`[assets]`** — the file extensions a run treats as assets rather than as
 documents, read by `orphaned-assets`.
+
+**`[lock]`** — `expires_seconds` sets how long a save's lock on a document lasts
+after it is taken, 5 by default, and `wait_seconds` sets how long a save waits on
+another save's lock before it is rejected, 2 by default. Each is a whole number
+of seconds above zero, and these two keys are the only ones the table takes: any
+other key, or a value that is not a whole number above zero, exits with code 3.
+The file store and the MinIO store take these settings; see
+[archie write](cli/write.md). This table is the only one archie reads today; it
+leaves the others alone.
 
 **`[ai]`** — the provider and model used when a language model classifies inbox
 captures; the credential comes from the environment. Validation works offline,
