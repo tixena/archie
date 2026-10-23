@@ -175,7 +175,7 @@ A `--store` value of any other shape is a usage error, code 2.
 | 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. Without `--allow-missing`, a file the document embeds that is missing, or an embed that leaves the document's folder. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
 | 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` or `ARCHIE_MONGODB_BUCKET` for `--store mongodb:`, or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
-| 4 | The store failed: a file system error, such as a folder that is not writable, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to read standard input is code 4 too. |
+| 4 | The store failed: a file system error, such as a folder that is not writable, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to read standard input is code 4 too, and so is a write to a MongoDB store that another write of the same document finished first, which the store refuses with `<path>: the file changed, or a file is already there`. |
 | 6 | No file at the path of `--input`. |
 
 Code 5 belongs to the language-model provider error of the validation run; see

@@ -25,9 +25,9 @@ use tokio::time;
 
 use crate::document::{is_note, parent_of};
 use crate::file;
-use crate::mongo::record::stored_object_schema::{Update, WriteError};
+use crate::mongo::record::stored_object_schema::{Filter, Update, WriteError};
 use crate::mongo::record::{
-    Claim, StoredDocument, StoredObject, from_record, revision_of, to_record,
+    Claim, NO_DOCUMENT, StoredDocument, StoredObject, from_record, revision_of, to_record,
 };
 use crate::object::ObjectStore;
 use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored};
@@ -64,6 +64,28 @@ struct HeldFiles {
     files: BTreeMap<String, String>,
 }
 
+/// The `revision` of a document's record, read alone.
+#[derive(Deserialize)]
+struct HeldRevision {
+    revision: String,
+}
+
+/// The `save` of a document's record, read alone.
+#[derive(Deserialize)]
+struct HeldSave {
+    #[serde(default)]
+    save: Option<ObjectId>,
+}
+
+/// The save whose claims a release takes back: one save, the save of a record
+/// written before records named one, or none where a save inserted its record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Replaced {
+    Nothing,
+    Save(ObjectId),
+    Unnamed,
+}
+
 /// The files of one collection of one database, each one record, with a
 /// unique index on `path`.
 ///
@@ -77,11 +99,16 @@ pub struct MongoStore {
 }
 
 impl MongoStore {
-    /// Claims the object of `file` for the document at `path`, trying again
-    /// while a deletion holds its record.
-    async fn claim(&self, path: &StorePath, file: &Embedded<'_>) -> Result<(), StoreError> {
+    /// Claims the object of `file` for the document at `path`, by `save`,
+    /// trying again while a deletion holds its record.
+    async fn claim(
+        &self,
+        path: &StorePath,
+        file: &Embedded<'_>,
+        save: ObjectId,
+    ) -> Result<(), StoreError> {
         let mut tries = 1;
-        while !self.try_claim(path, file).await? {
+        while !self.try_claim(path, file, save).await? {
             if tries == CLAIM_TRIES {
                 return Err(StoreError::Backend(format!(
                     "{}: a deletion of its object has not finished; `archie asset finish-deletions` finishes it once no other archie writes to this store",
@@ -94,20 +121,43 @@ impl MongoStore {
         Ok(())
     }
 
+    /// Claims the object whose bytes have the SHA-256 `hash`, which the record
+    /// at `path` names at `name`, by `save`: `false` when its record is gone or
+    /// a deletion holds it.
+    async fn claim_kept(
+        &self,
+        path: &StorePath,
+        name: &str,
+        hash: &str,
+        save: ObjectId,
+    ) -> Result<bool, StoreError> {
+        let file = path.beside(name)?;
+        let (filter, update) =
+            adding(hash, path, &file, save).map_err(|error| failed(&file, &error))?;
+        let claimed = self
+            .objects
+            .update_one(filter, update.into_document())
+            .await
+            .map_err(|error| failed(&file, &error))?;
+        Ok(claimed.matched_count == 1)
+    }
+
     /// Deletes the object whose bytes have the SHA-256 `hash`, then its
     /// record, when nothing embeds it and no other deletion holds it.
     async fn delete_object(&self, hash: &str) -> Result<(), StoreError> {
         let object = object_path(hash)?;
-        let deleted = async {
-            if self.mark(hash).await? {
-                self.remove_object(hash).await?;
-                self.remove_record(hash).await?;
-            }
-            Ok(())
-        };
-        deleted
+        self.delete_unembedded(hash)
             .await
-            .map_err(|error: StoreError| stopped_deletion(&object, &error))
+            .map_err(|error| stopped_deletion(&object, &error))
+    }
+
+    /// `delete_object` with the error of the step that failed.
+    async fn delete_unembedded(&self, hash: &str) -> Result<(), StoreError> {
+        if self.mark(hash).await? {
+            self.remove_object(hash).await?;
+            self.remove_record(hash).await?;
+        }
+        Ok(())
     }
 
     /// Every record `filter` matches, read through `from_record`.
@@ -151,6 +201,17 @@ impl MongoStore {
         }
         finished.sort_unstable();
         Ok(finished)
+    }
+
+    /// Takes back each claim on the document at `path` that `save` made, and
+    /// deletes each object left unembedded: the save's document was not stored.
+    async fn give_back(&self, path: &StorePath, save: ObjectId) -> Result<(), StoreError> {
+        for hash in self.release(path, &Replaced::Save(save)).await? {
+            self.delete_unembedded(&hash)
+                .await
+                .map_err(|error| failed(path, &error))?;
+        }
+        Ok(())
     }
 
     /// The `files` of the record at `path`, read alone: none when no record
@@ -281,46 +342,61 @@ impl MongoStore {
         Err(StoreError::NotFound(path.clone()))
     }
 
-    /// Takes back each claim of the document at `path` that `files`, the
-    /// SHA-256 of each file it embeds by its path in the bundle, does not make,
-    /// and gives the SHA-256 of each object it took a claim from.
-    async fn release(
-        &self,
-        path: &StorePath,
-        files: &BTreeMap<String, String>,
-    ) -> Result<Vec<String>, StoreError> {
-        let of_document = Claim::MONGO_FIELDS
-            .document()
-            .eq(path.as_str().to_owned())
+    /// The revision of the record at `path`, or `NO_DOCUMENT` where none is.
+    async fn read_revision(&self, path: &StorePath) -> Result<Revision, StoreError> {
+        let Some(record) = self
+            .collection
+            .find_one(on_path(path)?)
+            .projection(doc! { "_id": 0_i32, "revision": 1_i32 })
+            .await
+            .map_err(|error| failed(path, &error))?
+        else {
+            return Ok(Revision(NO_DOCUMENT.to_owned()));
+        };
+        let held: HeldRevision =
+            bson::deserialize_from_document(record).map_err(|error| failed(path, &error))?;
+        Ok(Revision(held.revision))
+    }
+
+    /// Takes back each claim on the document at `path` that `of` made, and gives
+    /// the SHA-256 of each object it took a claim from.
+    async fn release(&self, path: &StorePath, of: &Replaced) -> Result<Vec<String>, StoreError> {
+        let save = match *of {
+            Replaced::Nothing => return Ok(Vec::new()),
+            Replaced::Save(save) => Some(save),
+            Replaced::Unnamed => None,
+        };
+        let paths = StoredObject::MONGO_FIELDS;
+        let held = claims_of(path, save).map_err(|error| failed(path, &error))?;
+        let mut records = self
+            .objects
+            .find(paths.embedded_by().elem_match(held).into_document())
+            .projection(doc! { "_id": 1_i32 })
+            .await
             .map_err(|error| failed(path, &error))?;
-        let records = StoredObject::find(
-            &self.objects,
-            StoredObject::MONGO_FIELDS.embedded_by().nest(of_document),
-        )
-        .await
-        .map_err(|error| failed(path, &error))?;
         let mut released = Vec::new();
-        for record in records {
-            let of_path = record
-                .embedded_by
-                .iter()
-                .filter(|claim| claim.document == path.as_str());
-            let mut taken = false;
-            for claim in of_path {
-                let made = name_in(path, &claim.path).and_then(|name| files.get(name));
-                if made != Some(&record.id) {
-                    let (filter, update) =
-                        releasing(&record.id, claim).map_err(|error| failed(path, &error))?;
-                    self.objects
-                        .update_one(filter, update)
-                        .await
-                        .map_err(|error| failed(path, &error))?;
-                    taken = true;
-                }
-            }
-            if taken {
-                released.push(record.id);
-            }
+        while records
+            .advance()
+            .await
+            .map_err(|error| failed(path, &error))?
+        {
+            let hash = records
+                .current()
+                .get_str("_id")
+                .map_err(|error| failed(path, &error))?;
+            released.push(hash.to_owned());
+        }
+        let pulled = claims_of(path, save).map_err(|error| failed(path, &error))?;
+        let pull = paths.embedded_by().pull(pulled).into_document();
+        for hash in &released {
+            let on_id = paths
+                .id()
+                .eq(hash.clone())
+                .map_err(|error| failed(path, &error))?;
+            self.objects
+                .update_one(on_id.into_document(), pull.clone())
+                .await
+                .map_err(|error| failed(path, &error))?;
         }
         Ok(released)
     }
@@ -363,6 +439,24 @@ impl MongoStore {
         }
     }
 
+    /// Deletes the record at `path` where it is still at `read`, and gives the
+    /// save it names. `StoreError::Conflict` when the record is no longer at
+    /// `read`.
+    async fn remove_document_at(
+        &self,
+        path: &StorePath,
+        read: &Revision,
+    ) -> Result<Replaced, StoreError> {
+        let removed = self
+            .collection
+            .find_one_and_delete(on_revision(path, read)?)
+            .projection(doc! { "_id": 0_i32, "save": 1_i32 })
+            .await
+            .map_err(|error| failed(path, &error))?
+            .ok_or_else(|| StoreError::Conflict(path.clone()))?;
+        named_by(path, removed)
+    }
+
     /// Deletes the object whose bytes have the SHA-256 `hash` from the bucket.
     async fn remove_object(&self, hash: &str) -> Result<(), StoreError> {
         self.files
@@ -387,58 +481,65 @@ impl MongoStore {
         Ok(())
     }
 
-    /// Writes `document` at `path`, with `files`, the SHA-256 of each file it
-    /// embeds by its path in the bundle, if `precondition` holds, and gives
-    /// the new revision.
+    /// The revision a save or a deletion under `precondition` takes as read:
+    /// the caller's for `Matches`, `NO_DOCUMENT` for `Absent`, and the record's
+    /// for `None`.
+    async fn revision_read(
+        &self,
+        path: &StorePath,
+        precondition: &Precondition,
+    ) -> Result<Revision, StoreError> {
+        match precondition {
+            Precondition::Absent => Ok(Revision(NO_DOCUMENT.to_owned())),
+            Precondition::Matches(expected) => Ok(expected.clone()),
+            Precondition::None => self.read_revision(path).await,
+        }
+    }
+
+    /// Writes the record of `document` where the record at `path` is still at
+    /// `read`, naming `save`, with `files`, the SHA-256 of each file it embeds
+    /// by its path in the bundle, and gives the revision written and the save
+    /// the replaced record names: `Replaced::Nothing` when it inserted.
+    /// `StoreError::Conflict` when the record is no longer at `read`.
     async fn save(
         &self,
         path: &StorePath,
         document: &RawDocument,
         files: &BTreeMap<String, String>,
-        precondition: &Precondition,
-    ) -> Result<Revision, StoreError> {
+        read: &Revision,
+        save: ObjectId,
+    ) -> Result<(Revision, Replaced), StoreError> {
         let text = writer::write(document, &WriteOptions::default())
             .map_err(|error| failed(path, &error))?;
-        let revision = revision_of(&text);
+        let revision = revision_of(&text, files);
         let mut record = to_record(&StoredDocument {
             document: document.clone(),
             files: files.clone(),
             id: ObjectId::new(),
             path: path.as_str().to_owned(),
             revision: revision.0.clone(),
+            save: Some(save),
         })?;
-        match precondition {
-            Precondition::Absent => {
-                self.collection.insert_one(record).await.map_err(|error| {
-                    if duplicate_key(&error) {
-                        StoreError::Conflict(path.clone())
-                    } else {
-                        failed(path, &error)
-                    }
-                })?;
-            }
-            Precondition::Matches(expected) => {
-                // A replacement keeps the `_id` of the record it replaces.
-                record.remove("_id");
-                let replaced = self
-                    .collection
-                    .replace_one(on_revision(path, expected)?, record)
-                    .await
-                    .map_err(|error| failed(path, &error))?;
-                if replaced.matched_count == 0 {
-                    return Err(StoreError::Conflict(path.clone()));
+        if read.0 == NO_DOCUMENT {
+            self.collection.insert_one(record).await.map_err(|error| {
+                if duplicate_key(&error) {
+                    StoreError::Conflict(path.clone())
+                } else {
+                    failed(path, &error)
                 }
-            }
-            Precondition::None => {
-                record.remove("_id");
-                self.collection
-                    .replace_one(on_path(path)?, record)
-                    .upsert(true)
-                    .await
-                    .map_err(|error| failed(path, &error))?;
-            }
+            })?;
+            return Ok((revision, Replaced::Nothing));
         }
-        Ok(revision)
+        // A replacement keeps the `_id` of the record it replaces.
+        record.remove("_id");
+        let replaced = self
+            .collection
+            .find_one_and_replace(on_revision(path, read)?, record)
+            .projection(doc! { "_id": 0_i32, "save": 1_i32 })
+            .await
+            .map_err(|error| failed(path, &error))?
+            .ok_or_else(|| StoreError::Conflict(path.clone()))?;
+        Ok((revision, named_by(path, replaced)?))
     }
 
     /// Each entry of the `files` of the record at `path` whose file `document`
@@ -484,16 +585,37 @@ impl MongoStore {
         Ok(kept)
     }
 
-    /// Takes back the claims of the document at `path` that `files` does not
-    /// make, and deletes each object left unembedded, once the document's change
-    /// is stored.
-    async fn tidy(
+    /// Saves `document` at `path` with `files` where the record is still at
+    /// `read`, naming `save`, then tidies the claims of the save the replaced
+    /// record names; a save that loses gives back its own claims and is a
+    /// conflict.
+    async fn store(
         &self,
         path: &StorePath,
+        document: &RawDocument,
         files: &BTreeMap<String, String>,
-    ) -> Result<(), StoreError> {
+        read: &Revision,
+        save: ObjectId,
+    ) -> Result<Revision, StoreError> {
+        match self.save(path, document, files, read, save).await {
+            Ok((wrote, replaced)) => {
+                self.tidy(path, &replaced).await?;
+                Ok(wrote)
+            }
+            Err(StoreError::Conflict(_)) => {
+                self.give_back(path, save).await?;
+                Err(StoreError::Conflict(path.clone()))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Takes back each claim on the document at `path` that `of` made, and
+    /// deletes each object left unembedded, once the document's change is
+    /// stored.
+    async fn tidy(&self, path: &StorePath, of: &Replaced) -> Result<(), StoreError> {
         let released = self
-            .release(path, files)
+            .release(path, of)
             .await
             .map_err(|error| stored_release_failed(path, &error))?;
         for hash in released {
@@ -502,11 +624,17 @@ impl MongoStore {
         Ok(())
     }
 
-    /// One try at claiming the object of `file` for the document at `path`:
-    /// its record gains the claim, and is made with the object's metadata
-    /// where none is. `false` while a deletion holds the record.
-    async fn try_claim(&self, path: &StorePath, file: &Embedded<'_>) -> Result<bool, StoreError> {
-        let (filter, update) = claiming(path, file).map_err(|error| failed(file.path, &error))?;
+    /// One try at claiming the object of `file` for the document at `path`, by
+    /// `save`: its record gains the claim, and is made with the object's
+    /// metadata where none is. `false` while a deletion holds the record.
+    async fn try_claim(
+        &self,
+        path: &StorePath,
+        file: &Embedded<'_>,
+        save: ObjectId,
+    ) -> Result<bool, StoreError> {
+        let (filter, update) =
+            claiming(path, file, save).map_err(|error| failed(file.path, &error))?;
         match self.objects.update_one(filter, update).upsert(true).await {
             Ok(_) => Ok(true),
             Err(error) if duplicate_key(&error) => Ok(false),
@@ -554,28 +682,37 @@ impl MongoStore {
     }
 
     /// Writes `document` at `path` if `precondition` holds, and gives the new
-    /// revision: the SHA-256 of the document in archie's form.
+    /// revision: the SHA-256 of the document in archie's form and of the files
+    /// it embeds.
     ///
     /// The record keeps each file of the record it replaces that `document`
-    /// still embeds, each other claim of the document is taken back, and each
-    /// object that leaves unembedded is deleted. Nothing is claimed or uploaded.
+    /// still embeds, claimed again by this write, the claims of the save the
+    /// replaced record names are taken back, and each object that leaves
+    /// unembedded is deleted. Nothing is uploaded.
     ///
     /// # Errors
     ///
-    /// `StoreError::Conflict` when `precondition` does not hold, or
-    /// `StoreError::Backend` naming the path when the record nests too deep or
-    /// the driver or the bucket fails, naming a kept note that is not UTF-8, or
-    /// naming an object whose deletion fails.
+    /// `StoreError::Conflict` when `precondition` does not hold, when the record
+    /// changed since the write read it, or when a kept file's record is gone or
+    /// held by a deletion; or `StoreError::Backend` naming the path when the
+    /// record nests too deep or the driver or the bucket fails, naming a kept
+    /// note that is not UTF-8, or naming an object whose deletion fails.
     pub async fn write_document(
         &self,
         path: &StorePath,
         document: &RawDocument,
         precondition: &Precondition,
     ) -> Result<Revision, StoreError> {
+        let read = self.revision_read(path, precondition).await?;
+        let save = ObjectId::new();
         let kept = self.still_embedded(path, document).await?;
-        let revision = self.save(path, document, &kept, precondition).await?;
-        self.tidy(path, &kept).await?;
-        Ok(revision)
+        for (name, hash) in &kept {
+            if !self.claim_kept(path, name, hash, save).await? {
+                self.give_back(path, save).await?;
+                return Err(StoreError::Conflict(path.clone()));
+            }
+        }
+        self.store(path, document, &kept, &read, save).await
     }
 }
 
@@ -587,16 +724,23 @@ impl Store for MongoStore {
     }
 
     /// With `Precondition::Absent`, nothing is deleted: a record at `path` is
-    /// `Conflict`, and none is `NotFound`. Once the record is deleted, each
-    /// claim of the document is taken back, and each object that leaves
-    /// unembedded is deleted.
+    /// `Conflict`, and none is `NotFound`. Otherwise the record is deleted only
+    /// at the revision read, then each claim of the save it names is taken
+    /// back, and each object that leaves unembedded is deleted.
     async fn delete(
         &self,
         path: &StorePath,
         precondition: &Precondition,
     ) -> Result<(), StoreError> {
-        self.remove_document(path, precondition).await?;
-        self.tidy(path, &BTreeMap::new()).await
+        if matches!(precondition, Precondition::Absent) {
+            return self.remove_document(path, precondition).await;
+        }
+        let read = self.revision_read(path, precondition).await?;
+        if read.0 == NO_DOCUMENT {
+            return Err(StoreError::NotFound(path.clone()));
+        }
+        let removed = self.remove_document_at(path, &read).await?;
+        self.tidy(path, &removed).await
     }
 
     async fn list(&self, prefix: Option<&StorePath>) -> Result<Vec<StorePath>, StoreError> {
@@ -680,10 +824,13 @@ impl Store for MongoStore {
             .await
     }
 
-    /// Claims the object of each file of `files` for the document, uploads
-    /// each one its record does not say is stored, saves the document with the
-    /// SHA-256 of each file, takes back each claim of the document that it no
-    /// longer makes, then deletes each object that leaves unembedded.
+    /// Reads the revision the write starts from, draws the id of the save,
+    /// claims the object of each file of `files` for the document by it,
+    /// uploads each one its record does not say is stored, saves the document
+    /// naming the save, with the SHA-256 of each file, where the record is still
+    /// at that revision, takes back the claims of the save the replaced record
+    /// names, then deletes each object that leaves unembedded. A write that
+    /// finds the record changed gives back its own claims and is a conflict.
     async fn write_with_embedded(
         &self,
         path: &StorePath,
@@ -693,8 +840,10 @@ impl Store for MongoStore {
     ) -> Result<Revision, StoreError> {
         let document = parse(text).document;
         let embedded = embedded(path, &document, files)?;
+        let read = self.revision_read(path, precondition).await?;
+        let save = ObjectId::new();
         for file in &embedded {
-            self.claim(path, file).await?;
+            self.claim(path, file, save).await?;
         }
         for file in &embedded {
             self.upload(file).await?;
@@ -703,10 +852,34 @@ impl Store for MongoStore {
             .iter()
             .map(|file| (file.name.to_owned(), file.hash.clone()))
             .collect();
-        let revision = self.save(path, &document, &hashes, precondition).await?;
-        self.tidy(path, &hashes).await?;
-        Ok(revision)
+        self.store(path, &document, &hashes, &read, save).await
     }
+}
+
+/// The filter and the update that add the claim of the document at
+/// `document` on `file`, by `save`, to the record of the object whose bytes
+/// have the SHA-256 `hash`, once, while no deletion holds it.
+fn adding(
+    hash: &str,
+    document: &StorePath,
+    file: &StorePath,
+    save: ObjectId,
+) -> Result<(Document, Update<StoredObject>), WriteError> {
+    let paths = StoredObject::MONGO_FIELDS;
+    let claim = Claim {
+        document: document.as_str().to_owned(),
+        path: file.as_str().to_owned(),
+        save: Some(save),
+    };
+    let filter = paths
+        .id()
+        .eq(hash.to_owned())?
+        .and(paths.deleting().ne(true)?);
+    let added = bson::serialize_to_bson(&claim)?;
+    Ok((
+        filter.into_document(),
+        Update::<StoredObject>::raw(doc! { "$addToSet": { "embedded_by": added } }),
+    ))
 }
 
 fn backend(error: &dyn fmt::Display) -> StoreError {
@@ -714,20 +887,16 @@ fn backend(error: &dyn fmt::Display) -> StoreError {
 }
 
 /// The filter and the update of a claim of the object of `file` for the
-/// document at `path`: the claim added once, and the object's metadata set
-/// where the update makes the record.
-fn claiming(path: &StorePath, file: &Embedded<'_>) -> Result<(Document, Document), WriteError> {
+/// document at `path`, by `save`: the claim added once, and the object's
+/// metadata set where the update makes the record.
+fn claiming(
+    path: &StorePath,
+    file: &Embedded<'_>,
+    save: ObjectId,
+) -> Result<(Document, Document), WriteError> {
     let paths = StoredObject::MONGO_FIELDS;
-    let claim = Claim {
-        document: path.as_str().to_owned(),
-        path: file.path.as_str().to_owned(),
-    };
-    let filter = paths
-        .id()
-        .eq(file.hash.clone())?
-        .and(paths.deleting().ne(true)?);
-    let added = bson::serialize_to_bson(&claim)?;
-    let update = Update::<StoredObject>::raw(doc! { "$addToSet": { "embedded_by": added } })
+    let (filter, added) = adding(&file.hash, path, file.path, save)?;
+    let update = added
         .and(
             paths
                 .object()
@@ -745,7 +914,19 @@ fn claiming(path: &StorePath, file: &Embedded<'_>) -> Result<(Document, Document
                 .set_on_insert(file.description.clone())?,
         )
         .and(paths.stored().set_on_insert(false)?);
-    Ok((filter.into_document(), update.into_document()))
+    Ok((filter, update.into_document()))
+}
+
+/// The filter over the claims on the document at `path` that `save` made, or
+/// with none, those that name no save.
+fn claims_of(path: &StorePath, save: Option<ObjectId>) -> Result<Filter<Claim>, WriteError> {
+    let claims = Claim::MONGO_FIELDS;
+    let on_document = claims.document().eq(path.as_str().to_owned())?;
+    Ok(match save {
+        Some(made) => on_document.and(claims.save().eq(made)?),
+        // `null` matches a claim with no `save`, and the typed field writes no `null`.
+        None => on_document.and(Filter::<Claim>::raw(doc! { "save": null })),
+    })
 }
 
 fn command_code(error: &Error) -> Option<i32> {
@@ -887,6 +1068,13 @@ fn name_in<'file>(document: &StorePath, file: &'file str) -> Option<&'file str> 
         })
 }
 
+/// The save that `held`, a document's record read by its `save` alone, names.
+fn named_by(path: &StorePath, held: Document) -> Result<Replaced, StoreError> {
+    let named: HeldSave =
+        bson::deserialize_from_document(held).map_err(|error| failed(path, &error))?;
+    Ok(named.save.map_or(Replaced::Unnamed, Replaced::Save))
+}
+
 /// The path, in the bucket of the store's files, of the object whose bytes
 /// have the SHA-256 `hash`: `files/<sha256>`.
 ///
@@ -921,21 +1109,6 @@ fn on_revision(path: &StorePath, revision: &Revision) -> Result<Document, StoreE
         .and_then(|on_path| Ok(on_path.and(paths.revision().eq(revision.0.clone())?)))
         .map_err(|error| failed(path, &error))?;
     Ok(filter.into_document())
-}
-
-/// The filter and the update that take `claim` out of the record of the
-/// object whose bytes have the SHA-256 `hash`.
-fn releasing(hash: &str, claim: &Claim) -> Result<(Document, Document), WriteError> {
-    let (paths, claims) = (StoredObject::MONGO_FIELDS, Claim::MONGO_FIELDS);
-    let held = claims
-        .document()
-        .eq(claim.document.clone())?
-        .and(claims.path().eq(claim.path.clone())?);
-    let filter = paths.id().eq(hash.to_owned())?;
-    Ok((
-        filter.into_document(),
-        paths.embedded_by().pull(held).into_document(),
-    ))
 }
 
 /// The failure of a deletion of `object` after the change to its document is

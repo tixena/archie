@@ -22,7 +22,10 @@ use os_shim::mock::MemorySystem;
 use os_shim::real::RealSystem;
 use tokio::runtime::Builder;
 
-use super::{MongoStore, embedded, object_path, stopped_deletion, stored_release_failed};
+use super::{
+    Embedded, MongoStore, Replaced, embedded, object_path, on_path, stopped_deletion,
+    stored_release_failed,
+};
 use crate::any::AnyStore;
 use crate::document::{get, put, put_bundle};
 use crate::file::{self, FileStore};
@@ -30,7 +33,7 @@ use crate::mongo::record::{
     Claim, StoredDocument, StoredObject, from_record, frontmatter_is, revision_of, to_record,
 };
 use crate::object::{ObjectConfig, ObjectStore};
-use crate::{Precondition, Store as _, StoreError, StorePath, Stored};
+use crate::{Precondition, Revision, Store as _, StoreError, StorePath, Stored};
 
 const COPY_MD: &str = "notes/copy.md";
 
@@ -83,6 +86,10 @@ const REPORT_MD: &str = "notes/report.md";
 
 const REPORT_WITH_INTRO: &str = "# Report\n\n![[parts/intro]]\n";
 
+const REVISED_REPORT: &str = "# Revised report\n\n![Logo](media/logo.png)\n";
+
+const THIRD_PNG: &[u8] = b"\x89PNG\r\n\x1a\n a third picture";
+
 static ONE_SAVE: Scenario = Scenario {
     actors: &[
         Actor {
@@ -94,7 +101,6 @@ static ONE_SAVE: Scenario = Scenario {
             steps: &deleting(PNG),
         },
     ],
-    documents: &[(NEW_MD, Some(PNG)), (OLD_MD, None)],
     leftover: &[],
     start: Start::Unembedded(PNG),
 };
@@ -114,7 +120,6 @@ static TWO_SAVES: Scenario = Scenario {
             steps: &deleting(PNG),
         },
     ],
-    documents: &[(NEW_MD, Some(PNG)), (OLD_MD, None), (OTHER_MD, Some(PNG))],
     leftover: &[],
     start: Start::Unembedded(PNG),
 };
@@ -123,22 +128,13 @@ static A_REPLACEMENT: Scenario = Scenario {
     actors: &[
         Actor {
             name: "the save of notes/report.md",
-            steps: &[
-                Step::Claim(REPORT_MD, OTHER_PNG),
-                Step::Upload(REPORT_MD, OTHER_PNG),
-                Step::Save(REPORT_MD, OTHER_PNG),
-                Step::Release(REPORT_MD, Some(OTHER_PNG)),
-                Step::Mark(None),
-                Step::RemoveObject,
-                Step::RemoveRecord,
-            ],
+            steps: &replacing(REPORT_MD, OTHER_PNG),
         },
         Actor {
             name: "the deletion of the old logo",
             steps: &deleting(PNG),
         },
     ],
-    documents: &[(REPORT_MD, Some(OTHER_PNG))],
     leftover: &[],
     start: Start::Embedded(PNG),
 };
@@ -147,20 +143,13 @@ static A_DOCUMENT_DELETION: Scenario = Scenario {
     actors: &[
         Actor {
             name: "the deletion of notes/report.md",
-            steps: &[
-                Step::RemoveDocument(REPORT_MD),
-                Step::Release(REPORT_MD, None),
-                Step::Mark(None),
-                Step::RemoveObject,
-                Step::RemoveRecord,
-            ],
+            steps: &removing(REPORT_MD),
         },
         Actor {
             name: "the save of notes/copy.md",
             steps: &saving(COPY_MD, PNG),
         },
     ],
-    documents: &[(COPY_MD, Some(PNG))],
     leftover: &[],
     start: Start::Embedded(PNG),
 };
@@ -176,7 +165,6 @@ static A_SAVE_CUT_AFTER_ITS_CLAIM: Scenario = Scenario {
             steps: &deleting(PNG),
         },
     ],
-    documents: &[(OLD_MD, None)],
     leftover: &[(NEW_MD, PNG)],
     start: Start::Unembedded(PNG),
 };
@@ -192,9 +180,53 @@ static A_SAVE_CUT_AFTER_ITS_UPLOAD: Scenario = Scenario {
             steps: &deleting(PNG),
         },
     ],
-    documents: &[(OLD_MD, None)],
     leftover: &[(NEW_MD, PNG)],
     start: Start::Unembedded(PNG),
+};
+
+static TWO_CHANGING_SAVES: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/report.md with another picture",
+            steps: &replacing(REPORT_MD, OTHER_PNG),
+        },
+        Actor {
+            name: "the save of notes/report.md with a third picture",
+            steps: &replacing(REPORT_MD, THIRD_PNG),
+        },
+    ],
+    leftover: &[],
+    start: Start::Embedded(PNG),
+};
+
+static AN_UNCHANGED_SAVE: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/report.md as it is",
+            steps: &replacing(REPORT_MD, PNG),
+        },
+        Actor {
+            name: "the save of notes/report.md with another picture",
+            steps: &replacing(REPORT_MD, OTHER_PNG),
+        },
+    ],
+    leftover: &[],
+    start: Start::Embedded(PNG),
+};
+
+static A_SAVE_AND_A_DELETION_OF_ONE_DOCUMENT: Scenario = Scenario {
+    actors: &[
+        Actor {
+            name: "the save of notes/report.md with another picture",
+            steps: &replacing(REPORT_MD, OTHER_PNG),
+        },
+        Actor {
+            name: "the deletion of notes/report.md",
+            steps: &removing(REPORT_MD),
+        },
+    ],
+    leftover: &[],
+    start: Start::Embedded(PNG),
 };
 
 static TWO_DELETIONS: Scenario = Scenario {
@@ -212,7 +244,6 @@ static TWO_DELETIONS: Scenario = Scenario {
             steps: &saving(NEW_MD, PNG),
         },
     ],
-    documents: &[(NEW_MD, Some(PNG)), (OLD_MD, None)],
     leftover: &[],
     start: Start::Unembedded(PNG),
 };
@@ -249,23 +280,26 @@ impl Holdings {
 }
 
 /// Where one actor is in an order: its next step, the objects its deletion
-/// steps act on, whether its deletion found nothing to mark, and whether its
+/// steps act on, the revision its save read, the save the record its save
+/// replaced or its deletion removed names, the id of its save, drawn when the
+/// run is made, whether its deletion found nothing to mark, and whether its
 /// claim waits for a deletion.
 #[derive(Default)]
 struct Run {
     held: Vec<String>,
     next: usize,
+    read: Option<Revision>,
+    replaced: Option<Replaced>,
+    save: ObjectId,
     stopped: bool,
     waiting: bool,
 }
 
 /// Actors that take their steps in each order: what the store holds before
-/// the first step, each document and the picture it embeds once every actor
-/// finishes, and each claim nothing uses that stays, by its document and
-/// picture.
+/// the first step, and each claim nothing uses that stays, by its document
+/// and picture.
 struct Scenario {
     actors: &'static [Actor],
-    documents: &'static [(&'static str, Option<&'static [u8]>)],
     leftover: &'static [(&'static str, &'static [u8])],
     start: Start,
 }
@@ -279,6 +313,16 @@ enum Start {
     Unembedded(&'static [u8]),
 }
 
+impl Start {
+    /// The documents the store holds before the first step.
+    fn documents(self) -> Documents {
+        match self {
+            Self::Embedded(picture) => BTreeMap::from([(REPORT_MD, Some(picture))]),
+            Self::Unembedded(_) => BTreeMap::from([(OLD_MD, None)]),
+        }
+    }
+}
+
 /// One step of an actor, named for the store's function it runs, with the
 /// document and the picture it acts on. `Mark` marks the object of its
 /// picture, or with none each object the actor's release took a claim from;
@@ -287,7 +331,7 @@ enum Start {
 enum Step {
     Claim(&'static str, &'static [u8]),
     Mark(Option<&'static [u8]>),
-    Release(&'static str, Option<&'static [u8]>),
+    Release(&'static str),
     RemoveDocument(&'static str),
     RemoveObject,
     RemoveRecord,
@@ -295,12 +339,20 @@ enum Step {
     Upload(&'static str, &'static [u8]),
 }
 
+/// Each document of a run and the picture it embeds at `LOGO`, or none, as the
+/// steps taken so far leave them.
+type Documents = BTreeMap<&'static str, Option<&'static [u8]>>;
+
+/// A claim as the end of an order compares it: its document, its path and its
+/// save.
+type Made = (String, String, Option<ObjectId>);
+
 impl Step {
     const fn name(self) -> &'static str {
         match self {
             Self::Claim(..) => "claim",
             Self::Mark(_) => "mark",
-            Self::Release(..) => "release",
+            Self::Release(_) => "release",
             Self::RemoveDocument(_) => "remove_document",
             Self::RemoveObject => "remove_object",
             Self::RemoveRecord => "remove_record",
@@ -310,11 +362,18 @@ impl Step {
     }
 }
 
-/// Asserts what must hold once every actor of `scenario` finishes: what each
-/// step must leave, the documents it ends with, a read of each picture they
-/// embed, no record held by a deletion, and each record's claims exactly
-/// those the documents' files make, with the claims nothing uses it leaves.
-async fn assert_finished(store: &MongoStore, scenario: &Scenario, told: &str) {
+/// Asserts what must hold once every actor of `scenario`, run as `runs`,
+/// finishes: what each step must leave, the documents it ends with, a read of
+/// each picture they embed, no record held by a deletion, and each record's
+/// claims exactly those the documents' files make, each by the save its
+/// document's record names, with the claims nothing uses it leaves.
+async fn assert_finished(
+    store: &MongoStore,
+    scenario: &Scenario,
+    runs: &[Run],
+    documents: &Documents,
+    told: &str,
+) {
     let held = Holdings::of(store).await;
     assert_readable(&held, told);
     let ended: BTreeMap<&str, BTreeMap<String, String>> = held
@@ -322,38 +381,43 @@ async fn assert_finished(store: &MongoStore, scenario: &Scenario, told: &str) {
         .iter()
         .map(|stored| (stored.path.as_str(), stored.files.clone()))
         .collect();
-    let expected: BTreeMap<&str, BTreeMap<String, String>> = scenario
-        .documents
+    let expected: BTreeMap<&str, BTreeMap<String, String>> = documents
         .iter()
-        .map(|&(document, picture)| (document, logo_of(picture)))
+        .map(|(&document, &picture)| (document, logo_of(picture)))
         .collect();
     assert_eq!(ended, expected, "{told}: the documents");
-    let mut made: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    let mut made: BTreeMap<String, BTreeSet<Made>> = BTreeMap::new();
     for stored in &held.documents {
         let at = path(&stored.path);
         for (name, hash) in &stored.files {
             let file = at.beside(name).unwrap();
             let claims = made.entry(hash.clone()).or_default();
-            claims.insert((stored.path.clone(), file.as_str().to_owned()));
+            claims.insert((stored.path.clone(), file.as_str().to_owned(), stored.save));
         }
     }
     for &(document, picture) in scenario.leftover {
         let file = path(document).beside(LOGO).unwrap();
+        let maker = scenario.actors.iter().position(|actor| {
+            actor.steps.iter().any(|step| {
+                matches!(*step, Step::Claim(claimed, bytes) if claimed == document && bytes == picture)
+            })
+        });
+        let save = runs[maker.unwrap()].save;
         let claims = made.entry(file::sha256(picture)).or_default();
-        claims.insert((document.to_owned(), file.as_str().to_owned()));
+        claims.insert((document.to_owned(), file.as_str().to_owned(), Some(save)));
     }
-    let claimed: BTreeMap<String, Vec<(String, String)>> = made
+    let claimed: BTreeMap<String, Vec<Made>> = made
         .into_iter()
         .map(|(hash, claims)| (hash, claims.into_iter().collect()))
         .collect();
-    let recorded: BTreeMap<String, Vec<(String, String)>> = held
+    let recorded: BTreeMap<String, Vec<Made>> = held
         .records
         .iter()
         .map(|record| {
-            let mut claims: Vec<(String, String)> = record
+            let mut claims: Vec<Made> = record
                 .embedded_by
                 .iter()
-                .map(|by| (by.document.clone(), by.path.clone()))
+                .map(|by| (by.document.clone(), by.path.clone(), by.save))
                 .collect();
             claims.sort_unstable();
             (record.id.clone(), claims)
@@ -364,7 +428,7 @@ async fn assert_finished(store: &MongoStore, scenario: &Scenario, told: &str) {
         held.records.iter().all(|record| !record.deleting),
         "{told}: a deletion still holds a record"
     );
-    for &(document, picture) in scenario.documents {
+    for (&document, &picture) in documents {
         if let Some(bytes) = picture {
             let at = path(document);
             let read = store.read_embedded(&at, &at.beside(LOGO).unwrap()).await;
@@ -374,9 +438,10 @@ async fn assert_finished(store: &MongoStore, scenario: &Scenario, told: &str) {
 }
 
 /// Asserts what each step must leave: each file a document names is in the
-/// bucket, and its record holds the document's claim; each object in the
-/// bucket has a record; and each record that says its object is stored, and
-/// that no deletion holds, has its object in the bucket.
+/// bucket, and its record holds the claim of the save the document's record
+/// names; each object in the bucket has a record; and each record that says
+/// its object is stored, and that no deletion holds, has its object in the
+/// bucket.
 fn assert_readable(held: &Holdings, told: &str) {
     for document in &held.documents {
         let at = path(&document.path);
@@ -386,11 +451,14 @@ fn assert_readable(held: &Holdings, told: &str) {
                 held.objects.contains(&object),
                 "{told}: {at} embeds {name}, whose object {object} is gone"
             );
-            let made = claim(&document.path, at.beside(name).unwrap().as_str());
+            let file = at.beside(name).unwrap();
+            let made = |by: &Claim| {
+                by.document == document.path && by.path == file.as_str() && by.save == document.save
+            };
             let record = held.records.iter().find(|record| record.id == *hash);
             assert!(
-                record.is_some_and(|found| found.embedded_by.contains(&made)),
-                "{told}: {at} embeds {name}, and no record of {object} holds its claim"
+                record.is_some_and(|found| found.embedded_by.iter().any(made)),
+                "{told}: {at} embeds {name}, and no record of {object} holds the claim of the save its record names"
             );
         }
     }
@@ -425,7 +493,8 @@ fn back_from_mongodb(source: &str) -> String {
         files: BTreeMap::new(),
         id: ObjectId::new(),
         path: "a.md".to_owned(),
-        revision: revision_of(&archie).0,
+        revision: revision_of(&archie, &BTreeMap::new()).0,
+        save: None,
     };
     let back = from_record(to_record(&stored).unwrap()).unwrap();
     write(&back.document, &options).unwrap()
@@ -434,35 +503,44 @@ fn back_from_mongodb(source: &str) -> String {
 /// Puts in `store` what `start` says it holds before the first step.
 async fn begin(store: &MongoStore, start: Start) {
     match start {
-        Start::Embedded(picture) => save(store, REPORT_MD, &report_with(picture)).await,
+        Start::Embedded(picture) => {
+            save(store, REPORT_MD, &report_with(picture)).await;
+        }
         Start::Unembedded(picture) => {
             save(store, OLD_MD, &report_with(picture)).await;
             let old = path(OLD_MD);
             let without = parse("# Report\n").document;
-            let none = BTreeMap::new();
-            store
-                .save(&old, &without, &none, &Precondition::None)
+            let read = store
+                .revision_read(&old, &Precondition::None)
                 .await
                 .unwrap();
-            let released = store.release(&old, &none).await;
+            let none = BTreeMap::new();
+            let saved = store.save(&old, &without, &none, &read, ObjectId::new());
+            let (_, replaced) = saved.await.unwrap();
+            let released = store.release(&old, &replaced).await;
             assert_eq!(released, Ok(vec![file::sha256(picture)]));
         }
     }
 }
 
-/// A claim of the document at `document` on the file at `path`.
-fn claim(document: &str, path: &str) -> Claim {
-    Claim {
-        document: document.to_owned(),
-        path: path.to_owned(),
-    }
+/// A claim of the document at `document` on the file at `path`, as claims
+/// are compared: by their document and path.
+fn claim(document: &str, path: &str) -> (String, String) {
+    (document.to_owned(), path.to_owned())
 }
 
-/// The claims on the object of `bytes`, as its record holds them.
-async fn claims_on(store: &MongoStore, bytes: &[u8]) -> Vec<Claim> {
-    let record = object_record(store, bytes).await.unwrap();
-    let object: StoredObject = bson::deserialize_from_document(record).unwrap();
-    object.embedded_by
+/// The claims on the object of `bytes`, as its record holds them, by their
+/// document and path.
+async fn claims_on(store: &MongoStore, bytes: &[u8]) -> Vec<(String, String)> {
+    let made = held_claims(store, bytes).await.into_iter();
+    made.map(|by| (by.document, by.path)).collect()
+}
+
+/// Claims the object of `file` for `REPORT_MD` by `save`, and uploads it.
+async fn claim_and_upload(store: &MongoStore, file: &Embedded<'_>, save: ObjectId) {
+    let claimed = store.try_claim(&path(REPORT_MD), file, save).await;
+    assert_eq!(claimed, Ok(true));
+    store.upload(file).await.unwrap();
 }
 
 /// Gets the document at `path` from `from` in `form` and puts those bytes at
@@ -579,16 +657,24 @@ async fn finishes_a_stopped_deletion(store: &MongoStore, object_removed: bool) {
     let files = logo_files(NEW_MD, PNG);
     let picture = embedded(&new, &parse(REPORT).document, &files).unwrap();
     let logo = &picture[0];
-    assert_eq!(store.try_claim(&new, logo).await, Ok(false));
+    let claiming = ObjectId::new();
+    assert_eq!(store.try_claim(&new, logo, claiming).await, Ok(false));
 
     assert_eq!(store.finish_deletions().await, Ok(vec![hash]));
     assert_eq!(object_record(store, PNG).await, None);
     assert_eq!(store.files.list(None).await, Ok(Vec::new()));
 
-    assert_eq!(store.try_claim(&new, logo).await, Ok(true));
+    assert_eq!(store.try_claim(&new, logo, claiming).await, Ok(true));
     save(store, NEW_MD, &report_with(PNG)).await;
     let read = store.read_embedded(&new, logo.path).await;
     assert_eq!(read, Ok(PNG.to_vec()));
+}
+
+/// The claims on the object of `bytes`, as its record holds them.
+async fn held_claims(store: &MongoStore, bytes: &[u8]) -> Vec<Claim> {
+    let record = object_record(store, bytes).await.unwrap();
+    let object: StoredObject = bson::deserialize_from_document(record).unwrap();
+    object.embedded_by
 }
 
 /// Runs `scenario` over the collection `files` of the database `name`, its
@@ -661,6 +747,44 @@ fn logo_of(picture: Option<&[u8]>) -> BTreeMap<String, String> {
     })
 }
 
+/// Puts in `store` the records a store written before records and claims
+/// named a save holds for `REPORT_MD` embedding `PNG`: the document's revision
+/// the SHA-256 of its text alone, no save in its record, and a claim with no
+/// save. Gives that revision.
+async fn old_records(store: &MongoStore) -> Revision {
+    let report = path(REPORT_MD);
+    let document = parse(REPORT).document;
+    let text = write(&document, &WriteOptions::default()).unwrap();
+    let old = file::revision(text.as_bytes());
+    let record = to_record(&StoredDocument {
+        document,
+        files: logo_of(Some(PNG)),
+        id: ObjectId::new(),
+        path: report.as_str().to_owned(),
+        revision: old.0.clone(),
+        save: None,
+    })
+    .unwrap();
+    store.collection.insert_one(record).await.unwrap();
+    let object = object_of(PNG);
+    let claimed = doc! {
+        "_id": file::sha256(PNG),
+        "object": object.as_str(),
+        "content_type": "image/png",
+        "size": 27_i64,
+        "description": "Logo",
+        "stored": true,
+        "embedded_by": [{ "document": REPORT_MD, "path": "notes/media/logo.png" }],
+    };
+    store.objects.insert_one(claimed).await.unwrap();
+    store
+        .files
+        .write(&object, PNG, &Precondition::Absent)
+        .await
+        .unwrap();
+    old
+}
+
 fn names(paths: &[StorePath]) -> Vec<&str> {
     paths.iter().map(StorePath::as_str).collect()
 }
@@ -686,6 +810,44 @@ fn nested_items(count: usize) -> String {
         text.push_str("- item\n");
     }
     text
+}
+
+/// Takes the steps of two saves of `REPORT_MD` in the order of the report of
+/// two overlapping saves, each reading the revision under `precondition`: the
+/// save of `OTHER_PNG` claims and uploads it, the save of the document as it is
+/// claims, uploads, saves and tidies, a deletion of `OTHER_PNG` tries to mark
+/// it, then the first save saves and tidies.
+async fn saves_in_the_order_of_the_report(store: &MongoStore, precondition: &Precondition) {
+    let report = path(REPORT_MD);
+    let document = parse(REPORT).document;
+    save(store, REPORT_MD, &report_with(PNG)).await;
+    let first = save_of(store, REPORT_MD).await.unwrap();
+    let with_other = logo_files(REPORT_MD, OTHER_PNG);
+    let other = embedded(&report, &document, &with_other).unwrap();
+    let with_same = logo_files(REPORT_MD, PNG);
+    let same = embedded(&report, &document, &with_same).unwrap();
+
+    let read_other = store.revision_read(&report, precondition).await.unwrap();
+    let save_other = ObjectId::new();
+    claim_and_upload(store, &other[0], save_other).await;
+
+    let read_same = store.revision_read(&report, precondition).await.unwrap();
+    let save_same = ObjectId::new();
+    claim_and_upload(store, &same[0], save_same).await;
+    let wrote_same = save_and_tidy(store, PNG, &read_same, save_same, first).await;
+    assert_eq!(wrote_same, read_same);
+
+    assert_eq!(saves_on(store, OTHER_PNG).await, [Some(save_other)]);
+    assert_eq!(store.mark(&other[0].hash).await, Ok(false));
+
+    save_and_tidy(store, OTHER_PNG, &read_other, save_other, save_same).await;
+    let read = store
+        .read_embedded(&report, &path("notes/media/logo.png"))
+        .await;
+    assert_eq!(read, Ok(OTHER_PNG.to_vec()));
+    assert_eq!(report_claim(store, OTHER_PNG).await, save_other);
+    assert_eq!(object_record(store, PNG).await, None);
+    assert_eq!(store.files.list(None).await, Ok(vec![object_of(OTHER_PNG)]));
 }
 
 /// The path of the object of `bytes` in the bucket of the store's files.
@@ -715,6 +877,16 @@ fn plain_tree(document: &RawDocument) -> RawDocument {
     from_json(&to_json(document).unwrap()).unwrap()
 }
 
+/// Asserts that the object of `bytes` holds one claim, on the logo of
+/// `REPORT_MD`, by the save the document's record names, and gives that save.
+async fn report_claim(store: &MongoStore, bytes: &[u8]) -> ObjectId {
+    let save = save_of(store, REPORT_MD).await.unwrap();
+    let claims = [claim(REPORT_MD, "notes/media/logo.png")];
+    assert_eq!(claims_on(store, bytes).await, claims);
+    assert_eq!(saves_on(store, bytes).await, [Some(save)]);
+    save
+}
+
 /// `REPORT` with `picture` at `media/logo.png`.
 fn report_with(picture: &[u8]) -> BundledDocument {
     let files = BTreeMap::from([("media/logo.png".to_owned(), picture.to_vec())]);
@@ -728,6 +900,7 @@ fn report_with(picture: &[u8]) -> BundledDocument {
 /// taken meanwhile.
 async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
     let told = told(scenario, order);
+    let mut documents = scenario.start.documents();
     let mut runs: Vec<Run> = scenario.actors.iter().map(|_| Run::default()).collect();
     let mut turns: VecDeque<usize> = order.iter().copied().collect();
     let mut deferred = Vec::new();
@@ -741,7 +914,7 @@ async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
             continue;
         }
         let step = scenario.actors[actor].steps[current.next];
-        if take(store, step, current).await {
+        if take(store, step, current, &mut documents).await {
             current.next += 1;
         } else if matches!(step, Step::Claim(..)) {
             current.waiting = true;
@@ -757,7 +930,7 @@ async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
             for (index, blocked) in waiting {
                 let retried = scenario.actors[index].steps[blocked.next];
                 assert!(
-                    take(store, retried, blocked).await,
+                    take(store, retried, blocked, &mut documents).await,
                     "{told}: a claim still waits once the deletion finished"
                 );
                 blocked.waiting = false;
@@ -773,15 +946,82 @@ async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
         runs.iter().all(|done| !done.waiting),
         "{told}: a claim still waits after the last step"
     );
-    assert_finished(store, scenario, &told).await;
+    assert_finished(store, scenario, &runs, &documents, &told).await;
 }
 
-/// Puts `bundle` at `at` in `store`, replacing any document there.
-async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) {
+/// Reads the revision of the document at `document` for the actor whose run
+/// is `at`, when it has read none.
+async fn read_once(store: &MongoStore, document: &StorePath, at: &mut Run) {
+    if at.read.is_none() {
+        let read = store.revision_read(document, &Precondition::None).await;
+        at.read = Some(read.unwrap());
+    }
+}
+
+/// The five steps of the deletion of the document at `document`.
+const fn removing(document: &'static str) -> [Step; 5] {
+    [
+        Step::RemoveDocument(document),
+        Step::Release(document),
+        Step::Mark(None),
+        Step::RemoveObject,
+        Step::RemoveRecord,
+    ]
+}
+
+/// The seven steps of a save of the document at `document` embedding
+/// `picture` at `LOGO`, followed by the deletion of each object its release
+/// took a claim from.
+const fn replacing(document: &'static str, picture: &'static [u8]) -> [Step; 7] {
+    [
+        Step::Claim(document, picture),
+        Step::Upload(document, picture),
+        Step::Save(document, picture),
+        Step::Release(document),
+        Step::Mark(None),
+        Step::RemoveObject,
+        Step::RemoveRecord,
+    ]
+}
+
+/// Puts `bundle` at `at` in `store`, replacing any document there, and gives
+/// the revision written.
+async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) -> Revision {
     let options = WriteOptions::default();
     put_bundle(store, &path(at), bundle, &options, &Precondition::None)
         .await
-        .unwrap();
+        .unwrap()
+}
+
+/// Saves `REPORT` at `REPORT_MD` with `picture` at `LOGO`, by `save`, where the
+/// record is still at `read`, asserts that the record it replaced names
+/// `replacing`, tidies, and gives the revision written.
+async fn save_and_tidy(
+    store: &MongoStore,
+    picture: &[u8],
+    read: &Revision,
+    save: ObjectId,
+    replacing: ObjectId,
+) -> Revision {
+    let report = path(REPORT_MD);
+    let (document, files) = (parse(REPORT).document, logo_of(Some(picture)));
+    let saved = store.save(&report, &document, &files, read, save);
+    let (wrote, replaced) = saved.await.unwrap();
+    assert_eq!(replaced, Replaced::Save(replacing));
+    store.tidy(&report, &replaced).await.unwrap();
+    wrote
+}
+
+/// The save the record of the document at `document` names.
+async fn save_of(store: &MongoStore, document: &str) -> Option<ObjectId> {
+    let found = store.find(on_path(&path(document)).unwrap()).await.unwrap();
+    found[0].save
+}
+
+/// The save of each claim on the object of `bytes`, as its record holds them.
+async fn saves_on(store: &MongoStore, bytes: &[u8]) -> Vec<Option<ObjectId>> {
+    let made = held_claims(store, bytes).await.into_iter();
+    made.map(|by| by.save).collect()
 }
 
 /// The four steps of a save of the document at `document` embedding
@@ -791,7 +1031,7 @@ const fn saving(document: &'static str, picture: &'static [u8]) -> [Step; 4] {
         Step::Claim(document, picture),
         Step::Upload(document, picture),
         Step::Save(document, picture),
-        Step::Release(document, Some(picture)),
+        Step::Release(document),
     ]
 }
 
@@ -800,15 +1040,21 @@ fn single(value: Value) -> Mapping {
     Mapping::from([("a".to_owned(), value)])
 }
 
-/// Takes `step` for the actor whose run is `at`: `false` when its claim
-/// waits for a deletion, or its mark finds nothing to mark.
-async fn take(store: &MongoStore, step: Step, at: &mut Run) -> bool {
+/// Takes `step` for the actor whose run is `at`, keeping `documents` as the
+/// step leaves them: `false` when its claim waits for a deletion, or its mark
+/// finds nothing to mark.
+///
+/// A save reads the revision at its first claim. Its release takes back the
+/// claims of the save the record it replaced names, or its own when it lost;
+/// a deletion's, those of the save the record it removed names.
+async fn take(store: &MongoStore, step: Step, at: &mut Run, documents: &mut Documents) -> bool {
     match step {
         Step::Claim(document, picture) => {
             let saved = path(document);
+            read_once(store, &saved, at).await;
             let files = logo_files(document, picture);
             for file in embedded(&saved, &parse(REPORT).document, &files).unwrap() {
-                if !store.try_claim(&saved, &file).await.unwrap() {
+                if !store.try_claim(&saved, &file, at.save).await.unwrap() {
                     return false;
                 }
             }
@@ -826,17 +1072,19 @@ async fn take(store: &MongoStore, step: Step, at: &mut Run) -> bool {
             at.held = marked;
             return !at.held.is_empty();
         }
-        Step::Release(document, picture) => {
-            at.held = store
-                .release(&path(document), &logo_of(picture))
-                .await
-                .unwrap();
+        Step::Release(document) => {
+            let of = at.replaced.unwrap_or(Replaced::Save(at.save));
+            at.held = store.release(&path(document), &of).await.unwrap();
         }
         Step::RemoveDocument(document) => {
-            store
-                .remove_document(&path(document), &Precondition::None)
+            let removed = path(document);
+            let read = store
+                .revision_read(&removed, &Precondition::None)
                 .await
                 .unwrap();
+            let named = store.remove_document_at(&removed, &read).await;
+            at.replaced = Some(named.unwrap());
+            documents.remove(document);
         }
         Step::RemoveObject => {
             for hash in &at.held {
@@ -849,12 +1097,17 @@ async fn take(store: &MongoStore, step: Step, at: &mut Run) -> bool {
             }
         }
         Step::Save(document, picture) => {
-            let saved = parse(REPORT).document;
+            let saved = path(document);
+            let read = at.read.clone().unwrap();
             let files = logo_of(Some(picture));
-            store
-                .save(&path(document), &saved, &files, &Precondition::None)
-                .await
-                .unwrap();
+            let written = store
+                .save(&saved, &parse(REPORT).document, &files, &read, at.save)
+                .await;
+            if written != Err(StoreError::Conflict(saved)) {
+                let (_, replaced) = written.unwrap();
+                at.replaced = Some(replaced);
+                documents.insert(document, Some(picture));
+            }
         }
         Step::Upload(document, picture) => {
             let saved = path(document);
@@ -912,7 +1165,7 @@ async fn the_sample_reads_back_finds_and_refuses_a_second_file_at_a_path() {
             .unwrap();
         let done = store.read(&path).await.unwrap();
         assert_eq!(done.bytes, b"# Done\n");
-        assert_eq!(done.revision, revision_of("# Done\n"));
+        assert_eq!(done.revision, revision_of("# Done\n", &BTreeMap::new()));
         assert!(store.capabilities().atomic_preconditions);
     })
     .await;
@@ -1018,7 +1271,7 @@ async fn a_write_with_no_precondition_inserts_then_replaces_the_one_record_at_th
             .write(&path, b"# Done\n", &Precondition::None)
             .await
             .unwrap();
-        assert_eq!(revision, revision_of("# Done\n"));
+        assert_eq!(revision, revision_of("# Done\n", &BTreeMap::new()));
         let all = store.find(Document::new()).await.unwrap();
         assert_eq!(paths_of(&all), ["notes/task.md"]);
         assert_eq!(all[0].revision, revision.0);
@@ -1062,7 +1315,7 @@ async fn a_query_finds_the_files_by_their_frontmatter_and_compares_dates_as_date
         let due = store.find(before).await.unwrap();
         assert_eq!(paths_of(&due), ["notes/a.md"]);
         let archie = write(&parse(files[0].1).document, &WriteOptions::default()).unwrap();
-        assert_eq!(due[0].revision, revision_of(&archie).0);
+        assert_eq!(due[0].revision, revision_of(&archie, &BTreeMap::new()).0);
     })
     .await;
 }
@@ -1149,7 +1402,7 @@ async fn a_record_100_levels_deep_is_stored_and_one_101_deep_is_not() {
             .await
             .unwrap();
         let text = write(&hundred, &WriteOptions::default()).unwrap();
-        assert_eq!(revision, revision_of(&text));
+        assert_eq!(revision, revision_of(&text, &BTreeMap::new()));
         let read = store.read_document(&path).await.unwrap();
         assert_eq!(read, (plain_tree(&hundred), revision));
 
@@ -1339,6 +1592,7 @@ async fn a_save_stores_the_object_its_record_and_the_files_map_and_a_get_gives_e
         let hash = file::sha256(PNG);
         let object = object_of(PNG);
         assert_eq!(store.files.read(&object).await.unwrap().bytes, PNG);
+        let save = save_of(&store, "notes/report.md").await.unwrap();
         let record = doc! {
             "_id": hash.as_str(),
             "object": object.as_str(),
@@ -1346,7 +1600,11 @@ async fn a_save_stores_the_object_its_record_and_the_files_map_and_a_get_gives_e
             "size": 27_i64,
             "description": "Logo",
             "stored": true,
-            "embedded_by": [{ "document": "notes/report.md", "path": "notes/media/logo.png" }],
+            "embedded_by": [{
+                "document": "notes/report.md",
+                "path": "notes/media/logo.png",
+                "save": save,
+            }],
         };
         assert_eq!(object_record(&store, PNG).await, Some(record));
         let documents = store.find(Document::new()).await.unwrap();
@@ -1401,6 +1659,7 @@ async fn an_embed_with_no_alt_gives_an_empty_description_and_a_note_s_own_embed_
 async fn a_second_save_of_the_same_document_claims_its_object_once_and_uploads_nothing() {
     in_database("archie_test_save_twice", async |store| {
         save(&store, "notes/report.md", &report_with(PNG)).await;
+        let first = save_of(&store, "notes/report.md").await;
         let object = object_of(PNG);
         // With the object gone, only an upload could put it back.
         store
@@ -1409,8 +1668,8 @@ async fn a_second_save_of_the_same_document_claims_its_object_once_and_uploads_n
             .await
             .unwrap();
         save(&store, "notes/report.md", &report_with(PNG)).await;
-        let claims = [claim("notes/report.md", "notes/media/logo.png")];
-        assert_eq!(claims_on(&store, PNG).await, claims);
+        let second = report_claim(&store, PNG).await;
+        assert_ne!(Some(second), first);
         let record = object_record(&store, PNG).await.unwrap();
         assert!(record.get_bool("stored").unwrap());
         let missing = StoreError::NotFound(object.clone());
@@ -1431,6 +1690,11 @@ async fn two_documents_embedding_the_same_bytes_make_one_object_and_one_record_w
             claim("drafts/report.md", "drafts/media/logo.png"),
         ];
         assert_eq!(claims_on(&store, PNG).await, claims);
+        let saves = [
+            save_of(&store, "notes/report.md").await,
+            save_of(&store, "drafts/report.md").await,
+        ];
+        assert_eq!(saves_on(&store, PNG).await, saves);
         assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
     })
     .await;
@@ -1441,8 +1705,7 @@ async fn a_save_that_replaces_a_picture_deletes_the_old_object_and_its_record() 
     in_database("archie_test_replace", async |store| {
         save(&store, "notes/report.md", &report_with(PNG)).await;
         save(&store, "notes/report.md", &report_with(OTHER_PNG)).await;
-        let claims = [claim("notes/report.md", "notes/media/logo.png")];
-        assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        report_claim(&store, OTHER_PNG).await;
         assert_eq!(object_record(&store, PNG).await, None);
         let objects = store.files.list(None).await.unwrap();
         assert_eq!(objects, [object_of(OTHER_PNG)]);
@@ -1458,15 +1721,22 @@ async fn each_step_of_a_save_that_replaces_a_picture_leaves_the_file_reading_one
     in_database("archie_test_replace_steps", async |store| {
         let report = path("notes/report.md");
         let logo = path("notes/media/logo.png");
-        save(&store, "notes/report.md", &report_with(PNG)).await;
+        let read = save(&store, "notes/report.md", &report_with(PNG)).await;
+        let first = save_of(&store, "notes/report.md").await.unwrap();
         let document = parse(REPORT).document;
         let files = BTreeMap::from([(logo.clone(), OTHER_PNG.to_vec())]);
         let replaced = embedded(&report, &document, &files).unwrap();
         let picture = &replaced[0];
         let claims = [claim("notes/report.md", "notes/media/logo.png")];
+        let replacing = ObjectId::new();
 
-        assert_eq!(store.try_claim(&report, picture).await, Ok(true));
+        assert_eq!(
+            store.revision_read(&report, &Precondition::None).await,
+            Ok(read.clone())
+        );
+        assert_eq!(store.try_claim(&report, picture, replacing).await, Ok(true));
         assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        assert_eq!(saves_on(&store, OTHER_PNG).await, [Some(replacing)]);
         let record = object_record(&store, OTHER_PNG).await.unwrap();
         assert!(!record.get_bool("stored").unwrap());
         let missing = StoreError::NotFound(picture.object.clone());
@@ -1479,17 +1749,20 @@ async fn each_step_of_a_save_that_replaces_a_picture_leaves_the_file_reading_one
         assert_eq!(store.read(&logo).await.unwrap().bytes, PNG);
 
         let hashes = BTreeMap::from([("media/logo.png".to_owned(), picture.hash.clone())]);
-        store
-            .save(&report, &document, &hashes, &Precondition::None)
+        let (_, named) = store
+            .save(&report, &document, &hashes, &read, replacing)
             .await
             .unwrap();
+        assert_eq!(named, Replaced::Save(first));
         assert_eq!(claims_on(&store, PNG).await, claims);
+        assert_eq!(saves_on(&store, PNG).await, [Some(first)]);
         assert_eq!(store.read(&logo).await.unwrap().bytes, OTHER_PNG);
 
-        let released = store.release(&report, &hashes).await;
+        let released = store.release(&report, &named).await;
         assert_eq!(released, Ok(vec![file::sha256(PNG)]));
         assert_eq!(claims_on(&store, PNG).await, []);
         assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        assert_eq!(saves_on(&store, OTHER_PNG).await, [Some(replacing)]);
         assert_eq!(store.read(&logo).await.unwrap().bytes, OTHER_PNG);
     })
     .await;
@@ -1503,7 +1776,11 @@ async fn a_read_of_a_files_own_path_gives_the_object_the_record_of_its_document_
         let files = BTreeMap::from([(path("notes/media/logo.png"), OTHER_PNG.to_vec())]);
         let unsaved = embedded(&draft, &parse(REPORT).document, &files).unwrap();
         // A claim whose document was never saved names no object.
-        assert_eq!(store.try_claim(&draft, &unsaved[0]).await, Ok(true));
+        let unsaved_save = ObjectId::new();
+        assert_eq!(
+            store.try_claim(&draft, &unsaved[0], unsaved_save).await,
+            Ok(true)
+        );
         let logo = path("notes/media/logo.png");
         let read = store.read(&logo).await.unwrap();
         let expected = Stored {
@@ -1527,7 +1804,8 @@ async fn a_record_written_with_no_files_reads_as_a_document_with_no_files() {
             files: BTreeMap::new(),
             id: ObjectId::new(),
             path: report.as_str().to_owned(),
-            revision: revision_of(REPORT).0,
+            revision: revision_of(REPORT, &BTreeMap::new()).0,
+            save: None,
         })
         .unwrap();
         record.remove("files");
@@ -1558,7 +1836,10 @@ async fn a_claim_while_a_deletion_holds_the_record_is_refused_and_changes_nothin
             "embedded_by": [],
         };
         store.objects.insert_one(held.clone()).await.unwrap();
-        assert_eq!(store.try_claim(&report, &picture[0]).await, Ok(false));
+        assert_eq!(
+            store.try_claim(&report, &picture[0], ObjectId::new()).await,
+            Ok(false)
+        );
         assert_eq!(object_record(&store, PNG).await, Some(held));
     })
     .await;
@@ -1586,6 +1867,7 @@ async fn a_plain_write_that_still_embeds_a_file_keeps_it() {
     in_database("archie_test_plain_write_keeps", async |store| {
         let report = path("notes/report.md");
         save(&store, "notes/report.md", &report_with(PNG)).await;
+        let first = save_of(&store, "notes/report.md").await;
         store
             .write(&report, REPORT.as_bytes(), &Precondition::None)
             .await
@@ -1595,8 +1877,8 @@ async fn a_plain_write_that_still_embeds_a_file_keeps_it() {
         let documents = store.find(Document::new()).await.unwrap();
         let files = BTreeMap::from([("media/logo.png".to_owned(), file::sha256(PNG))]);
         assert_eq!(documents[0].files, files);
-        let claims = [claim("notes/report.md", "notes/media/logo.png")];
-        assert_eq!(claims_on(&store, PNG).await, claims);
+        let kept = report_claim(&store, PNG).await;
+        assert_ne!(Some(kept), first);
         assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
     })
     .await;
@@ -1652,10 +1934,13 @@ async fn a_plain_write_that_still_embeds_a_note_keeps_the_note_and_the_files_it_
             .await
             .unwrap();
         assert_eq!(get(&store, &report, Missing::Refuse).await.unwrap(), bundle);
+        let save = save_of(&store, "notes/report.md").await;
         let chart = [claim("notes/report.md", "notes/media/chart.png")];
         assert_eq!(claims_on(&store, PNG).await, chart);
+        assert_eq!(saves_on(&store, PNG).await, [save]);
         let intro = [claim("notes/report.md", "notes/parts/intro.md")];
         assert_eq!(claims_on(&store, INTRO.as_bytes()).await, intro);
+        assert_eq!(saves_on(&store, INTRO.as_bytes()).await, [save]);
     })
     .await;
 }
@@ -1678,6 +1963,8 @@ async fn a_deletion_of_a_document_releases_its_claims_and_deletes_each_object_it
         store.delete(&report, &Precondition::None).await.unwrap();
         let drafts = [claim("drafts/report.md", "drafts/media/logo.png")];
         assert_eq!(claims_on(&store, PNG).await, drafts);
+        let draft_save = save_of(&store, "drafts/report.md").await;
+        assert_eq!(saves_on(&store, PNG).await, [draft_save]);
         assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
 
         let draft = path("drafts/report.md");
@@ -1714,9 +2001,256 @@ async fn finishing_deletions_where_no_deletion_holds_a_record_changes_nothing() 
         let record = object_record(&store, PNG).await;
         assert_eq!(store.finish_deletions().await, Ok(Vec::new()));
         assert_eq!(object_record(&store, PNG).await, record);
+        report_claim(&store, PNG).await;
+        assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn two_saves_with_no_precondition_in_the_order_of_the_report_keep_the_picture_the_record_names()
+ {
+    in_database("archie_test_report_order_none", async |store| {
+        saves_in_the_order_of_the_report(&store, &Precondition::None).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn two_saves_matching_one_revision_in_the_order_of_the_report_keep_the_picture_the_record_names()
+ {
+    in_database("archie_test_report_order_matches", async |store| {
+        let report = path(REPORT_MD);
+        let start = report_with(PNG);
+        let options = WriteOptions::default();
+        let text = write(start.document(), &options).unwrap();
+        let revision = revision_of(&text, &logo_of(Some(PNG)));
+        saves_in_the_order_of_the_report(&store, &Precondition::Matches(revision.clone())).await;
+        let (_, ended) = store.read_document(&report).await.unwrap();
+        assert_ne!(ended, revision);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_save_that_reads_the_revision_a_revised_save_wrote_keeps_its_claim_through_that_save_s_release()
+ {
+    in_database("archie_test_report_order_revised", async |store| {
+        let report = path(REPORT_MD);
+        let logo = path("notes/media/logo.png");
+        save(&store, REPORT_MD, &report_with(PNG)).await;
+        let first = save_of(&store, REPORT_MD).await.unwrap();
+        let revised = parse(REVISED_REPORT).document;
+        let with_same = logo_files(REPORT_MD, PNG);
+        let same = embedded(&report, &revised, &with_same).unwrap();
+        let read_revised = store
+            .revision_read(&report, &Precondition::None)
+            .await
+            .unwrap();
+        let save_revised = ObjectId::new();
+        claim_and_upload(&store, &same[0], save_revised).await;
+        let files_same = logo_of(Some(PNG));
+        let (wrote_revised, replaced_first) = store
+            .save(&report, &revised, &files_same, &read_revised, save_revised)
+            .await
+            .unwrap();
+        assert_eq!(replaced_first, Replaced::Save(first));
+
+        let document = parse(REPORT).document;
+        let with_other = logo_files(REPORT_MD, OTHER_PNG);
+        let other = embedded(&report, &document, &with_other).unwrap();
+        let matched = Precondition::Matches(wrote_revised.clone());
+        let read_other = store.revision_read(&report, &matched).await.unwrap();
+        assert_eq!(read_other, wrote_revised);
+        let save_other = ObjectId::new();
+        claim_and_upload(&store, &other[0], save_other).await;
+
+        store.tidy(&report, &replaced_first).await.unwrap();
+        let kept = [claim(REPORT_MD, logo.as_str())];
+        assert_eq!(claims_on(&store, OTHER_PNG).await, kept);
+        assert_eq!(saves_on(&store, OTHER_PNG).await, [Some(save_other)]);
+        assert_eq!(store.mark(&other[0].hash).await, Ok(false));
+
+        save_and_tidy(&store, OTHER_PNG, &read_other, save_other, save_revised).await;
+        let read = store.read_embedded(&report, &logo).await;
+        assert_eq!(read, Ok(OTHER_PNG.to_vec()));
+        assert_eq!(report_claim(&store, OTHER_PNG).await, save_other);
+        assert_eq!(object_record(&store, PNG).await, None);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn of_two_saves_that_both_change_a_document_the_second_is_a_conflict_and_gives_back_its_picture()
+ {
+    in_database("archie_test_two_changing_saves", async |store| {
+        let report = path(REPORT_MD);
+        let document = parse(REPORT).document;
+        save(&store, REPORT_MD, &report_with(PNG)).await;
+        let first = save_of(&store, REPORT_MD).await.unwrap();
+        let with_other = logo_files(REPORT_MD, OTHER_PNG);
+        let other = embedded(&report, &document, &with_other).unwrap();
+        let with_third = logo_files(REPORT_MD, THIRD_PNG);
+        let third = embedded(&report, &document, &with_third).unwrap();
+        let read = store
+            .revision_read(&report, &Precondition::None)
+            .await
+            .unwrap();
+        let (save_other, save_third) = (ObjectId::new(), ObjectId::new());
+        claim_and_upload(&store, &other[0], save_other).await;
+        claim_and_upload(&store, &third[0], save_third).await;
+        let files_other = logo_of(Some(OTHER_PNG));
+        let (wrote, replaced) = store
+            .save(&report, &document, &files_other, &read, save_other)
+            .await
+            .unwrap();
+        assert_eq!(replaced, Replaced::Save(first));
+
+        let files_third = logo_of(Some(THIRD_PNG));
+        let lost = store
+            .store(&report, &document, &files_third, &read, save_third)
+            .await;
+        assert_eq!(lost, Err(StoreError::Conflict(report.clone())));
+        let (_, kept) = store.read_document(&report).await.unwrap();
+        assert_eq!(kept, wrote);
+        assert_eq!(object_record(&store, THIRD_PNG).await, None);
+        assert_eq!(report_claim(&store, OTHER_PNG).await, save_other);
+        assert_eq!(saves_on(&store, PNG).await, [Some(first)]);
+
+        store.tidy(&report, &replaced).await.unwrap();
+        let back = get(&store, &report, Missing::Refuse).await.unwrap();
+        assert_eq!(back, report_with(OTHER_PNG));
+        assert_eq!(object_record(&store, PNG).await, None);
+        assert_eq!(store.files.list(None).await, Ok(vec![object_of(OTHER_PNG)]));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_write_matching_a_revision_the_record_no_longer_has_is_a_conflict_and_gives_back_its_claims()
+ {
+    in_database("archie_test_stale_matches", async |store| {
+        let report = path(REPORT_MD);
+        let first = save(&store, REPORT_MD, &report_with(PNG)).await;
+        let stale = Precondition::Matches(first);
+        let other = logo_files(REPORT_MD, OTHER_PNG);
+        store
+            .write_with_embedded(&report, REPORT, &other, &stale)
+            .await
+            .unwrap();
+        let third = logo_files(REPORT_MD, THIRD_PNG);
+        let lost = store
+            .write_with_embedded(&report, REPORT, &third, &stale)
+            .await;
+        assert_eq!(lost, Err(StoreError::Conflict(report.clone())));
+        assert_eq!(object_record(&store, THIRD_PNG).await, None);
+        let plain = store.write(&report, REPORT.as_bytes(), &stale).await;
+        assert_eq!(plain, Err(StoreError::Conflict(report.clone())));
+
+        let back = get(&store, &report, Missing::Refuse).await.unwrap();
+        assert_eq!(back, report_with(OTHER_PNG));
+        report_claim(&store, OTHER_PNG).await;
+        assert_eq!(store.files.list(None).await, Ok(vec![object_of(OTHER_PNG)]));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_record_written_before_the_revision_covered_its_files_is_saved_matching_its_revision() {
+    in_database("archie_test_old_record_matches", async |store| {
+        let report = path(REPORT_MD);
+        let old = old_records(&store).await;
         let claims = [claim(REPORT_MD, "notes/media/logo.png")];
         assert_eq!(claims_on(&store, PNG).await, claims);
-        assert_eq!(store.files.list(None).await.unwrap(), [object_of(PNG)]);
+        assert_eq!(saves_on(&store, PNG).await, [None]);
+        assert_eq!(save_of(&store, REPORT_MD).await, None);
+        let files = logo_files(REPORT_MD, PNG);
+        let matched = Precondition::Matches(old);
+        let wrote = store
+            .write_with_embedded(&report, REPORT, &files, &matched)
+            .await
+            .unwrap();
+        assert_eq!(wrote, revision_of(REPORT, &logo_of(Some(PNG))));
+        report_claim(&store, PNG).await;
+        let back = get(&store, &report, Missing::Refuse).await.unwrap();
+        assert_eq!(back, report_with(PNG));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_record_written_before_the_revision_covered_its_files_is_saved_with_no_precondition() {
+    in_database("archie_test_old_record_none", async |store| {
+        let report = path(REPORT_MD);
+        let old = old_records(&store).await;
+        let wrote = store
+            .write(&report, REPORT.as_bytes(), &Precondition::None)
+            .await
+            .unwrap();
+        assert_ne!(wrote, old);
+        report_claim(&store, PNG).await;
+        let back = get(&store, &report, Missing::Refuse).await.unwrap();
+        assert_eq!(back, report_with(PNG));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_deletion_of_a_record_written_before_records_named_a_save_takes_back_the_claims_that_name_none()
+ {
+    in_database("archie_test_old_record_delete", async |store| {
+        let report = path(REPORT_MD);
+        let old = old_records(&store).await;
+        store
+            .delete(&report, &Precondition::Matches(old))
+            .await
+            .unwrap();
+        assert_eq!(object_record(&store, PNG).await, None);
+        assert_eq!(store.files.list(None).await, Ok(Vec::new()));
+        assert_eq!(store.list(None).await, Ok(Vec::new()));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_plain_write_whose_kept_file_is_held_by_a_deletion_or_gone_is_a_conflict_and_changes_nothing()
+ {
+    in_database("archie_test_plain_write_held", async |store| {
+        let report = path(REPORT_MD);
+        let first = save(&store, REPORT_MD, &report_with(PNG)).await;
+        let on_id = doc! { "_id": file::sha256(PNG) };
+        let held = doc! { "$set": { "deleting": true } };
+        store.objects.update_one(on_id.clone(), held).await.unwrap();
+        let conflict = Err(StoreError::Conflict(report.clone()));
+        let while_held = store
+            .write(&report, REPORT.as_bytes(), &Precondition::None)
+            .await;
+        assert_eq!(while_held, conflict);
+        store.objects.delete_one(on_id).await.unwrap();
+        let once_gone = store
+            .write(&report, REPORT.as_bytes(), &Precondition::None)
+            .await;
+        assert_eq!(once_gone, conflict);
+        let (_, kept) = store.read_document(&report).await.unwrap();
+        assert_eq!(kept, first);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_deletion_of_a_document_keeps_the_claims_of_a_save_still_running() {
+    in_database("archie_test_delete_keeps_new_claims", async |store| {
+        let report = path(REPORT_MD);
+        save(&store, REPORT_MD, &report_with(PNG)).await;
+        let with_other = logo_files(REPORT_MD, OTHER_PNG);
+        let other = embedded(&report, &parse(REPORT).document, &with_other).unwrap();
+        let running = ObjectId::new();
+        assert_eq!(store.try_claim(&report, &other[0], running).await, Ok(true));
+        store.delete(&report, &Precondition::None).await.unwrap();
+        let claims = [claim(REPORT_MD, "notes/media/logo.png")];
+        assert_eq!(claims_on(&store, OTHER_PNG).await, claims);
+        assert_eq!(saves_on(&store, OTHER_PNG).await, [Some(running)]);
+        assert_eq!(object_record(&store, PNG).await, None);
     })
     .await;
 }
@@ -1786,4 +2320,25 @@ fn no_order_of_a_save_that_stops_after_its_claim_or_its_upload_and_a_deletion_lo
 fn no_order_of_two_deletions_and_a_save_loses_an_object() {
     let orders = every_order("archie_test_orders_two_deletions", &TWO_DELETIONS);
     assert_eq!(orders, 4200);
+}
+
+#[test]
+fn no_order_of_two_saves_that_both_change_one_document_loses_an_object() {
+    let orders = every_order("archie_test_orders_two_changing", &TWO_CHANGING_SAVES);
+    assert_eq!(orders, 3432);
+}
+
+#[test]
+fn no_order_of_a_save_that_changes_nothing_and_one_that_changes_the_picture_loses_an_object() {
+    let orders = every_order("archie_test_orders_unchanged", &AN_UNCHANGED_SAVE);
+    assert_eq!(orders, 3432);
+}
+
+#[test]
+fn no_order_of_a_save_and_a_deletion_of_one_document_loses_an_object() {
+    let orders = every_order(
+        "archie_test_orders_save_and_deletion",
+        &A_SAVE_AND_A_DELETION_OF_ONE_DOCUMENT,
+    );
+    assert_eq!(orders, 792);
 }

@@ -1,6 +1,7 @@
 //! The record: the sample's record, its files, each kind of frontmatter value
 //! stored and read back, the fixtures, an invalid document, records that do
-//! not read, the depth, the filter and the revision.
+//! not read, the depth, the filter, the revision, and the claims and records
+//! written before they named a save.
 
 use alloc::collections::BTreeMap;
 use std::thread;
@@ -11,7 +12,9 @@ use bson::oid::ObjectId;
 use bson::{Bson, DateTime as BsonDateTime, Document, doc};
 use chrono::{DateTime, NaiveDate, NaiveTime, Timelike as _, Utc};
 
-use super::{StoredDocument, depth, from_record, frontmatter_is, revision_of, to_record};
+use super::{
+    Claim, StoredDocument, StoredObject, depth, from_record, frontmatter_is, revision_of, to_record,
+};
 use crate::StoreError;
 
 const FIXTURES: [&str; 21] = [
@@ -39,6 +42,8 @@ const FIXTURES: [&str; 21] = [
 ];
 
 const ID: &str = "6ad42f681472f05ab2ed9be7";
+
+const SAVE: &str = "6ad42f681472f05ab2ed9be8";
 
 /// A TOML frontmatter holding each kind of value a record stores.
 const SAMPLE: &str = r#"+++
@@ -152,7 +157,8 @@ fn stored(path: &str, text: &str) -> StoredDocument {
         files: BTreeMap::new(),
         id: ObjectId::parse_str(ID).unwrap(),
         path: path.to_owned(),
-        revision: revision_of(text).0,
+        revision: revision_of(text, &BTreeMap::new()).0,
+        save: Some(ObjectId::parse_str(SAVE).unwrap()),
     }
 }
 
@@ -228,7 +234,8 @@ fn the_sample_frontmatter_is_stored_as_the_sample_record() {
         "files": {},
         "_id": ObjectId::parse_str(ID).unwrap(),
         "path": "notes/task.md",
-        "revision": "sha256:770bd77006283842c1a49279937c31aebe406b4ce74a55c14625d83c565b5f73",
+        "revision": "sha256:b62ae835027b98866bb7c61b2ac1675280396d597fa2722d5d3eaeea82073648",
+        "save": ObjectId::parse_str(SAVE).unwrap(),
     };
     assert_eq!(record, expected);
 }
@@ -598,9 +605,54 @@ fn the_filter_on_a_frontmatter_key_a_dotted_path_cannot_name_reads_it_by_name() 
 }
 
 #[test]
-fn the_revision_is_the_sha_256_of_the_text() {
+fn the_revision_is_the_sha_256_of_the_text_and_of_each_file_each_part_preceded_by_its_length() {
     assert_eq!(
-        revision_of("").0,
-        "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        revision_of("", &BTreeMap::new()).0,
+        "sha256:ba768b331fd86cec803be04e56ab2b3d4c0e98ef4ee4fcd4e72ad7cce61a1d1f"
     );
+    let logo = BTreeMap::from([("media/logo.png".to_owned(), "abc".to_owned())]);
+    assert_eq!(
+        revision_of("# Report\n", &logo).0,
+        "sha256:b3dba8daff13fe05db0539675fb03aa88556e0d780a5c274135db17d8699c755"
+    );
+    let other = BTreeMap::from([("media/logo.png".to_owned(), "abd".to_owned())]);
+    assert_ne!(
+        revision_of("# Report\n", &other),
+        revision_of("# Report\n", &logo)
+    );
+    let file = BTreeMap::from([("b".to_owned(), "c".to_owned())]);
+    assert_ne!(
+        revision_of("a", &file),
+        revision_of("a1:b1:c", &BTreeMap::new())
+    );
+}
+
+#[test]
+fn a_claim_written_before_claims_named_a_save_reads_with_none() {
+    let record = doc! {
+        "_id": "0123",
+        "object": "files/0123",
+        "content_type": "image/png",
+        "size": 27_i64,
+        "description": "Logo",
+        "stored": true,
+        "embedded_by": [{ "document": "notes/report.md", "path": "notes/media/logo.png" }],
+    };
+    let object: StoredObject = bson::deserialize_from_document(record).unwrap();
+    let claim = Claim {
+        document: "notes/report.md".to_owned(),
+        path: "notes/media/logo.png".to_owned(),
+        save: None,
+    };
+    assert_eq!(object.embedded_by, [claim]);
+}
+
+#[test]
+fn a_record_written_before_records_named_a_save_reads_with_none() {
+    let written = stored("notes/task.md", "# Task\n");
+    let mut record = to_record(&written).unwrap();
+    record.remove("save");
+    let back = from_record(record).unwrap();
+    assert_eq!(back.save, None);
+    assert_eq!(back.revision, written.revision);
 }

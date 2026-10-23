@@ -5,6 +5,7 @@
 //! query can name a frontmatter key.
 
 use alloc::collections::BTreeMap;
+use core::iter;
 
 use archie_core::parser::ast::{Mapping, RawDocument, Value, raw_document_schema};
 use bson::oid::ObjectId;
@@ -17,18 +18,27 @@ use crate::{Revision, StoreError, file};
 /// The deepest record MongoDB holds, each document and each array one level.
 const MAX_DEPTH: usize = 100;
 
+/// The revision of a path that holds no document: no revision `revision_of`
+/// gives is equal to it.
+pub const NO_DOCUMENT: &str = "none";
+
 /// A document's claim on an object of the store's files: the document's path,
-/// and the path its embed names.
+/// the path its embed names, and the save that made the claim.
 #[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Claim {
     pub document: String,
     pub path: String,
+    /// The save that made the claim: `None` for a claim written before claims
+    /// named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save: Option<ObjectId>,
 }
 
-/// One file of a MongoDB store: its path, its revision, its document, and the
-/// SHA-256 of each file it embeds, by the file's path in the bundle.
+/// One file of a MongoDB store: its path, its revision, its document, the
+/// SHA-256 of each file it embeds, by the file's path in the bundle, and the
+/// save that wrote it.
 #[model_schema(enable = ["decode_with", "mongodb"])]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -41,6 +51,10 @@ pub struct StoredDocument {
     pub id: ObjectId,
     pub path: String,
     pub revision: String,
+    /// The save that wrote the record: `None` for a record written before
+    /// records named one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save: Option<ObjectId>,
 }
 
 /// The record of one object of a MongoDB store's files, in
@@ -133,11 +147,23 @@ pub fn frontmatter_is(key: &str, value: &Value) -> Result<Document, StoreError> 
     Ok(filter)
 }
 
-/// `sha256:` and the 64 hex digits of the SHA-256 of `text`, archie's form of
-/// the document: the revision the file-system store gives for the same bytes.
+/// `sha256:` and the SHA-256 of `text` and of each file of `files`, its path
+/// in the bundle and the SHA-256 of its bytes, each part preceded by its
+/// length in bytes, in decimal, and a `:`.
 #[must_use]
-pub fn revision_of(text: &str) -> Revision {
-    file::revision(text.as_bytes())
+pub fn revision_of(text: &str, files: &BTreeMap<String, String>) -> Revision {
+    let mut hashed = String::new();
+    let parts = iter::once(text).chain(
+        files
+            .iter()
+            .flat_map(|(path, hash)| [path.as_str(), hash.as_str()]),
+    );
+    for part in parts {
+        hashed.push_str(&part.len().to_string());
+        hashed.push(':');
+        hashed.push_str(part);
+    }
+    file::revision(hashed.as_bytes())
 }
 
 /// How deep `record` nests: the record is the first level, and each document
