@@ -257,7 +257,7 @@ fn machine(system: &dyn System) -> FileStore<'_> {
 /// environment names, and `path` as a path of it.
 #[cfg(feature = "minio")]
 fn minio<'system>(
-    system: &dyn System,
+    system: &'system dyn System,
     arg: &StoreArg,
     bucket: &str,
     prefix: Option<&str>,
@@ -276,12 +276,12 @@ fn minio<'system>(
 /// `database`, on the server `ARCHIE_MONGODB_URI` names, its files in the
 /// bucket `ARCHIE_MONGODB_BUCKET` names.
 #[cfg(feature = "mongodb")]
-async fn mongodb(
-    system: &dyn System,
+async fn mongodb<'system>(
+    system: &'system dyn System,
     arg: &StoreArg,
     database: &str,
     collection: &str,
-) -> Result<MongoStore, Failure> {
+) -> Result<MongoStore<'system>, Failure> {
     let uri = variable(
         system,
         "ARCHIE_MONGODB_URI",
@@ -297,7 +297,7 @@ async fn mongodb(
 /// `<bucket>` or `<bucket>/<prefix>`, on the `MinIO` server the environment
 /// names.
 #[cfg(feature = "mongodb")]
-fn mongodb_files(system: &dyn System) -> Result<ObjectStore<MinioBucket>, Failure> {
+fn mongodb_files(system: &dyn System) -> Result<ObjectStore<'_, MinioBucket>, Failure> {
     let (name, holds) = (
         "ARCHIE_MONGODB_BUCKET",
         "the MinIO bucket of a MongoDB store's files",
@@ -318,11 +318,11 @@ fn mongodb_files(system: &dyn System) -> Result<ObjectStore<MinioBucket>, Failur
 /// The bucket `bucket`, its keys under `prefix`, on the `MinIO` server the
 /// environment names.
 #[cfg(any(feature = "minio", feature = "mongodb"))]
-fn objects(
-    system: &dyn System,
+fn objects<'system>(
+    system: &'system dyn System,
     bucket: &str,
     prefix: Option<StorePath>,
-) -> Result<ObjectStore<MinioBucket>, Failure> {
+) -> Result<ObjectStore<'system, MinioBucket>, Failure> {
     let endpoint = variable(
         system,
         "ARCHIE_MINIO_ENDPOINT",

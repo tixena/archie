@@ -48,6 +48,9 @@ const REPLACED_PREFIX: &str = "binary/replaced";
 
 const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
 
+/// The machine the stores of these tests run on.
+static MACHINE: RealSystem = RealSystem::new();
+
 /// Runs the binary in `root` with `arguments`, its MongoDB store's files
 /// under `prefix` in the bucket.
 fn archie_on(root: &Path, prefix: &str, arguments: &[&str]) -> Assert {
@@ -148,7 +151,7 @@ fn each_fixture_piped_into_mongodb_and_read_back_is_archies_form_as_mongodb_keep
     let runtime = Builder::new_current_thread().enable_all().build().unwrap();
     let prefix = StorePath::new("binary/expected").unwrap();
     let config = ObjectConfig::new(endpoint(), REGION.to_owned(), bucket(), Some(prefix));
-    let files = ObjectStore::open(&RealSystem::new(), config).unwrap();
+    let files = ObjectStore::open(&MACHINE, config).unwrap();
     let opened = runtime.block_on(MongoStore::open(&uri(), DATABASE, "expected", files));
     let expected = AnyStore::Mongo(opened.unwrap());
     let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
@@ -291,7 +294,7 @@ fn a_second_write_with_a_new_picture_deletes_the_old_object_and_its_record_and_g
     runtime.block_on(async {
         let prefix = StorePath::new(REPLACED_PREFIX).unwrap();
         let config = ObjectConfig::new(endpoint(), REGION.to_owned(), bucket(), Some(prefix));
-        let files = ObjectStore::open(&RealSystem::new(), config).unwrap();
+        let files = ObjectStore::open(&MACHINE, config).unwrap();
         let objects = files.list(None).await.unwrap();
         assert_eq!(objects.len(), 1);
         assert_eq!(files.read(&objects[0]).await.unwrap().bytes, OTHER_PNG);

@@ -92,13 +92,13 @@ enum Replaced {
 /// Each file they embed is the object `files/<sha256>` of `files`, named by
 /// one record of `<collection>_files`, which has an index on
 /// `embedded_by.path`. An object nothing embeds is deleted, then its record.
-pub struct MongoStore {
+pub struct MongoStore<'system> {
     collection: Collection<Document>,
-    files: ObjectStore<MinioBucket>,
+    files: ObjectStore<'system, MinioBucket>,
     objects: Collection<Document>,
 }
 
-impl MongoStore {
+impl<'system> MongoStore<'system> {
     /// Claims the object of `file` for the document at `path`, by `save`,
     /// trying again while a deletion holds its record.
     async fn claim(
@@ -158,6 +158,25 @@ impl MongoStore {
             self.remove_record(hash).await?;
         }
         Ok(())
+    }
+
+    /// The object that the record of `document` names for `file` in its
+    /// `files`: `NotFound` when no record is at `document`, its `files` do not
+    /// hold `file`, or the bucket does not hold the object.
+    async fn embedded_file(
+        &self,
+        document: &StorePath,
+        file: &StorePath,
+    ) -> Result<Vec<u8>, StoreError> {
+        let missing = || StoreError::NotFound(file.clone());
+        let name = name_in(document, file.as_str()).ok_or_else(missing)?;
+        let held = self.held_files(document).await?;
+        let hash = held.get(name).ok_or_else(missing)?;
+        match self.files.read(&object_path(hash)?).await {
+            Ok(object) => Ok(object.bytes),
+            Err(StoreError::NotFound(_)) => Err(missing()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Every record `filter` matches, read through `from_record`.
@@ -256,7 +275,7 @@ impl MongoStore {
         uri: &str,
         database: &str,
         collection: &str,
-        files: ObjectStore<MinioBucket>,
+        files: ObjectStore<'system, MinioBucket>,
     ) -> Result<Self, StoreError> {
         let client = Client::with_uri_str(uri)
             .await
@@ -714,9 +733,40 @@ impl MongoStore {
         }
         self.store(path, document, &kept, &read, save).await
     }
+
+    /// Reads the revision the write starts from, draws the id of the save,
+    /// claims the object of each file of `files` for the document by it,
+    /// uploads each one its record does not say is stored, saves the document
+    /// naming the save, with the SHA-256 of each file, where the record is still
+    /// at that revision, takes back the claims of the save the replaced record
+    /// names, then deletes each object that leaves unembedded. A write that
+    /// finds the record changed gives back its own claims and is a conflict.
+    async fn write_with_files(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> Result<Revision, StoreError> {
+        let document = parse(text).document;
+        let embedded = embedded(path, &document, files)?;
+        let read = self.revision_read(path, precondition).await?;
+        let save = ObjectId::new();
+        for file in &embedded {
+            self.claim(path, file, save).await?;
+        }
+        for file in &embedded {
+            self.upload(file).await?;
+        }
+        let hashes = embedded
+            .iter()
+            .map(|file| (file.name.to_owned(), file.hash.clone()))
+            .collect();
+        self.store(path, &document, &hashes, &read, save).await
+    }
 }
 
-impl Store for MongoStore {
+impl Store for MongoStore<'_> {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             atomic_preconditions: true,
@@ -793,23 +843,12 @@ impl Store for MongoStore {
         })
     }
 
-    /// The object that the record of `document` names for `file` in its
-    /// `files`: `NotFound` when no record is at `document`, its `files` do not
-    /// hold `file`, or the bucket does not hold the object.
-    async fn read_embedded(
+    fn read_embedded(
         &self,
         document: &StorePath,
         file: &StorePath,
-    ) -> Result<Vec<u8>, StoreError> {
-        let missing = || StoreError::NotFound(file.clone());
-        let name = name_in(document, file.as_str()).ok_or_else(missing)?;
-        let held = self.held_files(document).await?;
-        let hash = held.get(name).ok_or_else(missing)?;
-        match self.files.read(&object_path(hash)?).await {
-            Ok(object) => Ok(object.bytes),
-            Err(StoreError::NotFound(_)) => Err(missing()),
-            Err(error) => Err(error),
-        }
+    ) -> impl Future<Output = Result<Vec<u8>, StoreError>> + Send {
+        self.embedded_file(document, file)
     }
 
     async fn write(
@@ -824,35 +863,14 @@ impl Store for MongoStore {
             .await
     }
 
-    /// Reads the revision the write starts from, draws the id of the save,
-    /// claims the object of each file of `files` for the document by it,
-    /// uploads each one its record does not say is stored, saves the document
-    /// naming the save, with the SHA-256 of each file, where the record is still
-    /// at that revision, takes back the claims of the save the replaced record
-    /// names, then deletes each object that leaves unembedded. A write that
-    /// finds the record changed gives back its own claims and is a conflict.
-    async fn write_with_embedded(
+    fn write_with_embedded(
         &self,
         path: &StorePath,
         text: &str,
         files: &BTreeMap<StorePath, Vec<u8>>,
         precondition: &Precondition,
-    ) -> Result<Revision, StoreError> {
-        let document = parse(text).document;
-        let embedded = embedded(path, &document, files)?;
-        let read = self.revision_read(path, precondition).await?;
-        let save = ObjectId::new();
-        for file in &embedded {
-            self.claim(path, file, save).await?;
-        }
-        for file in &embedded {
-            self.upload(file).await?;
-        }
-        let hashes = embedded
-            .iter()
-            .map(|file| (file.name.to_owned(), file.hash.clone()))
-            .collect();
-        self.store(path, &document, &hashes, &read, save).await
+    ) -> impl Future<Output = Result<Revision, StoreError>> + Send {
+        self.write_with_files(path, text, files, precondition)
     }
 }
 

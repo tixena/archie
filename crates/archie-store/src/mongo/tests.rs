@@ -90,6 +90,9 @@ const REVISED_REPORT: &str = "# Revised report\n\n![Logo](media/logo.png)\n";
 
 const THIRD_PNG: &[u8] = b"\x89PNG\r\n\x1a\n a third picture";
 
+/// The machine the stores of these tests run on.
+static MACHINE: RealSystem = RealSystem::new();
+
 static ONE_SAVE: Scenario = Scenario {
     actors: &[
         Actor {
@@ -264,7 +267,7 @@ struct Holdings {
 }
 
 impl Holdings {
-    async fn of(store: &MongoStore) -> Self {
+    async fn of(store: &MongoStore<'_>) -> Self {
         let mut found = store.objects.find(Document::new()).await.unwrap();
         let mut records = Vec::new();
         while found.advance().await.unwrap() {
@@ -368,7 +371,7 @@ impl Step {
 /// claims exactly those the documents' files make, each by the save its
 /// document's record names, with the claims nothing uses it leaves.
 async fn assert_finished(
-    store: &MongoStore,
+    store: &MongoStore<'_>,
     scenario: &Scenario,
     runs: &[Run],
     documents: &Documents,
@@ -501,7 +504,7 @@ fn back_from_mongodb(source: &str) -> String {
 }
 
 /// Puts in `store` what `start` says it holds before the first step.
-async fn begin(store: &MongoStore, start: Start) {
+async fn begin(store: &MongoStore<'_>, start: Start) {
     match start {
         Start::Embedded(picture) => {
             save(store, REPORT_MD, &report_with(picture)).await;
@@ -531,13 +534,13 @@ fn claim(document: &str, path: &str) -> (String, String) {
 
 /// The claims on the object of `bytes`, as its record holds them, by their
 /// document and path.
-async fn claims_on(store: &MongoStore, bytes: &[u8]) -> Vec<(String, String)> {
+async fn claims_on(store: &MongoStore<'_>, bytes: &[u8]) -> Vec<(String, String)> {
     let made = held_claims(store, bytes).await.into_iter();
     made.map(|by| (by.document, by.path)).collect()
 }
 
 /// Claims the object of `file` for `REPORT_MD` by `save`, and uploads it.
-async fn claim_and_upload(store: &MongoStore, file: &Embedded<'_>, save: ObjectId) {
+async fn claim_and_upload(store: &MongoStore<'_>, file: &Embedded<'_>, save: ObjectId) {
     let claimed = store.try_claim(&path(REPORT_MD), file, save).await;
     assert_eq!(claimed, Ok(true));
     store.upload(file).await.unwrap();
@@ -578,13 +581,13 @@ const fn deleting(picture: &'static [u8]) -> [Step; 3] {
 }
 
 /// The `description` of the record of the object of `bytes`.
-async fn description_of(store: &MongoStore, bytes: &[u8]) -> String {
+async fn description_of(store: &MongoStore<'_>, bytes: &[u8]) -> String {
     let record = object_record(store, bytes).await.unwrap();
     record.get_str("description").unwrap().to_owned()
 }
 
 /// Deletes every document, record and object of `store`.
-async fn empty(store: &MongoStore) {
+async fn empty(store: &MongoStore<'_>) {
     store.collection.delete_many(Document::new()).await.unwrap();
     store.objects.delete_many(Document::new()).await.unwrap();
     for object in store.files.list(None).await.unwrap() {
@@ -632,21 +635,21 @@ fn every_order(name: &str, scenario: &Scenario) -> usize {
 }
 
 /// The bucket `just test-stores` makes, its keys under `mongo/<name>`.
-fn files_of(name: &str) -> ObjectStore<MinioBucket> {
+fn files_of(name: &str) -> ObjectStore<'static, MinioBucket> {
     let config = ObjectConfig::new(
         env::var("ARCHIE_TEST_MINIO_ENDPOINT").unwrap(),
         "us-east-1".to_owned(),
         env::var("ARCHIE_TEST_MINIO_BUCKET").unwrap(),
         Some(path(&format!("mongo/{name}"))),
     );
-    ObjectStore::open(&RealSystem::new(), config).unwrap()
+    ObjectStore::open(&MACHINE, config).unwrap()
 }
 
 /// Stops a deletion of the logo `OLD_MD` embedded after its mark, and after
 /// its `remove_object` too where `object_removed` says so, then asserts that
 /// `finish_deletions` finishes it and that a save of `NEW_MD` embedding the
 /// logo stores it again.
-async fn finishes_a_stopped_deletion(store: &MongoStore, object_removed: bool) {
+async fn finishes_a_stopped_deletion(store: &MongoStore<'_>, object_removed: bool) {
     begin(store, Start::Unembedded(PNG)).await;
     let hash = file::sha256(PNG);
     assert_eq!(store.mark(&hash).await, Ok(true));
@@ -671,7 +674,7 @@ async fn finishes_a_stopped_deletion(store: &MongoStore, object_removed: bool) {
 }
 
 /// The claims on the object of `bytes`, as its record holds them.
-async fn held_claims(store: &MongoStore, bytes: &[u8]) -> Vec<Claim> {
+async fn held_claims(store: &MongoStore<'_>, bytes: &[u8]) -> Vec<Claim> {
     let record = object_record(store, bytes).await.unwrap();
     let object: StoredObject = bson::deserialize_from_document(record).unwrap();
     object.embedded_by
@@ -681,7 +684,7 @@ async fn held_claims(store: &MongoStore, bytes: &[u8]) -> Vec<Claim> {
 /// files under `mongo/<name>` in the bucket, then drops the database.
 async fn in_database<S>(name: &str, scenario: S)
 where
-    S: AsyncFnOnce(MongoStore),
+    S: AsyncFnOnce(MongoStore<'static>),
 {
     let store = MongoStore::open(&uri(), name, "files", files_of(name))
         .await
@@ -751,7 +754,7 @@ fn logo_of(picture: Option<&[u8]>) -> BTreeMap<String, String> {
 /// named a save holds for `REPORT_MD` embedding `PNG`: the document's revision
 /// the SHA-256 of its text alone, no save in its record, and a claim with no
 /// save. Gives that revision.
-async fn old_records(store: &MongoStore) -> Revision {
+async fn old_records(store: &MongoStore<'_>) -> Revision {
     let report = path(REPORT_MD);
     let document = parse(REPORT).document;
     let text = write(&document, &WriteOptions::default()).unwrap();
@@ -817,7 +820,7 @@ fn nested_items(count: usize) -> String {
 /// save of `OTHER_PNG` claims and uploads it, the save of the document as it is
 /// claims, uploads, saves and tidies, a deletion of `OTHER_PNG` tries to mark
 /// it, then the first save saves and tidies.
-async fn saves_in_the_order_of_the_report(store: &MongoStore, precondition: &Precondition) {
+async fn saves_in_the_order_of_the_report(store: &MongoStore<'_>, precondition: &Precondition) {
     let report = path(REPORT_MD);
     let document = parse(REPORT).document;
     save(store, REPORT_MD, &report_with(PNG)).await;
@@ -856,7 +859,7 @@ fn object_of(bytes: &[u8]) -> StorePath {
 }
 
 /// The record of the object of `bytes`, as `files_files` holds it.
-async fn object_record(store: &MongoStore, bytes: &[u8]) -> Option<Document> {
+async fn object_record(store: &MongoStore<'_>, bytes: &[u8]) -> Option<Document> {
     let on_id = doc! { "_id": file::sha256(bytes) };
     store.objects.find_one(on_id).await.unwrap()
 }
@@ -879,7 +882,7 @@ fn plain_tree(document: &RawDocument) -> RawDocument {
 
 /// Asserts that the object of `bytes` holds one claim, on the logo of
 /// `REPORT_MD`, by the save the document's record names, and gives that save.
-async fn report_claim(store: &MongoStore, bytes: &[u8]) -> ObjectId {
+async fn report_claim(store: &MongoStore<'_>, bytes: &[u8]) -> ObjectId {
     let save = save_of(store, REPORT_MD).await.unwrap();
     let claims = [claim(REPORT_MD, "notes/media/logo.png")];
     assert_eq!(claims_on(store, bytes).await, claims);
@@ -898,7 +901,7 @@ fn report_with(picture: &[u8]) -> BundledDocument {
 /// what must hold once every actor finishes. A claim that waits runs again
 /// after the deletion's last step, followed by the steps its actor would have
 /// taken meanwhile.
-async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
+async fn run(store: &MongoStore<'_>, scenario: &Scenario, order: &[usize]) {
     let told = told(scenario, order);
     let mut documents = scenario.start.documents();
     let mut runs: Vec<Run> = scenario.actors.iter().map(|_| Run::default()).collect();
@@ -951,7 +954,7 @@ async fn run(store: &MongoStore, scenario: &Scenario, order: &[usize]) {
 
 /// Reads the revision of the document at `document` for the actor whose run
 /// is `at`, when it has read none.
-async fn read_once(store: &MongoStore, document: &StorePath, at: &mut Run) {
+async fn read_once(store: &MongoStore<'_>, document: &StorePath, at: &mut Run) {
     if at.read.is_none() {
         let read = store.revision_read(document, &Precondition::None).await;
         at.read = Some(read.unwrap());
@@ -986,7 +989,7 @@ const fn replacing(document: &'static str, picture: &'static [u8]) -> [Step; 7] 
 
 /// Puts `bundle` at `at` in `store`, replacing any document there, and gives
 /// the revision written.
-async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) -> Revision {
+async fn save(store: &MongoStore<'_>, at: &str, bundle: &BundledDocument) -> Revision {
     let options = WriteOptions::default();
     put_bundle(store, &path(at), bundle, &options, &Precondition::None)
         .await
@@ -997,7 +1000,7 @@ async fn save(store: &MongoStore, at: &str, bundle: &BundledDocument) -> Revisio
 /// record is still at `read`, asserts that the record it replaced names
 /// `replacing`, tidies, and gives the revision written.
 async fn save_and_tidy(
-    store: &MongoStore,
+    store: &MongoStore<'_>,
     picture: &[u8],
     read: &Revision,
     save: ObjectId,
@@ -1013,13 +1016,13 @@ async fn save_and_tidy(
 }
 
 /// The save the record of the document at `document` names.
-async fn save_of(store: &MongoStore, document: &str) -> Option<ObjectId> {
+async fn save_of(store: &MongoStore<'_>, document: &str) -> Option<ObjectId> {
     let found = store.find(on_path(&path(document)).unwrap()).await.unwrap();
     found[0].save
 }
 
 /// The save of each claim on the object of `bytes`, as its record holds them.
-async fn saves_on(store: &MongoStore, bytes: &[u8]) -> Vec<Option<ObjectId>> {
+async fn saves_on(store: &MongoStore<'_>, bytes: &[u8]) -> Vec<Option<ObjectId>> {
     let made = held_claims(store, bytes).await.into_iter();
     made.map(|by| by.save).collect()
 }
@@ -1047,7 +1050,7 @@ fn single(value: Value) -> Mapping {
 /// A save reads the revision at its first claim. Its release takes back the
 /// claims of the save the record it replaced names, or its own when it lost;
 /// a deletion's, those of the save the record it removed names.
-async fn take(store: &MongoStore, step: Step, at: &mut Run, documents: &mut Documents) -> bool {
+async fn take(store: &MongoStore<'_>, step: Step, at: &mut Run, documents: &mut Documents) -> bool {
     match step {
         Step::Claim(document, picture) => {
             let saved = path(document);

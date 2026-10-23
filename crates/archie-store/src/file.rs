@@ -11,9 +11,8 @@ use std::process;
 use os_shim::{System, WriteMode};
 use sha2::{Digest as _, Sha256};
 
-use crate::{
-    Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored, write_at_paths,
-};
+use crate::lock::{self, Found, LockSettings, Locks};
+use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored};
 
 /// The count in a temporary name, shared by every store in the process.
 static WRITES: AtomicU64 = AtomicU64::new(0);
@@ -23,6 +22,7 @@ static WRITES: AtomicU64 = AtomicU64::new(0);
 pub struct FileStore<'system> {
     follow_links: bool,
     hidden: bool,
+    lock: LockSettings,
     root: PathBuf,
     system: &'system dyn System,
 }
@@ -78,6 +78,7 @@ impl<'system> FileStore<'system> {
             .filter(|entry| entry.is_file)
             .map(|entry| self.store_path(&entry.path))
             .collect::<Result<Vec<_>, _>>()?;
+        paths.retain(|path| !path.as_str().ends_with(lock::SUFFIX));
         paths.sort_unstable();
         Ok(paths)
     }
@@ -92,12 +93,65 @@ impl<'system> FileStore<'system> {
         }
     }
 
+    /// The lock at `lock`, its bytes read before its modification time.
+    fn lock_found(&self, lock: &StorePath) -> Result<Option<Found>, StoreError> {
+        let Some(bytes) = self.bytes(lock)? else {
+            return Ok(None);
+        };
+        let (folder, name) = self.place(lock);
+        let taken = match self.system.metadata(&folder.join(name)) {
+            Ok(metadata) => metadata.modified,
+            Err(error) if missing(&error) => return Ok(None),
+            Err(error) => return Err(backend(lock, &error)),
+        };
+        Ok(Some(Found {
+            holder: String::from_utf8_lossy(&bytes).into_owned(),
+            taken,
+            tag: bytes,
+        }))
+    }
+
+    /// Makes the lock at `lock` holding `guid`, and its folder, only when
+    /// nothing is at its path.
+    fn lock_made(&self, lock: &StorePath, guid: &str) -> Result<bool, StoreError> {
+        let (folder, name) = self.place(lock);
+        self.system
+            .create_dir_all(&folder)
+            .map_err(|error| backend(lock, &error))?;
+        match self
+            .system
+            .write(&folder.join(name), guid.as_bytes(), WriteMode::CreateNew)
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(backend(lock, &error)),
+        }
+    }
+
+    /// Removes the lock at `lock` only while it holds the bytes of `found`.
+    fn lock_removed(&self, lock: &StorePath, found: &Found) -> Result<bool, StoreError> {
+        let (folder, name) = self.place(lock);
+        match self.system.remove_file_if(&folder.join(name), &found.tag) {
+            Ok(removed) => Ok(removed),
+            Err(error) if missing(&error) => Ok(false),
+            Err(error) => Err(backend(lock, &error)),
+        }
+    }
+
+    /// How long the lock of a save lasts and how long a save waits on another,
+    /// `LockSettings::default()` by default.
+    #[must_use]
+    pub fn locking(self, lock: LockSettings) -> Self {
+        Self { lock, ..self }
+    }
+
     /// A store whose listing follows no link and leaves hidden entries out.
     #[must_use]
     pub fn new(root: PathBuf, system: &'system dyn System) -> Self {
         Self {
             follow_links: false,
             hidden: false,
+            lock: LockSettings::default(),
             root,
             system,
         }
@@ -181,6 +235,35 @@ impl<'system> FileStore<'system> {
     }
 }
 
+impl Locks for FileStore<'_> {
+    fn create(
+        &self,
+        lock: &StorePath,
+        guid: &str,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        future::ready(self.lock_made(lock, guid))
+    }
+
+    fn find(
+        &self,
+        lock: &StorePath,
+    ) -> impl Future<Output = Result<Option<Found>, StoreError>> + Send {
+        future::ready(self.lock_found(lock))
+    }
+
+    fn remove_if(
+        &self,
+        lock: &StorePath,
+        found: &Found,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send {
+        future::ready(self.lock_removed(lock, found))
+    }
+
+    fn system(&self) -> &dyn System {
+        self.system
+    }
+}
+
 /// os-shim is synchronous, so each operation is done when it is called and its
 /// future is ready.
 impl Store for FileStore<'_> {
@@ -226,6 +309,8 @@ impl Store for FileStore<'_> {
         future::ready(self.write_file(path, bytes, precondition))
     }
 
+    /// Holds the lock of `path` from before the first file to after the
+    /// document.
     fn write_with_embedded(
         &self,
         path: &StorePath,
@@ -233,7 +318,7 @@ impl Store for FileStore<'_> {
         files: &BTreeMap<StorePath, Vec<u8>>,
         precondition: &Precondition,
     ) -> impl Future<Output = Result<Revision, StoreError>> + Send {
-        write_at_paths(self, path, text, files, precondition)
+        lock::write_with_embedded(self, path, text, files, precondition, self.lock)
     }
 }
 

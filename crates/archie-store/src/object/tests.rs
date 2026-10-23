@@ -13,12 +13,16 @@ use archie_core::bundle::{BundledDocument, Missing};
 use archie_core::forms::{Form, encode};
 use archie_core::parser::parse;
 use archie_core::writer::WriteOptions;
+use core::time::Duration;
+use std::time::SystemTime;
+
 use os_shim::bucket::{Bucket, Condition, MemoryBucket, Object, ObjectError};
 use os_shim::mock::MemorySystem;
 
 use super::{ObjectConfig, ObjectStore};
 use crate::any::AnyStore;
 use crate::document::{get, put};
+use crate::lock::{Locks as _, lock_of};
 use crate::{Precondition, Revision, Store as _, StoreError, StorePath};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
@@ -64,8 +68,11 @@ fn down(key: &str) -> ObjectError {
 }
 
 /// A store over a bucket `memory` shares, its keys under `vault`.
-fn in_vault(memory: &MemoryBucket) -> ObjectStore<MemoryBucket> {
-    ObjectStore::new(memory.clone(), Some(path("vault")))
+fn in_vault<'system>(
+    memory: &MemoryBucket,
+    system: &'system MemorySystem,
+) -> ObjectStore<'system, MemoryBucket> {
+    ObjectStore::new(memory.clone(), Some(path("vault")), system)
 }
 
 fn names(paths: &[StorePath]) -> Vec<&str> {
@@ -93,7 +100,8 @@ fn of_length(length: usize) -> StorePath {
 
 #[tokio::test]
 async fn the_sample_writes_reads_refuses_a_second_file_at_a_path_and_lists() {
-    let store = ObjectStore::new(MemoryBucket::default(), Some(path("vault")));
+    let system = MemorySystem::new();
+    let store = ObjectStore::new(MemoryBucket::default(), Some(path("vault")), &system);
     let task = path("notes/task.md");
     let revision = store
         .write(&task, b"# Task\n", &Precondition::Absent)
@@ -111,13 +119,14 @@ async fn the_sample_writes_reads_refuses_a_second_file_at_a_path_and_lists() {
 
 #[tokio::test]
 async fn a_file_is_the_object_at_its_path_under_the_prefix_or_at_its_path_with_none() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
     let task = path("notes/task.md");
-    in_vault(&memory)
+    in_vault(&memory, &system)
         .write(&task, b"# Task\n", &Precondition::None)
         .await
         .unwrap();
-    ObjectStore::new(memory.clone(), None)
+    ObjectStore::new(memory.clone(), None, &system)
         .write(&task, b"# Root\n", &Precondition::None)
         .await
         .unwrap();
@@ -129,8 +138,9 @@ async fn a_file_is_the_object_at_its_path_under_the_prefix_or_at_its_path_with_n
 
 #[tokio::test]
 async fn a_read_gives_the_bytes_and_the_tag_unchanged_and_no_object_is_not_found() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
-    let store = in_vault(&memory);
+    let store = in_vault(&memory, &system);
     let task = path("notes/task.md");
     let tag = memory
         .put("vault/notes/task.md", b"# Task\n", &Condition::None)
@@ -146,8 +156,9 @@ async fn a_read_gives_the_bytes_and_the_tag_unchanged_and_no_object_is_not_found
 
 #[tokio::test]
 async fn a_write_with_no_precondition_replaces_the_object_and_gives_its_tag() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
-    let store = in_vault(&memory);
+    let store = in_vault(&memory, &system);
     let task = path("notes/task.md");
     let first = store
         .write(&task, b"# Task\n", &Precondition::None)
@@ -165,7 +176,8 @@ async fn a_write_with_no_precondition_replaces_the_object_and_gives_its_tag() {
 
 #[tokio::test]
 async fn a_precondition_that_does_not_hold_is_a_conflict_and_changes_nothing() {
-    let store = ObjectStore::new(MemoryBucket::default(), Some(path("vault")));
+    let system = MemorySystem::new();
+    let store = ObjectStore::new(MemoryBucket::default(), Some(path("vault")), &system);
     let task = path("notes/task.md");
     let first = store
         .write(&task, b"# Task\n", &Precondition::Absent)
@@ -198,8 +210,9 @@ async fn a_precondition_that_does_not_hold_is_a_conflict_and_changes_nothing() {
 
 #[tokio::test]
 async fn a_delete_removes_the_object_and_one_where_no_file_is_succeeds_without_a_revision() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
-    let store = in_vault(&memory);
+    let store = in_vault(&memory, &system);
     let task = path("notes/task.md");
     let revision = store
         .write(&task, b"# Task\n", &Precondition::None)
@@ -225,6 +238,7 @@ async fn a_delete_removes_the_object_and_one_where_no_file_is_succeeds_without_a
 
 #[tokio::test]
 async fn a_listing_takes_the_prefix_off_leaves_folders_out_and_sorts_by_bytes() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
     let keys = [
         "vault/notes/b.md",
@@ -242,7 +256,7 @@ async fn a_listing_takes_the_prefix_off_leaves_folders_out_and_sorts_by_bytes() 
             .await
             .unwrap();
     }
-    let store = in_vault(&memory);
+    let store = in_vault(&memory, &system);
     let all = store.list(None).await.unwrap();
     assert_eq!(
         names(&all),
@@ -257,7 +271,7 @@ async fn a_listing_takes_the_prefix_off_leaves_folders_out_and_sorts_by_bytes() 
     let notes = store.list(Some(&path("notes"))).await.unwrap();
     assert_eq!(names(&notes), ["notes/a/c.md", "notes/b.md"]);
 
-    let root = ObjectStore::new(memory.clone(), None);
+    let root = ObjectStore::new(memory.clone(), None, &system);
     let in_other = root.list(Some(&path("other"))).await.unwrap();
     assert_eq!(names(&in_other), ["other/notes/e.md"]);
     assert_eq!(root.list(None).await.unwrap().len(), keys.len() - 1);
@@ -265,36 +279,38 @@ async fn a_listing_takes_the_prefix_off_leaves_folders_out_and_sorts_by_bytes() 
 
 #[tokio::test]
 async fn a_listed_key_that_is_not_a_store_path_is_an_invalid_path_naming_it() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
     memory
         .put("vault/a//b", b"# File\n", &Condition::None)
         .await
         .unwrap();
-    let listed = in_vault(&memory).list(None).await;
+    let listed = in_vault(&memory, &system).list(None).await;
     assert_eq!(listed, Err(StoreError::InvalidPath("a//b".to_owned())));
 }
 
 #[tokio::test]
 async fn a_key_past_1024_bytes_fails_the_write_with_the_path_before_any_request() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
     let longest = of_length(1018);
     let past = of_length(1019);
-    in_vault(&memory)
+    in_vault(&memory, &system)
         .write(&longest, b"# File\n", &Precondition::None)
         .await
         .unwrap();
     let refused = Err(StoreError::InvalidPath(past.as_str().to_owned()));
-    let written = in_vault(&memory)
+    let written = in_vault(&memory, &system)
         .write(&past, b"# File\n", &Precondition::None)
         .await;
     assert_eq!(written, refused);
-    let down = ObjectStore::new(DownBucket, Some(path("vault")));
+    let down = ObjectStore::new(DownBucket, Some(path("vault")), &system);
     let unsent = down.write(&past, b"# File\n", &Precondition::Absent).await;
     assert_eq!(unsent, refused);
     let keys = memory.list("").await.unwrap();
     assert_eq!(keys, [format!("vault/{longest}")]);
 
-    let root = ObjectStore::new(memory.clone(), None);
+    let root = ObjectStore::new(memory.clone(), None, &system);
     root.write(&past, b"# File\n", &Precondition::None)
         .await
         .unwrap();
@@ -302,7 +318,8 @@ async fn a_key_past_1024_bytes_fails_the_write_with_the_path_before_any_request(
 
 #[tokio::test]
 async fn each_failure_of_the_bucket_is_a_backend_error_naming_the_path() {
-    let store = ObjectStore::new(DownBucket, Some(path("vault")));
+    let system = MemorySystem::new();
+    let store = ObjectStore::new(DownBucket, Some(path("vault")), &system);
     let task = path("notes/task.md");
     let failed = "notes/task.md: no answer for `vault/notes/task.md`";
     let backend = StoreError::Backend(failed.to_owned());
@@ -321,7 +338,7 @@ async fn each_failure_of_the_bucket_is_a_backend_error_naming_the_path() {
         all,
         Err(StoreError::Backend("no answer for `vault/`".to_owned()))
     );
-    let root = ObjectStore::new(DownBucket, None).list(None).await;
+    let root = ObjectStore::new(DownBucket, None, &system).list(None).await;
     assert_eq!(
         root,
         Err(StoreError::Backend("no answer for ``".to_owned()))
@@ -330,8 +347,9 @@ async fn each_failure_of_the_bucket_is_a_backend_error_naming_the_path() {
 
 #[tokio::test]
 async fn a_put_keeps_each_embedded_file_as_an_object_beside_the_document_that_a_get_gives_back() {
+    let system = MemorySystem::new();
     let memory = MemoryBucket::default();
-    let store = in_vault(&memory);
+    let store = in_vault(&memory, &system);
     let options = WriteOptions::default();
     let files = BTreeMap::from([("media/logo.png".to_owned(), PNG.to_vec())]);
     let bundle = BundledDocument::new(parse(REPORT).document, files, Missing::Refuse).unwrap();
@@ -366,7 +384,8 @@ async fn a_put_keeps_each_embedded_file_as_an_object_beside_the_document_that_a_
 
 #[test]
 fn a_precondition_is_checked_in_one_step_with_the_write() {
-    let store = ObjectStore::new(MemoryBucket::default(), None);
+    let system = MemorySystem::new();
+    let store = ObjectStore::new(MemoryBucket::default(), None, &system);
     assert!(store.capabilities().atomic_preconditions);
 }
 
@@ -407,4 +426,85 @@ fn open_names_the_variable_that_is_not_set_and_never_shows_the_secret_key() {
     );
     let any = AnyStore::Minio(store);
     assert!(any.capabilities().atomic_preconditions);
+}
+
+#[tokio::test]
+async fn a_lock_is_an_object_holding_the_guid_and_the_seconds_it_was_taken() {
+    let taken = SystemTime::UNIX_EPOCH + Duration::from_secs(1_792_700_000);
+    let system = MemorySystem::new().with_now(taken).unwrap();
+    let memory = MemoryBucket::default();
+    let store = in_vault(&memory, &system);
+    let lock = lock_of(&path("notes/report.md")).unwrap();
+    assert!(store.create(&lock, "a-guid").await.unwrap());
+    let object = memory
+        .get("vault/notes/report.md.archie-lock")
+        .await
+        .unwrap();
+    assert_eq!(object.bytes, b"a-guid 1792700000");
+    assert!(!store.create(&lock, "another").await.unwrap());
+    let found = store.find(&lock).await.unwrap().unwrap();
+    assert_eq!(found.holder, "a-guid");
+    assert_eq!(found.taken, taken);
+    assert_eq!(found.tag, object.etag.into_bytes());
+}
+
+#[tokio::test]
+async fn a_lock_whose_bytes_do_not_read_counts_as_expired_and_the_save_removes_it() {
+    let system = MemorySystem::new()
+        .with_now(SystemTime::UNIX_EPOCH + Duration::from_secs(1_792_700_000))
+        .unwrap();
+    let memory = MemoryBucket::default();
+    let store = in_vault(&memory, &system);
+    for bytes in [b"garbage".as_slice(), b"a-guid soon", b"\xff 12"] {
+        memory
+            .put("vault/notes/report.md.archie-lock", bytes, &Condition::None)
+            .await
+            .unwrap();
+        let lock = lock_of(&path("notes/report.md")).unwrap();
+        let found = store.find(&lock).await.unwrap().unwrap();
+        assert_eq!(
+            (found.holder.as_str(), found.taken),
+            ("", SystemTime::UNIX_EPOCH)
+        );
+        let files = BTreeMap::from([(path("notes/media/logo.png"), PNG.to_vec())]);
+        store
+            .write_with_embedded(
+                &path("notes/report.md"),
+                REPORT,
+                &files,
+                &Precondition::None,
+            )
+            .await
+            .unwrap();
+        let keys = memory.list("").await.unwrap();
+        assert_eq!(
+            keys,
+            ["vault/notes/media/logo.png", "vault/notes/report.md"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_save_whose_lock_key_is_past_1024_bytes_fails_with_the_documents_path_before_any_request()
+{
+    let system = MemorySystem::new();
+    let memory = MemoryBucket::default();
+    let files = BTreeMap::new();
+    let longest = of_length(1006);
+    in_vault(&memory, &system)
+        .write_with_embedded(&longest, "# File\n", &files, &Precondition::None)
+        .await
+        .unwrap();
+    let past = of_length(1007);
+    let refused = Err(StoreError::InvalidPath(past.as_str().to_owned()));
+    let written = in_vault(&memory, &system)
+        .write_with_embedded(&past, "# File\n", &files, &Precondition::None)
+        .await;
+    assert_eq!(written, refused);
+    let down = ObjectStore::new(DownBucket, Some(path("vault")), &system);
+    let unsent = down
+        .write_with_embedded(&past, "# File\n", &files, &Precondition::None)
+        .await;
+    assert_eq!(unsent, refused);
+    assert_eq!(memory.list("").await.unwrap(), [format!("vault/{longest}")]);
 }

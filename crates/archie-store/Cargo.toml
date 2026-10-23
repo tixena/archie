@@ -28,9 +28,10 @@ minio = ["os-shim/minio", "os-shim/async"]
 
 [dependencies]
 archie-core = { path = "../archie-core" }
-os-shim.workspace = true
+os-shim = { workspace = true, features = ["async"] }
 sha2.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 
 # The MongoDB layer, the driver and tokio's timer, under the mongodb feature
 bson = { workspace = true, optional = true }

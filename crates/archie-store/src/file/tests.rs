@@ -1,15 +1,17 @@
 //! Each scenario runs over `MemorySystem` and over `RealSystem` in a
 //! temporary folder.
 
+use alloc::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use os_shim::System;
 use os_shim::mock::MemorySystem;
 use os_shim::real::RealSystem;
+use os_shim::{System, WriteMode};
 use tokio::runtime::Builder;
 
 use crate::file::FileStore;
+use crate::lock::{Locks as _, lock_of};
 use crate::{Precondition, Revision, Store as _, StoreError, StorePath};
 
 /// Runs `scenario` over a folder of each system.
@@ -310,4 +312,55 @@ fn the_preconditions_are_not_atomic() {
     let system = MemorySystem::new();
     let store = FileStore::new(PathBuf::from("/vault"), &system);
     assert!(!store.capabilities().atomic_preconditions);
+}
+
+#[tokio::test]
+async fn a_save_in_a_folder_that_does_not_exist_yet_takes_its_lock_there() {
+    let system = MemorySystem::new();
+    let store = FileStore::new(PathBuf::from("/vault"), &system);
+    let report = StorePath::new("new/report.md").unwrap();
+    let logo = StorePath::new("new/media/logo.png").unwrap();
+    let files = BTreeMap::from([(logo.clone(), b"logo".to_vec())]);
+    store
+        .write_with_embedded(
+            &report,
+            "![Logo](media/logo.png)\n",
+            &files,
+            &Precondition::Absent,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        names(&store.list(None).await.unwrap()),
+        [logo.as_str(), report.as_str()]
+    );
+    assert!(
+        !system
+            .exists(Path::new("/vault/new/report.md.archie-lock"))
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_lock_is_a_file_holding_the_guid_and_one_that_is_not_text_never_names_a_guid() {
+    let system = MemorySystem::new();
+    let store = FileStore::new(PathBuf::from("/vault"), &system);
+    let lock = lock_of(&StorePath::new("notes/report.md").unwrap()).unwrap();
+    assert!(store.create(&lock, "a-guid").await.unwrap());
+    let file = Path::new("/vault/notes/report.md.archie-lock");
+    assert_eq!(system.read_to_string(file).unwrap(), "a-guid");
+    assert!(!store.create(&lock, "another").await.unwrap());
+    let found = store.find(&lock).await.unwrap().unwrap();
+    assert_eq!(
+        (found.holder.as_str(), found.tag.as_slice()),
+        ("a-guid", b"a-guid".as_slice())
+    );
+
+    system.write(file, b"\xff\xfe", WriteMode::Replace).unwrap();
+    let unreadable = store.find(&lock).await.unwrap().unwrap();
+    assert_ne!(unreadable.holder, "a-guid");
+    assert_eq!(unreadable.tag, b"\xff\xfe");
+    assert!(store.remove_if(&lock, &unreadable).await.unwrap());
+    assert!(store.find(&lock).await.unwrap().is_none());
+    assert!(!store.remove_if(&lock, &unreadable).await.unwrap());
 }

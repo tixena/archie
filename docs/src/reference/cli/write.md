@@ -80,8 +80,9 @@ not exist is created.
 
 The file is written whole: a temporary file beside it, then a rename over it, so a
 reader sees the old file or the new one. Each file the document embeds is written
-first, the same way, and the document last; no other file is touched. Bytes that
-do not hold a document in the form store nothing.
+first, the same way, and the document last; no other file is touched but the
+document's lock (see [Stores](#stores)). Bytes that do not hold a document in the
+form store nothing.
 
 `archie write` writes nothing to standard output. An error is one line on standard
 error: `archie: `, the path as the command line gave it, and what failed.
@@ -121,6 +122,21 @@ $ archie get notes/task.md | archie write notes/task.md --store minio:notes/vaul
 $ unset AWS_SECRET_ACCESS_KEY; archie write notes/task.md -s minio:notes/vault < a.md; echo "exit $?"
 archie: AWS_SECRET_ACCESS_KEY is not set: it holds the MinIO secret key
 exit 3
+```
+
+In the file system and in a MinIO store, a write holds a lock on the document
+while it writes: the file `<file>.archie-lock` beside the document, such as
+`notes/report.md.archie-lock` for `notes/report.md`, or the object at that key. It
+takes the lock before the first file the document embeds and gives it back after
+the document. A second write of the same document that finds the lock waits 2
+seconds, then exits with code 4 when the lock is still held, having written
+nothing. A lock older than 5 seconds has expired, and the next write of the
+document removes it.
+
+```console
+$ archie write notes/report.md -i draft/report.md; echo "exit $?"
+archie: notes/report.md: the file changed, or a file is already there
+exit 4
 ```
 
 With `--store mongodb:<database>/<collection>`, the store is the collection
@@ -175,7 +191,7 @@ A `--store` value of any other shape is a usage error, code 2.
 | 1 | The document could not be read or written in the form: not UTF-8, not JSON, not this version of the binary form, or a value the frontmatter syntax cannot hold. Without `--allow-missing`, a file the document embeds that is missing, or an embed that leaves the document's folder. |
 | 2 | The command line is wrong: an unknown option, a missing path, a value an option does not take, or a path that cannot name a file, such as `/`. |
 | 3 | The store is not configured, or its configuration is wrong: a variable the store reads is not set or is not UTF-8, such as `ARCHIE_MONGODB_URI` or `ARCHIE_MONGODB_BUCKET` for `--store mongodb:`, or `ARCHIE_MINIO_ENDPOINT` for `--store minio:`, or the store is not built into this archie. |
-| 4 | The store failed: a file system error, such as a folder that is not writable, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to read standard input is code 4 too, and so is a write to a MongoDB store that another write of the same document finished first, which the store refuses with `<path>: the file changed, or a file is already there`. |
+| 4 | The store failed: a file system error, such as a folder that is not writable, a MongoDB or MinIO server that cannot be reached, or a MinIO server that refuses the keys. A failure to read standard input is code 4 too, and so is a write of a document whose lock another write of the same document holds, and a write to a MongoDB store that another write of the same document finished first, which the store refuses with `<path>: the file changed, or a file is already there`. |
 | 6 | No file at the path of `--input`. |
 
 Code 5 belongs to the language-model provider error of the validation run; see

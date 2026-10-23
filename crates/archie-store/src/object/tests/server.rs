@@ -51,6 +51,9 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not a real picture";
 
 const REPORT: &str = "# Report\n\n![Logo](media/logo.png)\n";
 
+/// The machine the stores of these tests run on.
+static MACHINE: RealSystem = RealSystem::new();
+
 /// The configuration `just test-stores` passes, its keys under `prefix`.
 fn config(prefix: &str) -> ObjectConfig {
     ObjectConfig::new(
@@ -87,8 +90,8 @@ async fn copy(
 }
 
 /// A store over the server, its keys read from the environment.
-fn server(prefix: &str) -> ObjectStore<MinioBucket> {
-    ObjectStore::open(&RealSystem::new(), config(prefix)).unwrap()
+fn server(prefix: &str) -> ObjectStore<'static, MinioBucket> {
+    ObjectStore::open(&MACHINE, config(prefix)).unwrap()
 }
 
 #[tokio::test]

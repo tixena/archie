@@ -406,7 +406,7 @@ fn a_document_of_dollar_keys_alone_does_not_read_from_json() {
 fn the_typescript_of_a_value_is_an_untagged_union_with_no_non_finite_float() {
     let value = Value::ts_definition();
     assert!(
-        value.contains("export type Value = boolean | number | number | string | "),
+        value.contains("export type Value = boolean | bigint | number | string | "),
         "{value}"
     );
     assert!(!value.contains("NonFinite"), "{value}");
@@ -440,7 +440,7 @@ fn the_zod_schema_of_a_document_names_its_fields_short_and_its_tags_in_full() {
         "{document}"
     );
     assert!(
-        value.contains("z.union([z.boolean(), z.number().int(), z.number(), z.string(), "),
+        value.contains("z.union([z.boolean(), z.codec(z.union([z.bigint(), z.number().int()]), "),
         "{value}"
     );
 }

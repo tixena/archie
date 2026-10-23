@@ -1,14 +1,18 @@
 //! Files kept as objects in one bucket, through os-shim's `Bucket`.
 
 use alloc::collections::BTreeMap;
+use core::fmt;
+use core::str;
+use core::time::Duration;
 use std::env::VarError;
+use std::time::SystemTime;
 
 use os_shim::System;
 use os_shim::bucket::{Bucket, Condition, MinioBucket, MinioConfig, ObjectError, ObjectErrorKind};
 
+use crate::lock::{self, Found, LockSettings, Locks};
 use crate::{
     Capabilities, Precondition, Revision, Store, StoreError, StorePath, Stored, read_at_path,
-    write_at_paths,
 };
 
 /// The longest key S3 takes, in bytes.
@@ -17,13 +21,14 @@ const LONGEST_KEY: usize = 1024;
 /// Markdown files in one bucket, under an optional key prefix. Over
 /// `MinioBucket`, a delete's precondition is checked by a request of its own
 /// before the delete, not in one step with it.
-#[derive(Debug)]
-pub struct ObjectStore<B> {
+pub struct ObjectStore<'system, B> {
     bucket: B,
+    lock: LockSettings,
     prefix: Option<StorePath>,
+    system: &'system dyn System,
 }
 
-impl<B: Bucket> ObjectStore<B> {
+impl<'system, B: Bucket> ObjectStore<'system, B> {
     /// The key of the object that holds the file at `path`.
     fn key(&self, path: &StorePath) -> String {
         self.prefix.as_ref().map_or_else(
@@ -32,14 +37,41 @@ impl<B: Bucket> ObjectStore<B> {
         )
     }
 
-    /// A store over `bucket`, its keys under `prefix`.
+    /// How long the lock of a save lasts and how long a save waits on another,
+    /// `LockSettings::default()` by default.
     #[must_use]
-    pub const fn new(bucket: B, prefix: Option<StorePath>) -> Self {
-        Self { bucket, prefix }
+    pub fn locking(self, lock: LockSettings) -> Self {
+        Self { lock, ..self }
+    }
+
+    /// A store over `bucket`, its keys under `prefix`, its clock `system`'s.
+    #[must_use]
+    pub fn new(bucket: B, prefix: Option<StorePath>, system: &'system dyn System) -> Self {
+        Self {
+            bucket,
+            lock: LockSettings::default(),
+            prefix,
+            system,
+        }
+    }
+
+    /// `lock::write_with_embedded`, as the file store saves, once the key of
+    /// the lock of `path` fits: past `LONGEST_KEY` it is `InvalidPath` of `path`.
+    async fn write_locked(
+        &self,
+        path: &StorePath,
+        text: &str,
+        files: &BTreeMap<StorePath, Vec<u8>>,
+        precondition: &Precondition,
+    ) -> Result<Revision, StoreError> {
+        if self.key(&lock::lock_of(path)?).len() > LONGEST_KEY {
+            return Err(StoreError::InvalidPath(path.as_str().to_owned()));
+        }
+        lock::write_with_embedded(self, path, text, files, precondition, self.lock).await
     }
 }
 
-impl ObjectStore<MinioBucket> {
+impl<'system> ObjectStore<'system, MinioBucket> {
     /// A store over the `MinIO` server `config` names, its keys read from the
     /// environment.
     ///
@@ -47,7 +79,7 @@ impl ObjectStore<MinioBucket> {
     ///
     /// `Backend` naming the variable and what it holds when `AWS_ACCESS_KEY_ID`
     /// or `AWS_SECRET_ACCESS_KEY` is not set or is not UTF-8.
-    pub fn open(system: &dyn System, config: ObjectConfig) -> Result<Self, StoreError> {
+    pub fn open(system: &'system dyn System, config: ObjectConfig) -> Result<Self, StoreError> {
         let access_key = variable(system, "AWS_ACCESS_KEY_ID", "the MinIO access key")?;
         let secret_key = variable(system, "AWS_SECRET_ACCESS_KEY", "the MinIO secret key")?;
         let minio = MinioConfig::new(
@@ -57,11 +89,82 @@ impl ObjectStore<MinioBucket> {
             access_key,
             secret_key,
         );
-        Ok(Self::new(MinioBucket::new(minio), config.prefix))
+        Ok(Self::new(MinioBucket::new(minio), config.prefix, system))
     }
 }
 
-impl<B: Bucket> Store for ObjectStore<B> {
+impl<B: fmt::Debug> fmt::Debug for ObjectStore<'_, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObjectStore")
+            .field("bucket", &self.bucket)
+            .field("lock", &self.lock)
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A lock is an object holding `<guid> <seconds since 1970-01-01 UTC>`: an
+/// object has no modification time, so it holds the time it was taken.
+impl<B: Bucket> Locks for ObjectStore<'_, B> {
+    async fn create(&self, lock: &StorePath, guid: &str) -> Result<bool, StoreError> {
+        let taken = self
+            .system
+            .now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|error| StoreError::Backend(format!("{lock}: {error}")))?;
+        let bytes = format!("{guid} {}", taken.as_secs());
+        match self
+            .bucket
+            .put(&self.key(lock), bytes.as_bytes(), &Condition::Absent)
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == ObjectErrorKind::PreconditionFailed => Ok(false),
+            Err(error) => Err(failure(lock, &error)),
+        }
+    }
+
+    async fn find(&self, lock: &StorePath) -> Result<Option<Found>, StoreError> {
+        let object = match self.bucket.get(&self.key(lock)).await {
+            Ok(object) => object,
+            Err(error) if error.kind() == ObjectErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(failure(lock, &error)),
+        };
+        let (holder, taken) =
+            held_by(&object.bytes).unwrap_or((String::new(), SystemTime::UNIX_EPOCH));
+        Ok(Some(Found {
+            holder,
+            taken,
+            tag: object.etag.into_bytes(),
+        }))
+    }
+
+    async fn remove_if(&self, lock: &StorePath, found: &Found) -> Result<bool, StoreError> {
+        let tag = String::from_utf8_lossy(&found.tag).into_owned();
+        match self
+            .bucket
+            .delete(&self.key(lock), &Condition::ETag(tag))
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ObjectErrorKind::PreconditionFailed | ObjectErrorKind::NotFound
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(failure(lock, &error)),
+        }
+    }
+
+    fn system(&self) -> &dyn System {
+        self.system
+    }
+}
+
+impl<B: Bucket> Store for ObjectStore<'_, B> {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             atomic_preconditions: true,
@@ -94,7 +197,7 @@ impl<B: Bucket> Store for ObjectStore<B> {
         })?;
         let mut paths = keys
             .iter()
-            .filter(|key| !key.ends_with('/'))
+            .filter(|key| !key.ends_with('/') && !key.ends_with(lock::SUFFIX))
             .map(|key| {
                 key.strip_prefix(&root)
                     .map_or_else(|| Err(StoreError::InvalidPath(key.clone())), StorePath::new)
@@ -116,12 +219,12 @@ impl<B: Bucket> Store for ObjectStore<B> {
         })
     }
 
-    async fn read_embedded(
+    fn read_embedded(
         &self,
         _document: &StorePath,
         file: &StorePath,
-    ) -> Result<Vec<u8>, StoreError> {
-        read_at_path(self, file).await
+    ) -> impl Future<Output = Result<Vec<u8>, StoreError>> + Send {
+        read_at_path(self, file)
     }
 
     async fn write(
@@ -151,14 +254,14 @@ impl<B: Bucket> Store for ObjectStore<B> {
         Ok(Revision(etag))
     }
 
-    async fn write_with_embedded(
+    fn write_with_embedded(
         &self,
         path: &StorePath,
         text: &str,
         files: &BTreeMap<StorePath, Vec<u8>>,
         precondition: &Precondition,
-    ) -> Result<Revision, StoreError> {
-        write_at_paths(self, path, text, files, precondition).await
+    ) -> impl Future<Output = Result<Revision, StoreError>> + Send {
+        self.write_locked(path, text, files, precondition)
     }
 }
 
@@ -199,6 +302,14 @@ fn condition(precondition: &Precondition) -> Condition {
         Precondition::Matches(revision) => Condition::ETag(revision.0.clone()),
         Precondition::None => Condition::None,
     }
+}
+
+/// The GUID and the time a lock holds, or `None` when its bytes do not read
+/// as `<guid> <seconds>`.
+fn held_by(bytes: &[u8]) -> Option<(String, SystemTime)> {
+    let (guid, seconds) = str::from_utf8(bytes).ok()?.split_once(' ')?;
+    let taken = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds.parse().ok()?))?;
+    Some((guid.to_owned(), taken))
 }
 
 /// `NotFound` or `Conflict` of `path` when `error` says so, else `Backend`

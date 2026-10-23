@@ -10,13 +10,14 @@ tixschema::mongodb_foundation!();
 pub mod any;
 pub mod document;
 pub mod file;
+pub mod lock;
 #[cfg(feature = "mongodb")]
 pub mod mongo;
 #[cfg(feature = "minio")]
 pub mod object;
 
 use alloc::collections::BTreeMap;
-use core::fmt;
+use core::{fmt, future};
 
 /// A file's place in a store: parts joined by `/`, none empty, none `.` or
 /// `..`, no `\`, with no `/` at either end.
@@ -165,7 +166,9 @@ pub trait Store {
     where
         Self: Sync,
     {
-        write_at_paths(self, path, text, files, precondition)
+        write_at_paths(self, path, text, files, precondition, || {
+            future::ready(Ok(()))
+        })
     }
 }
 
@@ -179,20 +182,26 @@ where
 }
 
 /// What `Store::write_with_embedded` does by default: each file of `files` at
-/// its path, with no precondition, then `text` at `path` under `precondition`.
-pub(crate) async fn write_at_paths<S>(
+/// its path, with no precondition, then `text` at `path` under `precondition`,
+/// each write after `check` passes.
+pub(crate) async fn write_at_paths<S, C, F>(
     store: &S,
     path: &StorePath,
     text: &str,
     files: &BTreeMap<StorePath, Vec<u8>>,
     precondition: &Precondition,
+    check: C,
 ) -> Result<Revision, StoreError>
 where
     S: Store + Sync + ?Sized,
+    C: Fn() -> F + Send + Sync,
+    F: Future<Output = Result<(), StoreError>> + Send,
 {
     for (file, bytes) in files {
+        check().await?;
         store.write(file, bytes, &Precondition::None).await?;
     }
+    check().await?;
     store.write(path, text.as_bytes(), precondition).await
 }
 

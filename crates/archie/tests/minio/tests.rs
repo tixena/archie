@@ -24,6 +24,9 @@ const PREFIX: &str = "binary/copies";
 
 const REGION: &str = "us-east-1";
 
+/// The machine the stores of these tests run on.
+static MACHINE: RealSystem = RealSystem::new();
+
 /// The bucket `just test-stores` makes.
 fn bucket() -> String {
     env::var("ARCHIE_TEST_MINIO_BUCKET").unwrap()
@@ -75,7 +78,7 @@ fn pipe(root: &Path, name: &str, store: &str) {
 fn each_fixture_piped_into_rustfs_and_back_to_the_file_system_is_archies_form() {
     let runtime = Builder::new_current_thread().enable_all().build().unwrap();
     let config = ObjectConfig::new(endpoint(), REGION.to_owned(), bucket(), None);
-    let whole_bucket = ObjectStore::open(&RealSystem::new(), config).unwrap();
+    let whole_bucket = ObjectStore::open(&MACHINE, config).unwrap();
     let folder = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let root = folder.path();
     let store = format!("minio:{}/{PREFIX}", bucket());

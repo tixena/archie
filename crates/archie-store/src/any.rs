@@ -18,9 +18,9 @@ use crate::{Capabilities, Precondition, Revision, Store, StoreError, StorePath, 
 pub enum AnyStore<'system> {
     File(FileStore<'system>),
     #[cfg(feature = "minio")]
-    Minio(ObjectStore<MinioBucket>),
+    Minio(ObjectStore<'system, MinioBucket>),
     #[cfg(feature = "mongodb")]
-    Mongo(MongoStore),
+    Mongo(MongoStore<'system>),
 }
 
 impl Store for AnyStore<'_> {
