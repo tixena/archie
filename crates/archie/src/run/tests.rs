@@ -1184,6 +1184,31 @@ fn fix_with_no_path_works_on_the_current_folder_and_writes_paths_below_it() {
 }
 
 #[test]
+fn fix_of_the_root_takes_the_whole_store_and_writes_each_path_from_the_root() {
+    let system = locked(6, &[]);
+    let ran = archie(&system, &["fix", "/"], b"");
+    wrote_lines(&ran, "/vault/notes/report.md.archie-lock\n");
+    assert!(!system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[test]
+fn fix_with_no_path_run_in_the_root_writes_each_path_below_the_root() {
+    let system = locked(6, &[]).with_current_dir("/").unwrap();
+    let ran = archie(&system, &["fix"], b"");
+    wrote_lines(&ran, "vault/notes/report.md.archie-lock\n");
+    assert!(!system.exists(Path::new(LOCK)).unwrap());
+}
+
+#[test]
+fn get_and_write_of_the_root_exit_2() {
+    let system = locked(6, &[]);
+    for command in [["get", "/"], ["write", "/"]] {
+        let ran = archie(&system, &command, b"");
+        assert_eq!(ran.code, ExitCode::from(2), "{}", ran.stderr);
+    }
+}
+
+#[test]
 fn fix_leaves_the_lock_files_of_other_tools() {
     let system = aged(
         60,

@@ -219,17 +219,17 @@ async fn fix_files(
     if !is_folder {
         return Err(Failure::naming(given, None, 2, &"not a folder"));
     }
-    let under = store_path(system, given)?;
+    let under = folder_path(system, given)?;
     let removed = machine(system, lock)
-        .remove_expired_locks(Some(&under))
+        .remove_expired_locks(under.as_ref())
         .await
-        .map_err(|error| Failure::of_store(given, Some(&under), &error))?;
+        .map_err(|error| Failure::of_store(given, under.as_ref(), &error))?;
     Ok(removed
         .iter()
         .map(|found| {
-            let below = found
-                .as_str()
-                .strip_prefix(under.as_str())
+            let below = under
+                .as_ref()
+                .and_then(|folder| found.as_str().strip_prefix(folder.as_str()))
                 .and_then(|rest| rest.strip_prefix('/'))
                 .unwrap_or(found.as_str());
             path.map_or_else(
@@ -695,6 +695,24 @@ const fn store_code(error: &StoreError) -> u8 {
 /// `path` against the current folder, `.` and `..` resolved from its text
 /// without following links, as a path of the store whose root is `/`.
 fn store_path(system: &dyn System, path: &Path) -> Result<StorePath, Failure> {
+    StorePath::new(&store_text(system, path)?)
+        .map_err(|error| Failure::of_store(path, None, &error))
+}
+
+/// The store path of the folder `path`: `None` for the root of the file
+/// system.
+fn folder_path(system: &dyn System, path: &Path) -> Result<Option<StorePath>, Failure> {
+    let text = store_text(system, path)?;
+    if text.is_empty() {
+        return Ok(None);
+    }
+    StorePath::new(&text)
+        .map(Some)
+        .map_err(|error| Failure::of_store(path, None, &error))
+}
+
+/// The text of the store path `path` names, empty for the root.
+fn store_text(system: &dyn System, path: &Path) -> Result<String, Failure> {
     let full = system
         .current_dir()
         .map_err(|error| Failure::stream("the current folder", &error))?
@@ -711,7 +729,7 @@ fn store_path(system: &dyn System, path: &Path) -> Result<StorePath, Failure> {
             Component::RootDir | Component::CurDir | Component::Prefix(_) => {}
         }
     }
-    StorePath::new(&parts.join("/")).map_err(|error| Failure::of_store(path, None, &error))
+    Ok(parts.join("/"))
 }
 
 /// The value of the variable `name`, which holds `holds`; the error names the
